@@ -118,6 +118,75 @@ AI Coding Agents often self-report execution metrics (model name, active duratio
 > - **No Routing Modification**: `agent-metrics-collector` does **not** automatically modify system proxies, hosts files, or Antigravity routing configuration.
 > - Run `.\agent-metrics.ps1 doctor` to verify Cockpit detection.
 
+### Codex Quota Quick Start
+
+The Codex Quota collector is a small, fail-closed, read-only module that
+captures sanitized Before / After quota snapshots from a local Cockpit Tools
+(or compatible) Codex quota endpoint.
+
+#### Doctor
+
+```powershell
+.\agent-metrics.ps1 doctor --json
+```
+
+Inspect the `codex_quota` field. Possible states:
+- `AVAILABLE` — A Codex quota source responded. Snapshot capture will be
+  attempted on `start` / `finish`.
+- `CONFIG_REQUIRED` — `COCKPIT_BASE_URL` is set but the endpoint did not
+  respond. Configure or restart Cockpit and re-check.
+- `NOT_AVAILABLE` — No Codex quota source could be discovered on this host.
+
+#### Runner
+
+```powershell
+.\scripts\run-codex-with-metrics.ps1 `
+  -WorkPackage "ZUNO-WP-001" `
+  -Repository "ProfessorZhi/Zuno" `
+  -Worktree "F:\funny_project\zuno-worktrees\wp-001" `
+  -- <Codex 原始参数>
+```
+
+The runner wraps the Codex CLI with `start` → `<Codex>` → `finish`. It
+propagates the original Codex exit code on success and on failure. The
+`finish` step is always invoked, even when Codex itself fails.
+
+#### Summary Location
+
+Each run writes `.local/runs/<RUN_ID>/sanitized-summary.json` plus a
+`.sha256` sidecar. The runner prints `SUMMARY_PATH=` on stdout.
+
+#### Quota Status Semantics
+
+| Status | Meaning |
+| :--- | :--- |
+| `COMPLETE` | Before and After captured; Delta computed. |
+| `NOT_AVAILABLE` | No Cockpit source discovered. Run still completed. |
+| `AMBIGUOUS` | Multiple accounts visible and ownership cannot be proven. Delta is `null`. |
+| `RESET_DURING_RUN` | A quota window reset while the run was active. Per-window Delta is `null`. |
+| `SEMANTICS_UNVERIFIED` | The percentage field semantics (`remaining` vs `used`) could not be proven. Delta is `null`. |
+
+#### Percentage Semantics
+
+When Cockpit clearly documents whether the percentage means
+`remaining` or `used`, the collector computes Delta accordingly. When the
+semantics cannot be proven, the snapshot is recorded with `percentage_semantics
+= "unknown"` and Delta is not calculated.
+
+#### Important Caveats
+
+- **Quota Percentage $\neq$ Token Counts.** A drop in percentage cannot be
+  converted to tokens or USD.
+- **Delta $\neq$ Actual Billing Cost.** No pricing data is consulted.
+- **This Round Did Not Validate Real Codex Requests.** End-to-end Codex
+  network calls were intentionally skipped — the Runner is exercised with a
+  fake Codex process.
+- **Request-Level Token Collection May Still Be `NOT_AVAILABLE`.** Use of
+  CLIProxy request-level telemetry is out of scope for this round.
+- **Cockpit Unavailability Does Not Block Ordinary Runs.** A `start` /
+  `finish` cycle succeeds even when the Codex quota source is unreachable.
+- **Not Production Ready.** This tool is not declared production-ready.
+
 ---
 
 ## 6. Privacy & Redaction Policy

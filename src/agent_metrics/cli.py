@@ -10,7 +10,7 @@ import os
 import sys
 import uuid
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 from agent_metrics.models import (
     EXIT_OK,
@@ -35,9 +35,26 @@ from agent_metrics.collectors.git_collector import GitCollector
 from agent_metrics.collectors.github_collector import GithubCollector
 from agent_metrics.collectors.claude_code_collector import ClaudeCodeCollector
 from agent_metrics.collectors.cockpit_collector import CockpitCollector
+from agent_metrics.collectors.codex_quota_collector import CodexQuotaCollector, discover_source as discover_codex_source
 from agent_metrics.collectors.antigravity_collector import AntigravityCollector
 from agent_metrics.redaction import sanitize_dict, scan_text_for_secret_types
 from agent_metrics.validators import validate_sanitized_summary
+
+
+# Agent shell aliases that all map to Codex, with OpenAI as the canonical provider.
+CODEX_AGENT_SHELL_ALIASES = {"codex", "codex-cli", "openai-codex"}
+
+
+def _normalize_agent_for_codex(agent_shell: Optional[str], provider: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Normalize agent shell/provider for Codex aliases.
+
+    Returns (shell, provider). When the shell matches a known Codex alias, the
+    shell is rewritten to ``Codex`` and the provider to ``OpenAI`` regardless
+    of the original casing. Otherwise the inputs are returned unchanged.
+    """
+    if agent_shell and agent_shell.strip().lower() in CODEX_AGENT_SHELL_ALIASES:
+        return "Codex", (provider.strip() if isinstance(provider, str) and provider.strip() else "OpenAI")
+    return agent_shell, provider
 
 
 def get_utc_now_iso() -> str:
@@ -54,6 +71,7 @@ class CLIHandler:
         gh_coll = GithubCollector()
         claude_coll = ClaudeCodeCollector()
         cockpit_coll = CockpitCollector()
+        codex_quota_coll = CodexQuotaCollector()
         antigravity_coll = AntigravityCollector()
 
         results = {
@@ -63,6 +81,7 @@ class CLIHandler:
             "github_cli": gh_coll.get_status(),
             "claude_code": claude_coll.get_status(),
             "cockpit": cockpit_coll.get_status(),
+            "codex_quota": codex_quota_coll.get_status(),
             "antigravity": antigravity_coll.get_status(),
         }
 
@@ -111,9 +130,12 @@ class CLIHandler:
         claude_coll = ClaudeCodeCollector()
         claude_baseline = claude_coll.create_session_baseline()
 
+        # Normalize Codex agent aliases. This does NOT mutate any caller state.
+        normalized_shell, normalized_provider = _normalize_agent_for_codex(agent_shell, provider)
+
         agent_info = AgentInfo(
-            shell=agent_shell,
-            provider=provider,
+            shell=normalized_shell or agent_shell,
+            provider=normalized_provider or provider,
             configured_model=configured_model,
             requested_model=None,
             observed_model=None,
@@ -122,6 +144,24 @@ class CLIHandler:
             model_detection_confidence=ModelConfidence.CONFIGURED.value if configured_model else ModelConfidence.NOT_AVAILABLE.value,
             permission_mode=permission_mode,
         )
+
+        # Codex quota capture — non-blocking. Captures a sanitized Before snapshot.
+        codex_quota_coll = CodexQuotaCollector()
+        codex_quota_snapshot_before = None
+        codex_quota_source = None
+        codex_quota_status = None
+        is_codex_agent = bool(
+            normalized_shell and normalized_shell.strip().lower() == "codex"
+        )
+        if is_codex_agent:
+            discovery = discover_codex_source()
+            codex_quota_source = discovery.get("source_path_type")
+            try:
+                codex_quota_snapshot_before = codex_quota_coll.capture_snapshot()
+                codex_quota_status = codex_quota_snapshot_before.get("status") if isinstance(codex_quota_snapshot_before, dict) else None
+            except Exception:
+                codex_quota_snapshot_before = None
+                codex_quota_status = "ERROR"
 
         context_data = {
             "schema_version": 1,
@@ -137,6 +177,13 @@ class CLIHandler:
             "git_initial": git_snapshot,
             "claude_session_baseline": claude_baseline,
         }
+
+        if is_codex_agent:
+            context_data["codex_quota"] = {
+                "before": codex_quota_snapshot_before,
+                "source_path_type": codex_quota_source,
+                "status": codex_quota_status,
+            }
 
         try:
             self.storage.create_run(context_data)
@@ -220,6 +267,58 @@ class CLIHandler:
         usage = UsageInfo(collection_status="NOT_AVAILABLE")
         observed_model = None
 
+        # Telemetry collection based on agent shell
+        agent_shell = ctx.get("agent", {}).get("shell", "")
+        usage = UsageInfo(collection_status="NOT_AVAILABLE")
+        observed_model = None
+
+        # Codex quota: capture After snapshot and compute delta.
+        codex_quota_snapshot_before = None
+        codex_quota_source = None
+        codex_quota_status = "NOT_AVAILABLE"
+        codex_quota_delta = None
+        if agent_shell.strip().lower() == "codex":
+            stored = ctx.get("codex_quota") if isinstance(ctx, dict) else None
+            if isinstance(stored, dict):
+                codex_quota_snapshot_before = stored.get("before")
+                codex_quota_source = stored.get("source_path_type")
+                codex_quota_status = stored.get("status") or "NOT_AVAILABLE"
+
+            codex_quota_coll = CodexQuotaCollector()
+            try:
+                after_snapshot = codex_quota_coll.capture_snapshot()
+            except Exception:
+                after_snapshot = None
+
+            if isinstance(after_snapshot, dict):
+                # If we could not capture a Before at start, still persist the
+                # After as a record. Delta computation requires both sides.
+                delta_input_before = codex_quota_snapshot_before
+                if isinstance(delta_input_before, dict):
+                    delta = codex_quota_coll.calculate_delta(delta_input_before, after_snapshot)
+                else:
+                    delta = {
+                        "primary_consumed_percentage": None,
+                        "secondary_consumed_percentage": None,
+                        "primary_status": "NOT_AVAILABLE",
+                        "secondary_status": "NOT_AVAILABLE",
+                        "delta_status": "NOT_AVAILABLE",
+                        "reason": "missing_before_snapshot",
+                    }
+
+                codex_quota_delta = delta
+                # Propagate AMBIGUOUS / RESET_DURING_RUN into top-level status.
+                if isinstance(delta, dict):
+                    new_status = delta.get("delta_status")
+                    if new_status in ("AMBIGUOUS", "RESET_DURING_RUN", "SEMANTICS_UNVERIFIED", "ERROR", "PARTIAL"):
+                        codex_quota_status = new_status
+                    elif codex_quota_status in (None, "NOT_AVAILABLE"):
+                        codex_quota_status = after_snapshot.get("status") or "NOT_AVAILABLE"
+            else:
+                # Capture failed entirely.
+                if codex_quota_status in (None, "NOT_AVAILABLE"):
+                    codex_quota_status = "ERROR"
+
         if agent_shell.lower() in ("claude-code", "claudecode", "claude"):
             claude_coll = ClaudeCodeCollector()
             claude_res = claude_coll.collect(run_context=ctx)
@@ -278,7 +377,14 @@ class CLIHandler:
             timing=timing,
             usage=usage,
             pricing=pricing,
-            quota=QuotaSnapshot(),
+            quota=QuotaSnapshot(
+                before=codex_quota_snapshot_before,
+                after=after_snapshot if 'after_snapshot' in dir() and isinstance(after_snapshot, dict) else None,
+                delta=codex_quota_delta,
+                source=codex_quota_source,
+                subscription_tier=(after_snapshot.get("plan_type") if 'after_snapshot' in dir() and isinstance(after_snapshot, dict) else None) or (codex_quota_snapshot_before.get("plan_type") if isinstance(codex_quota_snapshot_before, dict) else None),
+                reset_time=(after_snapshot.get("primary_window", {}).get("reset_at") if 'after_snapshot' in dir() and isinstance(after_snapshot, dict) else None),
+            ),
             git=git_stats,
             github=gh_stats,
             collectors={
@@ -286,6 +392,7 @@ class CLIHandler:
                 "github": gh_coll.get_status(),
                 "claude_code": ClaudeCodeCollector().get_status(),
                 "cockpit": CockpitCollector().get_status(),
+                "codex_quota": CodexQuotaCollector().get_status(),
                 "antigravity": AntigravityCollector().get_status(),
             },
             warnings=[],
@@ -377,6 +484,7 @@ class CLIHandler:
                         "github": GithubCollector().get_status(),
                         "claude_code": ClaudeCodeCollector().get_status(),
                         "cockpit": CockpitCollector().get_status(),
+                        "codex_quota": CodexQuotaCollector().get_status(),
                         "antigravity": AntigravityCollector().get_status(),
                     },
                     "warnings": [],
