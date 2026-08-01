@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime
 import os
 import re
+import socket
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
@@ -207,14 +208,14 @@ class CockpitReportHttpCollector(BaseCollector):
     def get_status(self) -> str:
         if not _is_local_http_url(self.base_url):
             return CollectorStatus.CONFIG_REQUIRED.value
-        token = self.token or "change-this-token"
+        parsed = urllib.parse.urlparse(self.base_url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 80
         try:
-            text = self._fetch_report_text(report_access=token, timeout=15.0)
-        except Exception:
+            with socket.create_connection((host, port), timeout=0.3):
+                return CollectorStatus.AVAILABLE.value
+        except OSError:
             return CollectorStatus.NOT_AVAILABLE.value
-        if SECRET_FIELD_RE.search(text):
-            return CollectorStatus.ERROR.value
-        return CollectorStatus.AVAILABLE.value
 
     def _fetch_report_text(self, report_access: str, timeout: float = 45.0) -> str:
         if not _is_local_http_url(self.base_url):

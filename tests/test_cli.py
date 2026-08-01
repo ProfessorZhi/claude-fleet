@@ -67,6 +67,29 @@ class TestCLI(unittest.TestCase):
             self.assertIn("github_cli", data)
             self.assertIn("cockpit", data)
 
+    def test_snapshot_codex_json_output(self):
+        fake_snapshot = {
+            "status": "COMPLETE",
+            "source": "cockpit_report_http",
+            "provider": "OpenAI",
+            "primary_window": {"percentage": 99.0},
+        }
+        with patch(
+            "agent_metrics.cli.CodexQuotaCollector.capture_snapshot",
+            return_value=fake_snapshot,
+        ), patch("sys.stdout", new=io.StringIO()) as fake_out:
+            code = self.cli.cmd_snapshot(provider="codex", json_output=True)
+        self.assertEqual(code, EXIT_OK)
+        data = json.loads(fake_out.getvalue())
+        self.assertEqual(data["provider"], "codex")
+        self.assertEqual(data["status"], "COMPLETE")
+        self.assertEqual(data["snapshot"]["primary_window"]["percentage"], 99.0)
+
+    def test_snapshot_invalid_provider(self):
+        with patch("sys.stderr", new=io.StringIO()):
+            code = self.cli.cmd_snapshot(provider="unknown-provider", json_output=True)
+        self.assertEqual(code, EXIT_INVALID_INPUT)
+
     # Test 2: start creates Run directory and run-context.json
     def test_start_creates_run(self):
         with patch("sys.stdout", new=io.StringIO()) as fake_out:

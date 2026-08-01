@@ -710,6 +710,61 @@ class CLIHandler:
             return EXIT_INVALID_INPUT
         return EXIT_PARTIAL
 
+    def cmd_snapshot(self, provider: str, json_output: bool = False) -> int:
+        if not provider:
+            print("Error: provider is required.", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+
+        normalized = provider.strip().lower()
+        if normalized in ("codex", "openai"):
+            snapshot = CodexQuotaCollector().capture_snapshot()
+            result = {
+                "provider": "codex",
+                "status": snapshot.get("status") if isinstance(snapshot, dict) else "NOT_AVAILABLE",
+                "source": snapshot.get("source") if isinstance(snapshot, dict) else None,
+                "snapshot": snapshot,
+            }
+        elif normalized in ("antigravity", "google"):
+            report_res = CockpitReportHttpCollector().collect()
+            snapshot = report_res.get("antigravity_quota") if isinstance(report_res, dict) else None
+            if not isinstance(snapshot, dict) or snapshot.get("status") == "NOT_AVAILABLE":
+                local_res = CockpitLocalSnapshotCollector().collect(run_context={"agent": {"provider": "Google"}})
+                snapshot = local_res.get("antigravity_quota") if isinstance(local_res, dict) else None
+            result = {
+                "provider": "antigravity",
+                "status": snapshot.get("status") if isinstance(snapshot, dict) else "NOT_AVAILABLE",
+                "source": snapshot.get("source") if isinstance(snapshot, dict) else None,
+                "snapshot": snapshot,
+            }
+        elif normalized == "deepseek":
+            balance = DeepSeekBalanceCollector().collect()
+            result = {
+                "provider": "deepseek",
+                "status": balance.get("status") if isinstance(balance, dict) else "NOT_AVAILABLE",
+                "source": balance.get("source") if isinstance(balance, dict) else None,
+                "snapshot": balance,
+            }
+        elif normalized == "minimax":
+            plan = MiniMaxTokenPlanCollector().collect()
+            result = {
+                "provider": "minimax",
+                "status": plan.get("status") if isinstance(plan, dict) else "NOT_AVAILABLE",
+                "source": plan.get("source") if isinstance(plan, dict) else None,
+                "snapshot": plan,
+            }
+        else:
+            print("Error: provider must be one of codex, antigravity, deepseek, minimax.", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+
+        if json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"Provider : {result.get('provider')}")
+            print(f"Status   : {result.get('status')}")
+            print(f"Source   : {result.get('source')}")
+
+        return EXIT_OK if result.get("status") in ("COMPLETE", "PARTIAL", CollectorStatus.AVAILABLE.value) else EXIT_PARTIAL
+
     def cmd_internal_scan_secrets(self, scan_path: str = ".") -> int:
         target = Path(scan_path).resolve()
         violations = []
@@ -807,6 +862,11 @@ def main(args: Optional[List[str]] = None) -> int:
     price_p.add_argument("--provider")
     price_p.add_argument("--json", action="store_true")
 
+    # snapshot
+    snapshot_p = subparsers.add_parser("snapshot")
+    snapshot_p.add_argument("--provider", required=True, choices=["codex", "openai", "antigravity", "google", "deepseek", "minimax"])
+    snapshot_p.add_argument("--json", action="store_true")
+
     # internal-scan-secrets
     scan_p = subparsers.add_parser("internal-scan-secrets")
     scan_p.add_argument("--path", default=".")
@@ -859,6 +919,8 @@ def main(args: Optional[List[str]] = None) -> int:
             provider=parsed.provider,
             json_output=parsed.json,
         )
+    elif parsed.command == "snapshot":
+        return cli.cmd_snapshot(provider=parsed.provider, json_output=parsed.json)
     elif parsed.command == "internal-scan-secrets":
         return cli.cmd_internal_scan_secrets(scan_path=parsed.path)
     else:
