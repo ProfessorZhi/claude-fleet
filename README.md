@@ -144,12 +144,43 @@ Inspect the `codex_quota` field. Possible states:
   -WorkPackage "ZUNO-WP-001" `
   -Repository "ProfessorZhi/Zuno" `
   -Worktree "F:\funny_project\zuno-worktrees\wp-001" `
-  -- <Codex 原始参数>
+  -- "只回复 OK，不修改任何文件。"
 ```
 
-The runner wraps the Codex CLI with `start` → `<Codex>` → `finish`. It
-propagates the original Codex exit code on success and on failure. The
-`finish` step is always invoked, even when Codex itself fails.
+The runner wraps `agent-metrics start` → `codex exec --json` → `finish`.
+It stores the raw JSONL stream in a run-private temporary directory, parses
+usage buckets, then removes the raw stream after `finish`. It propagates the
+original Codex exit code and always invokes `finish`, even when Codex fails.
+
+Stable stdout lines:
+
+```text
+RUN_ID=
+SUMMARY_PATH=
+AGENT_EXIT_CODE=
+```
+
+Request usage comes only from structured `codex exec --json` events:
+`input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`,
+`output_tokens`, and `reasoning_output_tokens`. Quota percentage deltas are
+never converted into tokens or cost.
+
+### Claude Code Provider Presets
+
+```powershell
+.\scripts\run-claude-with-metrics.ps1 `
+  -Provider DeepSeek `
+  -ConfiguredModel "deepseek-chat" `
+  -WorkPackage "ZUNO-WP-002" `
+  -Repository "ProfessorZhi/Zuno" `
+  -Worktree "F:\funny_project\zuno-worktrees\wp-002" `
+  -- <Claude Code args>
+```
+
+`-Provider DeepSeek` defaults to `.claude-deepseek`; `-Provider MiniMax`
+defaults to `.claude-minimax`. The full config path is not written to summary
+output; only logical names such as `deepseek`, `minimax`, or `custom` may be
+reported.
 
 #### Summary Location
 
@@ -178,6 +209,8 @@ semantics cannot be proven, the snapshot is recorded with `percentage_semantics
 - **Quota Percentage $\neq$ Token Counts.** A drop in percentage cannot be
   converted to tokens or USD.
 - **Delta $\neq$ Actual Billing Cost.** No pricing data is consulted.
+- **Balance / Quota $\neq$ Request Usage.** DeepSeek balance, MiniMax token
+  plan remains, and Cockpit quota snapshots are separate metadata sources.
 - **This Round Did Not Validate Real Codex Requests.** End-to-end Codex
   network calls were intentionally skipped — the Runner is exercised with a
   fake Codex process.
@@ -254,3 +287,14 @@ All CLI entrypoints (`python -m agent_metrics`, installed `agent-metrics` consol
 The Claude Session Baseline collector minimal privacy policy guarantees:
 - **Preserved Metadata**: Logical Config Name (`default`, `deepseek`, `minimax`, `custom`), Session ID (UUID), File Size, and Last Modified Timestamp.
 - **NEVER Saved in Baseline**: Claude Config directory paths, Project directory paths, JSONL file paths, Worktree paths, or Home username.
+
+## 11. Timing Semantics
+
+`timing` separates:
+- `wall_clock_seconds`: `start` to `finish`.
+- `agent_process_seconds`: wrapper-observed child process duration.
+- `model_event_span_seconds`: first structured model event to last structured
+  model event.
+- `ci_queue_seconds`: GitHub workflow `created_at` to `run_started_at`.
+- `ci_run_seconds`: GitHub workflow `run_started_at` to `completed_at`.
+- `agent_active_seconds`: `null` unless explicit active telemetry exists.
