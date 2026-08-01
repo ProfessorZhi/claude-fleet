@@ -106,42 +106,22 @@ class TestCLIProcessExitCodes(unittest.TestCase):
         storage = StorageManager(base_dir=self.temp_dir)
         run_id = storage.create_run({
             "started_at": "2026-08-01T10:00:00Z",
-            "work_package": "WP-EXIT-7",
+            "work_package": "WP-TEST-7",
+            "repository": "Owner/Repo",
             "agent": {"shell": "bash", "provider": "Anthropic"}
         })
 
-        fake_bin_dir = Path(self.temp_dir) / "fake_bin"
-        fake_bin_dir.mkdir(parents=True, exist_ok=True)
-
-        if sys.platform.startswith("win"):
-            fake_gh = fake_bin_dir / "gh.cmd"
-            fake_gh.write_text(
-                "@echo off\n"
-                "if \"%1\"==\"auth\" ( echo Logged in & exit /b 0 )\n"
-                "if \"%1\"==\"pr\" ( echo gh pr view error & exit /b 1 )\n"
-                "exit /b 1\n",
-                encoding="utf-8"
-            )
-        else:
-            fake_gh = fake_bin_dir / "gh"
-            fake_gh.write_text(
-                "#!/bin/sh\n"
-                "if [ \"$1\" = \"auth\" ]; then echo \"Logged in\"; exit 0; fi\n"
-                "if [ \"$1\" = \"pr\" ]; then echo \"gh pr view error\"; exit 1; fi\n"
-                "exit 1\n",
-                encoding="utf-8"
-            )
-            fake_gh.chmod(0o755)
-
-        fake_env = self.env.copy()
-        fake_env["PATH"] = str(fake_bin_dir) + os.pathsep + fake_env.get("PATH", "")
-
-        cmd = [
-            self.python_exe,
-            "-c",
-            f"import sys; sys.path.insert(0, {json.dumps(str(SRC_DIR))}); from agent_metrics.storage import StorageManager; from agent_metrics.cli import CLIHandler; raise SystemExit(CLIHandler(StorageManager({json.dumps(self.temp_dir)})).cmd_reconcile(run_id={json.dumps(run_id)}, pr_number=42))"
-        ]
-        res = subprocess.run(cmd, capture_output=True, text=True, env=fake_env)
+        py_code = (
+            f"import sys; sys.path.insert(0, {json.dumps(str(SRC_DIR))}); "
+            f"from unittest.mock import patch; "
+            f"from agent_metrics.collectors.github_collector import GithubCollector; "
+            f"patch.object(GithubCollector, 'collect_pr_info', return_value=(7, {{}})).start(); "
+            f"from agent_metrics.storage import StorageManager; "
+            f"from agent_metrics.cli import CLIHandler; "
+            f"raise SystemExit(CLIHandler(StorageManager({json.dumps(self.temp_dir)})).cmd_reconcile(run_id={json.dumps(run_id)}, pr_number=42))"
+        )
+        cmd = [self.python_exe, "-c", py_code]
+        res = subprocess.run(cmd, capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 7)
 
     # 15.7 Doctor Exit Code Check
