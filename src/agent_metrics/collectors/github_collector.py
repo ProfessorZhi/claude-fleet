@@ -93,24 +93,62 @@ class GithubCollector(BaseCollector):
             gh_info = GithubInfo(status=CollectorStatus.ERROR.value)
             return EXIT_EXTERNAL_CMD_ERROR, gh_info.to_dict()
 
-        # Try to fetch CI runs
-        runs = self._run_gh_json(["run", "list", "--limit", "1", "--json", "databaseId,createdAt,updatedAt,status,conclusion"])
+        # Try to fetch CI runs for the exact PR head SHA. Do not use the
+        # repository's latest workflow run; that can belong to a different PR.
+        runs = self._run_gh_json(["run", "list", "--limit", "20", "--json", "databaseId,createdAt,updatedAt,runStartedAt,status,conclusion,headSha,url"])
         ci_run_id = None
         ci_result = None
-        ci_duration = None
+        ci_queue_seconds = None
+        ci_run_seconds = None
+        ci_queued_at = None
+        ci_started_at = None
+        ci_completed_at = None
 
-        if isinstance(runs, list) and len(runs) > 0:
-            r = runs[0]
+        pr_head_sha = data.get("headRefOid")
+        matching_runs = []
+        if isinstance(runs, list):
+            for r in runs:
+                if not isinstance(r, dict):
+                    continue
+                if "headSha" not in r and len(runs) == 1:
+                    matching_runs.append(r)
+                elif not pr_head_sha or r.get("headSha") == pr_head_sha:
+                    matching_runs.append(r)
+
+        if matching_runs:
+            r = matching_runs[0]
             ci_run_id = str(r.get("databaseId")) if r.get("databaseId") else None
             ci_result = r.get("conclusion") or r.get("status")
             c_at = r.get("createdAt")
+            s_at = r.get("runStartedAt") or r.get("startedAt")
             u_at = r.get("updatedAt")
-            if c_at and u_at:
+            ci_queued_at = c_at
+            ci_started_at = s_at
+            ci_completed_at = u_at
+            if c_at and s_at:
+                try:
+                    import datetime
+                    t1 = datetime.datetime.fromisoformat(c_at.replace("Z", "+00:00"))
+                    t2 = datetime.datetime.fromisoformat(s_at.replace("Z", "+00:00"))
+                    ci_queue_seconds = max(0.0, (t2 - t1).total_seconds())
+                except Exception:
+                    pass
+            if s_at and u_at:
+                try:
+                    import datetime
+                    t1 = datetime.datetime.fromisoformat(s_at.replace("Z", "+00:00"))
+                    t2 = datetime.datetime.fromisoformat(u_at.replace("Z", "+00:00"))
+                    ci_run_seconds = max(0.0, (t2 - t1).total_seconds())
+                except Exception:
+                    pass
+            elif c_at and u_at:
                 try:
                     import datetime
                     t1 = datetime.datetime.fromisoformat(c_at.replace("Z", "+00:00"))
                     t2 = datetime.datetime.fromisoformat(u_at.replace("Z", "+00:00"))
-                    ci_duration = max(0.0, (t2 - t1).total_seconds())
+                    ci_run_seconds = max(0.0, (t2 - t1).total_seconds())
+                    ci_queue_seconds = 0.0
+                    ci_started_at = c_at
                 except Exception:
                     pass
 
@@ -128,9 +166,14 @@ class GithubCollector(BaseCollector):
             deletions=data.get("deletions"),
             ci_run_id=ci_run_id,
             ci_result=ci_result,
-            ci_duration_seconds=ci_duration,
-            workflow_duration_seconds=ci_duration,
-            ci_wait_seconds=ci_duration,
+            ci_duration_seconds=ci_run_seconds,
+            workflow_duration_seconds=(ci_queue_seconds + ci_run_seconds) if ci_queue_seconds is not None and ci_run_seconds is not None else None,
+            ci_wait_seconds=None,
+            ci_queued_at=ci_queued_at,
+            ci_started_at=ci_started_at,
+            ci_completed_at=ci_completed_at,
+            ci_queue_seconds=ci_queue_seconds,
+            ci_run_seconds=ci_run_seconds,
             status=CollectorStatus.AVAILABLE.value,
         )
         return 0, gh_info.to_dict()
