@@ -157,6 +157,9 @@ class CLIHandler:
             print("Error: run_id is required.", file=sys.stderr)
             return EXIT_INVALID_INPUT
 
+        # Sanitize first: callers like split("RUN_ID=")[1].strip() may capture extra lines.
+        run_id = StorageManager.sanitize_run_id(run_id)
+
         try:
             StorageManager.validate_run_id(run_id)
         except ValueError as e:
@@ -334,6 +337,9 @@ class CLIHandler:
         except (StorageError, IntegrityError):
             try:
                 ctx = self.storage.read_run_context(run_id)
+                started_at = ctx.get("started_at", get_utc_now_iso())
+                git_coll_stub = GitCollector(worktree=ctx.get("worktree") or os.getcwd())
+                git_snapshot = ctx.get("git_initial") or git_coll_stub.collect()
                 summary = {
                     "schema_version": 1,
                     "collector_version": "0.1.0",
@@ -342,8 +348,29 @@ class CLIHandler:
                     "pr_number": pr_number or ctx.get("pr_number"),
                     "repository": repository or ctx.get("repository"),
                     "worktree": ctx.get("worktree"),
-                    "agent": ctx.get("agent", {}),
+                    "agent": ctx.get("agent", {"shell": "unknown", "provider": "unknown"}),
+                    "timing": TimingInfo(
+                        started_at=started_at,
+                        finished_at=None,
+                        wall_clock_seconds=None,
+                    ).to_dict(),
+                    "usage": UsageInfo().to_dict(),
+                    "pricing": PricingInfo(
+                        status="UNVERIFIED",
+                        api_equivalent_cost_usd=None,
+                    ).to_dict(),
+                    "quota": QuotaSnapshot().to_dict(),
+                    "git": git_snapshot if isinstance(git_snapshot, dict) else {},
                     "github": {},
+                    "collectors": {
+                        "git": GitCollector().get_status(),
+                        "github": GithubCollector().get_status(),
+                        "claude_code": ClaudeCodeCollector().get_status(),
+                        "cockpit": CockpitCollector().get_status(),
+                        "antigravity": AntigravityCollector().get_status(),
+                    },
+                    "warnings": [],
+                    "integrity": IntegrityInfo().to_dict(),
                 }
             except Exception as e:
                 print(f"Error reading run context: {e}", file=sys.stderr)

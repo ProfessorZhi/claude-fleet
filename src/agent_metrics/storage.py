@@ -41,6 +41,17 @@ class StorageManager:
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
+    def sanitize_run_id(run_id: str) -> str:
+        """Extract the first valid UUID-like token from run_id, stripping embedded newlines
+        and surrounding quotes/whitespace that callers may accidentally capture."""
+        if not run_id or not isinstance(run_id, str):
+            return ""
+        # Take only the first line (handles split("RUN_ID=")[1].strip() capturing extra lines)
+        if "\n" in run_id:
+            run_id = run_id.split("\n", 1)[0]
+        return run_id.strip('"\' \n\r\t')
+
+    @staticmethod
     def validate_run_id(run_id: str) -> None:
         if not run_id or not isinstance(run_id, str):
             raise ValueError("run_id must be a non-empty string")
@@ -64,6 +75,9 @@ class StorageManager:
             raise ValueError(f"work_package contains secret-like values: {secrets}")
 
     def get_run_dir(self, run_id: str) -> Path:
+        # Sanitize: extract first UUID-like token, stripping embedded newlines or extra text
+        # that callers may accidentally capture (e.g. split("RUN_ID=")[1].strip()).
+        run_id = self.sanitize_run_id(run_id)
         self.validate_run_id(run_id)
         run_dir = (self.base_dir / run_id).resolve()
         if not str(run_dir).startswith(str(self.base_dir)):
