@@ -4,11 +4,17 @@ Reads fake secrets strictly from fixture file.
 """
 
 import json
+import os
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from agent_metrics.redaction import redact_text, sanitize_dict, scan_text_for_secret_types
+from agent_metrics.redaction import redact_text, redact_home_path, sanitize_dict, scan_text_for_secret_types
 from agent_metrics.integrity import compute_payload_sha256, compute_file_sha256, verify_summary_integrity
+from agent_metrics.storage import StorageManager
+from agent_metrics.cli import CLIHandler
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "known-fake-secrets" / "fake_secrets.json"
 
@@ -17,6 +23,10 @@ class TestRedactionAndIntegrity(unittest.TestCase):
     def setUp(self):
         with open(FIXTURE_PATH, "r", encoding="utf-8") as f:
             self.fake_secrets = json.load(f)
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_bearer_token_redaction(self):
         txt = f"Header: {self.fake_secrets['fake_bearer']}"
@@ -47,6 +57,43 @@ class TestRedactionAndIntegrity(unittest.TestCase):
         res = redact_text(txt)
         self.assertNotIn("secret12345", res)
         self.assertIn("[REDACTED]", res)
+
+    def test_home_path_redaction_backslash_and_slash(self):
+        fake_home = r"C:\Users\PrivateDeveloper"
+        with patch("pathlib.Path.home", return_value=Path(fake_home)):
+            with patch.dict(os.environ, {"USERPROFILE": fake_home, "USERNAME": "PrivateDeveloper"}):
+                txt_bs = r"Path is c:\users\privatedeveloper\projects\myrepo"
+                res_bs = redact_home_path(txt_bs)
+                self.assertIn("[HOME]", res_bs)
+                self.assertNotIn("PrivateDeveloper", res_bs)
+
+                txt_fs = "Path is C:/Users/PrivateDeveloper/projects/myrepo"
+                res_fs = redact_home_path(txt_fs)
+                self.assertIn("[HOME]", res_fs)
+                self.assertNotIn("PrivateDeveloper", res_fs)
+
+    def test_run_context_privacy(self):
+        fake_home = r"C:\Users\PrivateUser"
+        fake_worktree = r"C:\Users\PrivateUser\projects\smoke-target"
+        storage = StorageManager(base_dir=self.temp_dir)
+
+        with patch("pathlib.Path.home", return_value=Path(fake_home)):
+            with patch.dict(os.environ, {"USERPROFILE": fake_home, "USERNAME": "PrivateUser"}):
+                run_id = storage.create_run({
+                    "started_at": "2026-08-01T10:00:00Z",
+                    "work_package": "WP-PRIVACY-TEST",
+                    "worktree": fake_worktree,
+                    "agent": {"shell": "Claude-Code", "provider": "Anthropic"}
+                })
+                ctx = storage.read_run_context(run_id)
+
+                self.assertEqual(ctx["run_id"], run_id)
+                self.assertEqual(ctx["work_package"], "WP-PRIVACY-TEST")
+                self.assertTrue(ctx["worktree"].startswith("[HOME]"))
+                self.assertNotIn("PrivateUser", json.dumps(ctx))
+                self.assertNotIn("prompt", ctx)
+                self.assertNotIn("messages", ctx)
+                self.assertNotIn("content", ctx)
 
     def test_prompt_body_excluded(self):
         data = {
