@@ -118,6 +118,9 @@ CREDENTIAL_FIELD_NAMES = {
 # JSON Codex Account file. Only the directory NAMES are recorded in
 # diagnostics; the absolute paths are NEVER persisted or printed verbatim.
 COCKPIT_APP_DATA_CANDIDATE_DIRS = [
+    # User-scoped cache locations documented by the local Cockpit contract.
+    ("codex-home", "{HOME}\\.codex"),
+    ("antigravity-cockpit-home", "{HOME}\\.antigravity_cockpit"),
     # Cockpit Tools installer leaves a small marker file here.
     ("cockpit-tools", "{LOCALAPPDATA}\\cockpit-tools"),
     # Electron userData default for the package id "com.jlcodes.cockpit-tools".
@@ -333,7 +336,7 @@ def _candidate_app_data_dirs() -> List[Tuple[str, str]]:
     out: List[Tuple[str, str]] = []
     for label, template in COCKPIT_APP_DATA_CANDIDATE_DIRS:
         rendered = template
-        for env in ("LOCALAPPDATA", "APPDATA"):
+        for env in ("HOME", "LOCALAPPDATA", "APPDATA"):
             value = os.environ.get(env)
             if value:
                 rendered = rendered.replace("{" + env + "}", "[HOME]")
@@ -347,12 +350,20 @@ def _resolve_env_root(label: str) -> Optional[pathlib.Path]:
     Returns the *real* path on this host for adapter use, but the public
     diagnostics only emit the *label*.
     """
-    if label in ("cockpit-tools", "cockpit-tools-electron"):
+    if label == "codex-home":
+        env_value = os.environ.get("HOME") or str(pathlib.Path.home())
+    elif label == "antigravity-cockpit-home":
+        env_value = os.environ.get("HOME") or str(pathlib.Path.home())
+    elif label in ("cockpit-tools", "cockpit-tools-electron"):
         env_value = os.environ.get("LOCALAPPDATA")
     else:
         env_value = os.environ.get("APPDATA")
     if not env_value:
         return None
+    if label == "codex-home":
+        return pathlib.Path(env_value) / ".codex"
+    if label == "antigravity-cockpit-home":
+        return pathlib.Path(env_value) / ".antigravity_cockpit"
     if label == "cockpit-tools":
         return pathlib.Path(env_value) / "cockpit-tools"
     if label == "cockpit-tools-electron":
@@ -411,7 +422,8 @@ def _resolve_cockpit_current_account(
         return None, "missing_current_account_id"
 
     for acct in accounts:
-        if isinstance(acct, dict) and acct.get("account_id") == current_id:
+        acct_id = acct.get("account_id") or acct.get("id") if isinstance(acct, dict) else None
+        if isinstance(acct, dict) and acct_id == current_id:
             return acct, "ok"
 
     # current_account_id references an account not present in the index.
@@ -424,13 +436,26 @@ def _validate_cockpit_account_shape(acct: Dict[str, Any]) -> Tuple[Optional[Dict
     Returns ``(parsed_snapshot, reason)``. When reason != "ok" the
     snapshot is rejected and must not be tagged as a real Cockpit source.
     """
-    for field in REQUIRED_CODEX_ACCOUNT_TOP_FIELDS:
+    for field in ("account_id", "id"):
+        if field in acct:
+            break
+    else:
+        return None, "missing_account_field:account_id"
+
+    for field in ("plan_type",):
         if field not in acct:
             return None, f"missing_account_field:{field}"
 
     quota = acct.get("quota")
     if not isinstance(quota, dict):
-        return None, "missing_quota_object"
+        parsed = _build_snapshot_skeleton()
+        account_id = acct.get("account_id") or acct.get("id")
+        parsed["account_ref_hash"] = _hash_account_ref("OpenAI:" + account_id)
+        parsed["plan_type"] = acct.get("plan_type") if isinstance(acct.get("plan_type"), str) else None
+        parsed["status"] = STATUS_PARTIAL
+        parsed["source"] = SOURCE_COCKPIT_APP_DATA
+        parsed["captured_at"] = _utc_now_iso()
+        return parsed, "partial_account_metadata_only"
     for field in REQUIRED_CODEX_QUOTA_FIELDS:
         if field not in quota:
             return None, f"missing_quota_field:{field}"
@@ -443,7 +468,7 @@ def _validate_cockpit_account_shape(acct: Dict[str, Any]) -> Tuple[Optional[Dict
     if not isinstance(usage_updated_at, str) or not usage_updated_at:
         return None, "missing_usage_updated_at"
 
-    account_id = acct.get("account_id")
+    account_id = acct.get("account_id") or acct.get("id")
     if not isinstance(account_id, str) or not account_id:
         return None, "missing_account_id"
 
@@ -516,7 +541,8 @@ def load_cockpit_app_data_snapshot() -> Tuple[Optional[Dict[str, Any]], str, str
             parsed, parse_reason = _validate_cockpit_account_shape(account)
             if parsed is None:
                 return None, "NOT_AVAILABLE", f"{label}:{parse_reason}"
-            parsed["status"] = STATUS_COMPLETE
+            if parsed.get("status") not in (STATUS_PARTIAL, STATUS_COMPLETE):
+                parsed["status"] = STATUS_COMPLETE
             parsed["source"] = SOURCE_COCKPIT_APP_DATA
             parsed["captured_at"] = _utc_now_iso()
             return parsed, SOURCE_COCKPIT_APP_DATA, "ok"

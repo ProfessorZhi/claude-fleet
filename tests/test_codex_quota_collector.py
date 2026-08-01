@@ -28,6 +28,7 @@ from agent_metrics.collectors.codex_quota_collector import (
     STATUS_AMBIGUOUS,
     STATUS_COMPLETE,
     STATUS_NOT_AVAILABLE,
+    STATUS_PARTIAL,
     STATUS_RESET_DURING_RUN,
     STATUS_SEMANTICS_UNVERIFIED,
     SEMANTICS_REMAINING,
@@ -231,14 +232,11 @@ class TestCockpitAppDataSchema(unittest.TestCase):
         path.write_text(json.dumps(index), encoding="utf-8")
         with self._roots_with_fixture():
             snap, source, reason = load_cockpit_app_data_snapshot()
-        self.assertIsNone(snap)
-        self.assertEqual(source, "NOT_AVAILABLE")
-        # The reason must indicate quota absence regardless of which
-        # validation gate caught it (account-level or quota-level).
-        self.assertTrue(
-            "missing_quota" in reason or "missing_account_field:quota" in reason,
-            f"reason must indicate missing quota, got: {reason}",
-        )
+        self.assertIsNotNone(snap)
+        self.assertEqual(source, SOURCE_COCKPIT_APP_DATA)
+        self.assertEqual(snap["status"], STATUS_PARTIAL)
+        self.assertIsNone(snap["primary_window"]["percentage"])
+        self.assertEqual(reason, "ok")
 
     # --- 6. Bad percentage values rejected --------------------------------
     def test_bad_percentage_values_rejected(self):
@@ -266,7 +264,10 @@ class TestCockpitAppDataSchema(unittest.TestCase):
     def test_real_cockpit_app_data_absent_not_available(self):
         # No patches, no COMPAT_STATE_FILE -> must report NOT_AVAILABLE.
         env = {k: v for k, v in os.environ.items() if k != "COMPAT_STATE_FILE"}
-        with patch.dict(os.environ, env, clear=True):
+        with patch.dict(os.environ, env, clear=True), patch(
+            "agent_metrics.collectors.codex_quota_collector._candidate_app_data_roots",
+            return_value=[],
+        ):
             collector = CodexQuotaCollector()
             self.assertEqual(collector.get_status(), "NOT_AVAILABLE")
             snap = collector.capture_snapshot()
