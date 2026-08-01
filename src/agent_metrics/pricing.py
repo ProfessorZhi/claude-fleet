@@ -96,6 +96,16 @@ class PricingEngine:
                 status="UNVERIFIED",
             )
 
+        if input_tokens is None and output_tokens is None:
+            return PricingInfo(
+                price_snapshot_date=self.pricing_registry.get("pricing_date") or self.pricing_registry.get("snapshot_date"),
+                price_source=model_cfg.get("source_url") or self.pricing_registry.get("source"),
+                currency="USD",
+                api_equivalent_cost_usd=None,
+                actual_billed_cost_usd=None,
+                status="CALCULATED",
+            )
+
         if input_tokens is None:
             input_tokens = 0
         if output_tokens is None:

@@ -147,8 +147,8 @@ class CLIHandler:
         if json_output:
             print(json.dumps({"run_id": run_id, "started_at": started_at}))
         else:
-            print(f'$env:ZUNO_AGENT_RUN_ID="{run_id}"')
             print(f"RUN_ID={run_id}")
+            print(f'$env:ZUNO_AGENT_RUN_ID="{run_id}"')
 
         return EXIT_OK
 
