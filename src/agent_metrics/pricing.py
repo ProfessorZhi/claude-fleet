@@ -71,7 +71,14 @@ class PricingEngine:
         cache_write_tokens: Optional[int] = None,
         provider: Optional[str] = None,
     ) -> PricingInfo:
-        if not model_name or input_tokens is None or output_tokens is None:
+        if not model_name:
+            return PricingInfo(status="PRICE_NOT_AVAILABLE")
+
+        pm = self.find_model_pricing(model_name)
+        if pm is not None and not pm.verified:
+            return PricingInfo(status="UNVERIFIED", model_name=pm.model_name, provider=pm.provider or provider)
+
+        if input_tokens is None or output_tokens is None:
             return PricingInfo(status="PRICE_NOT_AVAILABLE")
 
         # 1. Invalid Usage Validation

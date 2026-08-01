@@ -220,10 +220,9 @@ class StorageManager:
         validate_sanitized_summary(summary_dict)
         return summary_dict
 
-    def read_sanitized_summary_sha256(self, run_id: str) -> str:
+    def read_sanitized_summary_sha256(self, run_id: str) -> Optional[str]:
         run_dir = self.get_run_dir(run_id)
         sha_file = run_dir / "sanitized-summary.sha256"
         if sha_file.exists():
             return sha_file.read_text(encoding="utf-8").strip()
-        summary = self.read_sanitized_summary(run_id)
-        return summary.get("integrity", {}).get("payload_sha256", "")
+        return None

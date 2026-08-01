@@ -375,7 +375,13 @@ class CLIHandler:
             return EXIT_STORAGE_ERROR
 
         out_path = Path(output_path).resolve()
-        data_bytes = json.dumps(summary, indent=2, ensure_ascii=False).encode("utf-8")
+        if fmt == "zuno-pr-record-fragment":
+            export_data = dict(summary)
+            export_data["schema_version"] = "zuno-pr-record-fragment-v1"
+        else:
+            export_data = summary
+
+        data_bytes = json.dumps(export_data, indent=2, ensure_ascii=False).encode("utf-8")
 
         try:
             StorageManager.atomic_write(out_path, data_bytes)

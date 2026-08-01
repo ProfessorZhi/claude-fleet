@@ -144,6 +144,7 @@ class GitInfo:
 
 @dataclass
 class GithubInfo:
+    status: str = "NOT_AVAILABLE"
     pr_number: Optional[int] = None
     pr_url: Optional[str] = None
     base_branch: Optional[str] = None
@@ -151,6 +152,11 @@ class GithubInfo:
     github_head_sha: Optional[str] = None
     state: Optional[str] = None
     is_draft: Optional[bool] = None
+    merged_at: Optional[str] = None
+    ci_run_url: Optional[str] = None
+    ci_status: Optional[str] = None
+    ci_duration_seconds: Optional[float] = None
+    ci_conclusion: Optional[str] = None
     commit_count: Optional[int] = None
     changed_files: Optional[int] = None
     additions: Optional[int] = None
@@ -161,7 +167,12 @@ class GithubInfo:
     workflow_duration_seconds: Optional[float] = None
     ci_wait_seconds: Optional[float] = None
     ci_result: Optional[str] = None
-    status: str = "NOT_AVAILABLE"
+
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        return getattr(self, item, default)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
