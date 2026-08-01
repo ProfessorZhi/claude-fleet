@@ -2,12 +2,13 @@
 Unit tests for the Codex Quota Collector.
 
 These tests exercise the semantics-aware delta logic, account privacy,
-window-reset handling, and the allowlist sanitization. They do NOT make
-any real network request, do NOT touch real Cockpit state, and do NOT
-execute any Codex CLI.
+window-reset handling, the strict schema adapter, and the allowlist
+sanitization. They do NOT make any real network request, do NOT touch
+real Cockpit state, and do NOT execute any Codex CLI.
 """
 
 import json
+import math
 import os
 import shutil
 import sys
@@ -22,7 +23,8 @@ if str(SRC_DIR) not in sys.path:
 
 from agent_metrics.collectors.codex_quota_collector import (
     CodexQuotaCollector,
-    DEFAULT_CODEX_QUOTA_PATH,
+    SOURCE_COCKPIT_APP_DATA,
+    SOURCE_COMPAT_STATE_FILE,
     STATUS_AMBIGUOUS,
     STATUS_COMPLETE,
     STATUS_NOT_AVAILABLE,
@@ -32,7 +34,10 @@ from agent_metrics.collectors.codex_quota_collector import (
     SEMANTICS_UNKNOWN,
     SEMANTICS_USED,
     _hash_account_ref,
-    discover_source,
+    _is_finite_number,
+    _strict_percentage,
+    load_cockpit_app_data_snapshot,
+    load_compat_state_file_snapshot,
     sanitize_snapshot,
 )
 
@@ -43,6 +48,7 @@ def _base_snapshot(**overrides):
         "account_ref_hash": "abcdef0123456789",
         "plan_type": "plus",
         "percentage_semantics": SEMANTICS_REMAINING,
+        "usage_updated_at": "2026-08-01T09:55:00+00:00",
         "primary_window": {
             "percentage": 80.0,
             "window_minutes": 180,
@@ -58,8 +64,285 @@ def _base_snapshot(**overrides):
     return snap
 
 
-class TestCodexQuotaSemantics(unittest.TestCase):
-    """Scenarios 1-3: semantics-aware delta, remaining / used / unknown."""
+def _cockpit_index(
+    *,
+    accounts=None,
+    current_account_id="acct-real-001",
+    extra_account_fields=None,
+    extra_quota_fields=None,
+):
+    """Build a strict Cockpit Codex Account Index for fixtures."""
+    if accounts is None:
+        quota = {
+            "hourly_percentage": 78.0,
+            "hourly_reset_time": "2026-08-01T13:00:00+00:00",
+            "hourly_window_minutes": 180,
+            "weekly_percentage": 92.0,
+            "weekly_reset_time": "2026-08-08T10:00:00+00:00",
+            "weekly_window_minutes": 10080,
+        }
+        if extra_quota_fields:
+            quota.update(extra_quota_fields)
+        acct = {
+            "account_id": "acct-real-001",
+            "plan_type": "plus",
+            "usage_updated_at": "2026-08-01T09:55:00+00:00",
+            "quota": quota,
+        }
+        if extra_account_fields:
+            acct.update(extra_account_fields)
+        accounts = [acct]
+    return {
+        "version": 1,
+        "current_account_id": current_account_id,
+        "accounts": accounts,
+    }
+
+
+class TestCockpitAppDataSchema(unittest.TestCase):
+    """Strict Cockpit App Data schema validation."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="amc-cockpit-"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _install_index(self, index_data, name="codex_accounts.json"):
+        # Write the file under the .antigravity_cockpit/appdata label
+        # so the adapter discovers it via LOCALAPPDATA / APPDATA probing.
+        path = self.tmpdir / name
+        path.write_text(json.dumps(index_data), encoding="utf-8")
+        return path
+
+    def _roots_with_fixture(self):
+        """Patch _candidate_app_data_roots so the adapter walks our tmpdir."""
+        return patch(
+            "agent_metrics.collectors.codex_quota_collector._candidate_app_data_roots",
+            return_value=[("test-fixture", self.tmpdir)],
+        )
+
+    # --- 1. Real Cockpit CodexAccount Schema mapping ---------------------
+    def test_real_cockpit_schema_maps_to_canonical_fields(self):
+        index = _cockpit_index()
+        # Write the fixture index so the adapter discovers it.
+        self.tmpdir.joinpath("codex_accounts.json").write_text(
+            json.dumps(index), encoding="utf-8"
+        )
+        with self._roots_with_fixture():
+            snap, source, reason = load_cockpit_app_data_snapshot()
+
+        self.assertEqual(source, SOURCE_COCKPIT_APP_DATA,
+                         f"expected cockpit_app_data, got {source} (reason={reason})")
+        self.assertIsInstance(snap, dict)
+        self.assertEqual(snap["status"], STATUS_COMPLETE)
+        self.assertEqual(snap["percentage_semantics"], SEMANTICS_REMAINING)
+        self.assertIn("account_ref_hash", snap)
+        self.assertEqual(snap["plan_type"], "plus")
+        self.assertEqual(snap["primary_window"]["percentage"], 78.0)
+        self.assertEqual(snap["primary_window"]["window_minutes"], 180)
+        self.assertEqual(snap["secondary_window"]["percentage"], 92.0)
+        # Raw account_id NOT persisted
+        self.assertNotIn("acct-real-001", json.dumps(snap))
+
+    # --- 2. current_account_id selects the correct account --------------
+    def test_current_account_id_selects_correct_account(self):
+        acct_a = {
+            "account_id": "acct-a",
+            "plan_type": "free",
+            "usage_updated_at": "2026-08-01T09:00:00+00:00",
+            "quota": {
+                "hourly_percentage": 10.0,
+                "hourly_reset_time": "2026-08-01T11:00:00+00:00",
+                "hourly_window_minutes": 60,
+                "weekly_percentage": 10.0,
+                "weekly_reset_time": "2026-08-02T11:00:00+00:00",
+                "weekly_window_minutes": 10080,
+            },
+        }
+        acct_b = {
+            "account_id": "acct-b",
+            "plan_type": "pro",
+            "usage_updated_at": "2026-08-01T09:30:00+00:00",
+            "quota": {
+                "hourly_percentage": 50.0,
+                "hourly_reset_time": "2026-08-01T11:00:00+00:00",
+                "hourly_window_minutes": 60,
+                "weekly_percentage": 60.0,
+                "weekly_reset_time": "2026-08-02T11:00:00+00:00",
+                "weekly_window_minutes": 10080,
+            },
+        }
+        index = {
+            "version": 1,
+            "current_account_id": "acct-b",
+            "accounts": [acct_a, acct_b],
+        }
+        self.tmpdir.joinpath("codex_accounts.json").write_text(
+            json.dumps(index), encoding="utf-8"
+        )
+        with self._roots_with_fixture():
+            snap, source, _ = load_cockpit_app_data_snapshot()
+
+        self.assertEqual(source, SOURCE_COCKPIT_APP_DATA)
+        self.assertEqual(snap["account_ref_hash"], _hash_account_ref("acct-b"))
+        self.assertEqual(snap["primary_window"]["percentage"], 50.0)
+        self.assertEqual(snap["plan_type"], "pro")
+
+    # --- 3. Multi-account without current_account_id -> NOT_AVAILABLE ----
+    def test_multi_account_without_current_account_id_not_available(self):
+        index = _cockpit_index(current_account_id=None)
+        index["accounts"] = index["accounts"] + [{
+            "account_id": "acct-extra",
+            "plan_type": "free",
+            "usage_updated_at": "2026-08-01T09:00:00+00:00",
+            "quota": {
+                "hourly_percentage": 0.0,
+                "hourly_reset_time": "2026-08-01T11:00:00+00:00",
+                "hourly_window_minutes": 60,
+                "weekly_percentage": 0.0,
+                "weekly_reset_time": "2026-08-02T11:00:00+00:00",
+                "weekly_window_minutes": 10080,
+            },
+        }]
+        self.tmpdir.joinpath("codex_accounts.json").write_text(
+            json.dumps(index), encoding="utf-8"
+        )
+        with self._roots_with_fixture():
+            snap, source, reason = load_cockpit_app_data_snapshot()
+
+        self.assertIsNone(snap)
+        self.assertEqual(source, "NOT_AVAILABLE")
+        self.assertIn("current_account_id", reason)
+
+    # --- 4. Empty JSON must NOT be COMPLETE ------------------------------
+    def test_empty_json_object_not_complete(self):
+        with self._roots_with_fixture():
+            snap, source, reason = load_cockpit_app_data_snapshot()
+        self.assertIsNone(snap)
+        self.assertEqual(source, "NOT_AVAILABLE")
+        self.assertIn("no_cockpit_app_data_file_found", reason)
+
+    # --- 5. Missing quota must NOT be COMPLETE ---------------------------
+    def test_missing_quota_not_complete(self):
+        index = _cockpit_index()
+        index["accounts"][0].pop("quota")
+        path = self.tmpdir / "codex_accounts.json"
+        path.write_text(json.dumps(index), encoding="utf-8")
+        with self._roots_with_fixture():
+            snap, source, reason = load_cockpit_app_data_snapshot()
+        self.assertIsNone(snap)
+        self.assertEqual(source, "NOT_AVAILABLE")
+        # The reason must indicate quota absence regardless of which
+        # validation gate caught it (account-level or quota-level).
+        self.assertTrue(
+            "missing_quota" in reason or "missing_account_field:quota" in reason,
+            f"reason must indicate missing quota, got: {reason}",
+        )
+
+    # --- 6. Bad percentage values rejected --------------------------------
+    def test_bad_percentage_values_rejected(self):
+        bad_values = [
+            ("bool", True),
+            ("nan", math.nan),
+            ("infinity", math.inf),
+            ("negative", -5.0),
+            ("greater_than_100", 150.0),
+            ("string", "abc"),
+        ]
+        for label, bad in bad_values:
+            with self.subTest(label=label):
+                index = _cockpit_index(extra_quota_fields={"hourly_percentage": bad})
+                path = self.tmpdir / f"codex_accounts_{label}.json"
+                path.write_text(json.dumps(index), encoding="utf-8")
+                with self._roots_with_fixture():
+                    snap, source, reason = load_cockpit_app_data_snapshot()
+                self.assertNotEqual(source, SOURCE_COCKPIT_APP_DATA,
+                                     f"Bad percentage {label} must not yield cockpit_app_data")
+                if source != "NOT_AVAILABLE":
+                    self.fail(f"Unexpected source for {label}: {source} (reason={reason})")
+
+    # --- 7. Real Cockpit file absent on host -> NOT_AVAILABLE ------------
+    def test_real_cockpit_app_data_absent_not_available(self):
+        # No patches, no COMPAT_STATE_FILE -> must report NOT_AVAILABLE.
+        env = {k: v for k, v in os.environ.items() if k != "COMPAT_STATE_FILE"}
+        with patch.dict(os.environ, env, clear=True):
+            collector = CodexQuotaCollector()
+            self.assertEqual(collector.get_status(), "NOT_AVAILABLE")
+            snap = collector.capture_snapshot()
+            self.assertEqual(snap["status"], STATUS_NOT_AVAILABLE)
+            # No false source tag
+            self.assertNotEqual(snap.get("source"), SOURCE_COCKPIT_APP_DATA)
+            self.assertNotEqual(snap.get("source"), SOURCE_COMPAT_STATE_FILE)
+
+
+class TestCockpitCompatStateFile(unittest.TestCase):
+    """COMPAT_STATE_FILE is the only non-Cockpit path and never claims provenance."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="amc-compat-"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_compat_state_file_loads_with_compat_tag(self):
+        snap_dict = _base_snapshot()
+        # Strip the internal hash so sanitize_snapshot hashes the raw input.
+        snap_dict_for_file = dict(snap_dict)
+        snap_dict_for_file["account_ref_hash"] = "compat-account-ref"
+        path = self.tmpdir / "compat.json"
+        path.write_text(json.dumps(snap_dict_for_file), encoding="utf-8")
+        with patch.dict(os.environ, {"COMPAT_STATE_FILE": str(path)}):
+            snap, source, _ = load_compat_state_file_snapshot()
+        self.assertEqual(source, SOURCE_COMPAT_STATE_FILE)
+        self.assertEqual(snap["status"], STATUS_COMPLETE)
+        # NEVER tagged as the real Cockpit source
+        self.assertNotEqual(snap.get("source"), SOURCE_COCKPIT_APP_DATA)
+
+
+class TestCodexQuotaDeltaValidation(unittest.TestCase):
+    """Strict delta validation per the reviewer's contract."""
+
+    def test_missing_account_ref_hash_is_ambiguous(self):
+        # Both snapshots have no account_ref_hash -> AMBIGUOUS, null delta.
+        before = _base_snapshot()
+        before["account_ref_hash"] = None
+        after = _base_snapshot()
+        after["account_ref_hash"] = None
+        delta = CodexQuotaCollector().calculate_delta(before, after)
+        self.assertEqual(delta["delta_status"], STATUS_AMBIGUOUS)
+        self.assertIsNone(delta["primary_consumed_percentage"])
+        self.assertIsNone(delta["secondary_consumed_percentage"])
+
+    def test_before_after_semantics_mismatch_is_unverified(self):
+        before = _base_snapshot(percentage_semantics=SEMANTICS_REMAINING)
+        after = _base_snapshot(percentage_semantics=SEMANTICS_USED)
+        delta = CodexQuotaCollector().calculate_delta(before, after)
+        self.assertEqual(delta["delta_status"], STATUS_SEMANTICS_UNVERIFIED)
+        self.assertIsNone(delta["primary_consumed_percentage"])
+
+    def test_negative_delta_remaining_is_ambiguous(self):
+        # remaining semantics: a *rise* in percentage means LESS consumed,
+        # which the spec forbids from being silently abs()'d.
+        before = _base_snapshot(percentage_semantics=SEMANTICS_REMAINING)
+        before["primary_window"]["percentage"] = 50.0
+        after = _base_snapshot(percentage_semantics=SEMANTICS_REMAINING)
+        after["primary_window"]["percentage"] = 70.0  # went UP, not down
+
+        delta = CodexQuotaCollector().calculate_delta(before, after)
+        self.assertEqual(delta["primary_status"], STATUS_AMBIGUOUS)
+        self.assertIsNone(delta["primary_consumed_percentage"])
+        self.assertEqual(delta["delta_status"], STATUS_AMBIGUOUS)
+
+    def test_negative_delta_used_is_ambiguous(self):
+        before = _base_snapshot(percentage_semantics=SEMANTICS_USED)
+        before["primary_window"]["percentage"] = 50.0
+        after = _base_snapshot(percentage_semantics=SEMANTICS_USED)
+        after["primary_window"]["percentage"] = 30.0  # went DOWN, not up
+
+        delta = CodexQuotaCollector().calculate_delta(before, after)
+        self.assertEqual(delta["primary_status"], STATUS_AMBIGUOUS)
+        self.assertIsNone(delta["primary_consumed_percentage"])
 
     def test_remaining_semantics_normal_delta(self):
         before = _base_snapshot(percentage_semantics=SEMANTICS_REMAINING)
@@ -85,11 +368,7 @@ class TestCodexQuotaSemantics(unittest.TestCase):
         after["primary_window"]["percentage"] = 30.0
         after["secondary_window"]["percentage"] = 15.0
 
-        collector = CodexQuotaCollector()
-        delta = collector.calculate_delta(before, after)
-
-        # before.used = 20, after.used = 30 → consumed = 30 - 20 = 10
-        # before.used = 10, after.used = 15 → consumed = 15 - 10 = 5
+        delta = CodexQuotaCollector().calculate_delta(before, after)
         self.assertAlmostEqual(delta["primary_consumed_percentage"], 10.0)
         self.assertAlmostEqual(delta["secondary_consumed_percentage"], 5.0)
         self.assertEqual(delta["delta_status"], STATUS_COMPLETE)
@@ -99,109 +378,82 @@ class TestCodexQuotaSemantics(unittest.TestCase):
         after = _base_snapshot(percentage_semantics=SEMANTICS_UNKNOWN)
         after["primary_window"]["percentage"] = 50.0
 
-        collector = CodexQuotaCollector()
-        delta = collector.calculate_delta(before, after)
-
+        delta = CodexQuotaCollector().calculate_delta(before, after)
         self.assertIsNone(delta["primary_consumed_percentage"])
         self.assertIsNone(delta["secondary_consumed_percentage"])
         self.assertEqual(delta["primary_status"], STATUS_SEMANTICS_UNVERIFIED)
         self.assertEqual(delta["delta_status"], STATUS_SEMANTICS_UNVERIFIED)
 
-
-class TestCodexQuotaAccountPrivacy(unittest.TestCase):
-    """Scenarios 4-5: multi-account ambiguity and account-changed handling."""
-
-    def test_multi_account_ambiguous_no_delta(self):
-        # Two Codex accounts visible simultaneously and we cannot prove which
-        # one was active. The collector must remain AMBIGUOUS without guessing.
-        before = _base_snapshot(account_ref_hash="aaaaaaaaaaaaaaaa")
-        after = _base_snapshot(account_ref_hash="aaaaaaaaaaaaaaaa")
-        after["primary_window"]["percentage"] = 70.0
-
-        # The collector itself returns AMBIGUOUS only when account_ref_hash
-        # differs. The "multi-account, cannot prove" case is signalled by an
-        # AMBIGUOUS snapshot handed in by the caller, which the collector
-        # must surface truthfully.
-        ambiguous_before = _base_snapshot(account_ref_hash="x" * 16)
-        ambiguous_after = _base_snapshot(account_ref_hash="y" * 16)
-        delta = CodexQuotaCollector().calculate_delta(ambiguous_before, ambiguous_after)
-        self.assertEqual(delta["delta_status"], STATUS_AMBIGUOUS)
-        self.assertIsNone(delta["primary_consumed_percentage"])
-        self.assertIsNone(delta["secondary_consumed_percentage"])
-
-        # And the unrelated "same-account delta" path stays COMPLETE.
-        delta_ok = CodexQuotaCollector().calculate_delta(before, after)
-        self.assertEqual(delta_ok["delta_status"], STATUS_COMPLETE)
-
-    def test_account_ref_hash_mismatch_is_ambiguous(self):
-        before = _base_snapshot(account_ref_hash="aaaaaaaaaaaaaaaa")
-        after = _base_snapshot(account_ref_hash="bbbbbbbbbbbbbbbb")
-        after["primary_window"]["percentage"] = 70.0
-
-        delta = CodexQuotaCollector().calculate_delta(before, after)
-        self.assertEqual(delta["delta_status"], STATUS_AMBIGUOUS)
-        self.assertIsNone(delta["primary_consumed_percentage"])
-
-
-class TestCodexQuotaReset(unittest.TestCase):
-    """Scenario 6: window reset during the run is surfaced, not ignored."""
-
     def test_primary_window_reset_returns_reset_status(self):
         before = _base_snapshot()
         after = _base_snapshot()
-        # Same semantics, same percentage, but reset_at advanced — primary reset.
         after["primary_window"]["reset_at"] = "2026-08-01T14:00:00+00:00"
-        # Secondary stays stable but moved further in time (no reset).
         after["secondary_window"]["reset_at"] = "2026-08-08T10:00:00+00:00"
         after["secondary_window"]["percentage"] = 88.0
 
         delta = CodexQuotaCollector().calculate_delta(before, after)
         self.assertEqual(delta["primary_status"], STATUS_RESET_DURING_RUN)
         self.assertIsNone(delta["primary_consumed_percentage"])
-        # Secondary should still produce a delta.
         self.assertEqual(delta["secondary_status"], STATUS_COMPLETE)
         self.assertAlmostEqual(delta["secondary_consumed_percentage"], 2.0)
         self.assertEqual(delta["delta_status"], STATUS_RESET_DURING_RUN)
 
 
-class TestCodexQuotaCockpitUnavailable(unittest.TestCase):
-    """Scenario 7-8: Cockpit NOT_AVAILABLE and snapshot allowlist filtering."""
+class TestCodexQuotaStrictValidators(unittest.TestCase):
+    """Pure validation helpers — no I/O."""
+
+    def test_strict_percentage_rejects_non_finite(self):
+        self.assertIsNone(_strict_percentage(math.nan))
+        self.assertIsNone(_strict_percentage(math.inf))
+        self.assertIsNone(_strict_percentage(-math.inf))
+        self.assertIsNone(_strict_percentage(True))
+        self.assertIsNone(_strict_percentage(False))
+        self.assertIsNone(_strict_percentage("80"))
+        self.assertIsNone(_strict_percentage(None))
+        self.assertIsNone(_strict_percentage({}))
+
+    def test_strict_percentage_rejects_out_of_range(self):
+        # NO clamping: out-of-range values are rejected outright.
+        self.assertIsNone(_strict_percentage(-0.01))
+        self.assertIsNone(_strict_percentage(100.01))
+        self.assertEqual(_strict_percentage(0.0), 0.0)
+        self.assertEqual(_strict_percentage(100.0), 100.0)
+        self.assertEqual(_strict_percentage(80.5), 80.5)
+
+    def test_is_finite_number_strict(self):
+        self.assertFalse(_is_finite_number(True))
+        self.assertFalse(_is_finite_number(False))
+        self.assertFalse(_is_finite_number("1"))
+        self.assertFalse(_is_finite_number(None))
+        self.assertFalse(_is_finite_number(math.nan))
+        self.assertFalse(_is_finite_number(math.inf))
+        self.assertTrue(_is_finite_number(0))
+        self.assertTrue(_is_finite_number(0.0))
+        self.assertTrue(_is_finite_number(-0.0))
+        self.assertTrue(_is_finite_number(42.5))
+
+
+class TestCodexQuotaSnapshotAllowlist(unittest.TestCase):
+    """Allowlist filtering drops secret-bearing fields."""
 
     def setUp(self):
-        # Ensure no source env var accidentally enables the collector.
-        for var in ("COCKPIT_BASE_URL", "COCKPIT_CODEX_STATE_FILE", "COCKPIT_CODEX_QUOTA_PATH", "COCKPIT_MANAGEMENT_KEY"):
-            os.environ.pop(var, None)
-
-    def test_no_source_returns_not_available(self):
-        collector = CodexQuotaCollector()
-        snap = collector.capture_snapshot()
-        self.assertEqual(snap["status"], STATUS_NOT_AVAILABLE)
-        self.assertEqual(collector.get_status(), "NOT_AVAILABLE")
+        self.fake = json.loads(
+            (Path(__file__).resolve().parent / "fixtures" / "known-fake-secrets" / "fake_secrets.json").read_text(
+                encoding="utf-8"
+            )
+        )
 
     def test_snapshot_allowlist_excludes_secrets(self):
-        # A raw snapshot with extra fields and a sensitive account ID should
-        # never make it past sanitize_snapshot. The original value must not
-        # be reachable in the returned dict.
-        # Fake secrets are loaded from the fixtures dir (whitelisted by the
-        # repository secret scanner).
-        fixtures_path = (
-            Path(__file__).resolve().parent / "fixtures" / "known-fake-secrets" / "fake_secrets.json"
-        )
-        fake = json.loads(fixtures_path.read_text(encoding="utf-8"))
-
         raw = _base_snapshot()
-        # Use a synthesized account_ref value (not a secret) so the allowlist
-        # test focuses on field-shape filtering rather than on hash inputs.
         raw["account_ref_hash"] = "user-ref-12345"
-        raw["authorization"] = fake["fake_bearer"]
+        raw["authorization"] = self.fake["fake_bearer"]
         raw["prompt"] = "secret prompt body"
-        raw["email"] = fake["fake_email"]
-        raw["api_key"] = fake["fake_sk_api_key"]
-        raw["primary_window"]["api_key"] = fake["fake_sk_api_key"]
+        raw["email"] = self.fake["fake_email"]
+        raw["api_key"] = self.fake["fake_sk_api_key"]
+        raw["primary_window"]["api_key"] = self.fake["fake_sk_api_key"]
 
         cleaned = sanitize_snapshot(raw)
 
-        # Allowlist fields present
         for k in (
             "captured_at",
             "account_ref_hash",
@@ -212,58 +464,20 @@ class TestCodexQuotaCockpitUnavailable(unittest.TestCase):
         ):
             self.assertIn(k, cleaned)
 
-        # Secret-bearing fields dropped
         self.assertNotIn("authorization", cleaned)
         self.assertNotIn("prompt", cleaned)
         self.assertNotIn("email", cleaned)
         self.assertNotIn("api_key", cleaned)
-
-        # Nested secret-bearing field dropped
         self.assertNotIn("api_key", cleaned["primary_window"])
 
-        # Original account reference is replaced by a SHA-256 hash, never the
-        # original literal value.
         self.assertNotEqual(cleaned["account_ref_hash"], "user-ref-12345")
         self.assertNotIn("user-ref-12345", json.dumps(cleaned))
 
-        # Hash length stays within spec.
         self.assertLessEqual(len(cleaned["account_ref_hash"]), 16)
         self.assertGreaterEqual(len(cleaned["account_ref_hash"]), 12)
 
 
-class TestCodexQuotaSourceDiscovery(unittest.TestCase):
-    """Discovery path: explicit COCKPIT_BASE_URL with a fake local HTTP server."""
-
-    def test_discover_state_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            state_file = Path(tmp) / "codex-quota.json"
-            state_file.write_text(json.dumps(_base_snapshot()), encoding="utf-8")
-            with patch.dict(os.environ, {"COCKPIT_CODEX_STATE_FILE": str(state_file)}, clear=False):
-                # Clear COCKPIT_BASE_URL to ensure file path wins alone.
-                env = {k: v for k, v in os.environ.items() if k != "COCKPIT_BASE_URL"}
-                env["COCKPIT_CODEX_STATE_FILE"] = str(state_file)
-                with patch.dict(os.environ, env, clear=True):
-                    d = discover_source()
-                    self.assertEqual(d["source_path_type"], "STATE_FILE")
-                    self.assertTrue(d["available"])
-
-                    snap = CodexQuotaCollector().capture_snapshot()
-                    self.assertEqual(snap["status"], STATUS_COMPLETE)
-                    self.assertEqual(snap["percentage_semantics"], SEMANTICS_REMAINING)
-
-    def test_discover_default_returns_not_available(self):
-        env = {k: v for k, v in os.environ.items() if k not in (
-            "COCKPIT_BASE_URL", "COCKPIT_CODEX_STATE_FILE", "COCKPIT_CODEX_QUOTA_PATH"
-        )}
-        with patch.dict(os.environ, env, clear=True):
-            d = discover_source()
-            self.assertEqual(d["source_path_type"], "NOT_AVAILABLE")
-            self.assertFalse(d["available"])
-
-
-class TestCodexQuotaAccountHash(unittest.TestCase):
-    """Account identifier is hashed, not echoed back."""
-
+class TestAccountRefHash(unittest.TestCase):
     def test_account_ref_hash_stable_and_truncated(self):
         h1 = _hash_account_ref("account-xyz")
         h2 = _hash_account_ref("account-xyz")

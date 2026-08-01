@@ -35,7 +35,12 @@ from agent_metrics.collectors.git_collector import GitCollector
 from agent_metrics.collectors.github_collector import GithubCollector
 from agent_metrics.collectors.claude_code_collector import ClaudeCodeCollector
 from agent_metrics.collectors.cockpit_collector import CockpitCollector
-from agent_metrics.collectors.codex_quota_collector import CodexQuotaCollector, discover_source as discover_codex_source
+from agent_metrics.collectors.codex_quota_collector import (
+    CodexQuotaCollector,
+    SOURCE_COCKPIT_APP_DATA,
+    SOURCE_COMPAT_STATE_FILE,
+    STATUS_NOT_AVAILABLE,
+)
 from agent_metrics.collectors.antigravity_collector import AntigravityCollector
 from agent_metrics.redaction import sanitize_dict, scan_text_for_secret_types
 from agent_metrics.validators import validate_sanitized_summary
@@ -154,11 +159,11 @@ class CLIHandler:
             normalized_shell and normalized_shell.strip().lower() == "codex"
         )
         if is_codex_agent:
-            discovery = discover_codex_source()
-            codex_quota_source = discovery.get("source_path_type")
             try:
                 codex_quota_snapshot_before = codex_quota_coll.capture_snapshot()
-                codex_quota_status = codex_quota_snapshot_before.get("status") if isinstance(codex_quota_snapshot_before, dict) else None
+                if isinstance(codex_quota_snapshot_before, dict):
+                    codex_quota_source = codex_quota_snapshot_before.get("source")
+                    codex_quota_status = codex_quota_snapshot_before.get("status")
             except Exception:
                 codex_quota_snapshot_before = None
                 codex_quota_status = "ERROR"

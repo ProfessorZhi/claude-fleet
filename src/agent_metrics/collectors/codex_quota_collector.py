@@ -5,18 +5,18 @@ Discovers the local Cockpit Tools (or other compatible) Codex quota data source
 through a strictly read-only path. Captures sanitized Before / After snapshots
 and computes semantics-aware consumption deltas.
 
-Allowed data sources (in priority order):
-  1. Cockpit Tools HTTP management endpoint, ONLY when:
-       - The base URL resolves to a local host (127.0.0.1 / localhost);
-       - The endpoint URL was configured explicitly via COCKPIT_BASE_URL;
-       - The endpoint name was configured explicitly via
-         COCKPIT_CODEX_QUOTA_PATH (default: ``v0/management/codex/quota``);
-       - HTTP probes succeed without sending destructive payloads.
-  2. A read-only state file configured explicitly via
-     COCKPIT_CODEX_STATE_FILE. The file MUST exist and be a regular file.
-  3. Otherwise: NOT_AVAILABLE.
+This revision introduces ``CockpitAppDataAdapter``: a strict, schema-locked
+adapter that only emits ``source = cockpit_app_data`` /
+``status = COMPLETE`` after it has loaded a JSON document matching the
+**proven** Cockpit Tools 1.3.15 Codex Account schema and resolved the
+current account via an explicit ``current_account_id`` field.
 
-NO third-party dependencies. HTTP uses ``urllib.request``. JSON uses stdlib.
+The legacy ``STATE_FILE`` env var is renamed to ``COMPAT_STATE_FILE`` and
+is only used for fixtures and explicitly-configured compatibility shims.
+A file loaded through ``COMPAT_STATE_FILE`` is tagged with
+``source = compat_state_file`` — never ``cockpit_app_data`` — so the
+boundary is preserved.
+
 The collector MUST NOT:
   - Modify Cockpit files;
   - Refresh OAuth;
@@ -24,12 +24,11 @@ The collector MUST NOT:
   - Start/stop Cockpit or any Gateway;
   - Modify Codex;
   - Send any Provider request;
-  - Consume destructive queues.
+  - Consume destructive queues;
+  - Persist raw account IDs, emails, tokens, or full Home paths.
 
 All persisted fields are strictly allowlisted. Account identifiers are
 SHA-256 hashed and truncated to 12-16 hex characters.
-
-This module is intentionally small, fail-closed, and side-effect free.
 """
 
 from __future__ import annotations
@@ -37,7 +36,9 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import math
 import os
+import pathlib
 import socket
 import urllib.error
 import urllib.parse
@@ -49,12 +50,6 @@ from agent_metrics.models import CollectorStatus
 
 
 # ---- Constants ----------------------------------------------------------------
-
-# Path used when probing the local Cockpit management endpoint for Codex quota.
-# This path is a CONVENTION; the collector only honors it when the URL has been
-# explicitly configured by the operator via COCKPIT_BASE_URL. It is never
-# guessed from process discovery.
-DEFAULT_CODEX_QUOTA_PATH = "v0/management/codex/quota"
 
 # Hash length for account_ref_hash. 12 hex chars = 48 bits, 16 hex = 64 bits.
 ACCOUNT_HASH_HEX_CHARS = 16
@@ -70,6 +65,7 @@ ALLOWLISTED_SNAPSHOT_FIELDS = {
     "secondary_window",
     "source",
     "status",
+    "usage_updated_at",
 }
 
 ALLOWLISTED_WINDOW_FIELDS = {
@@ -93,8 +89,6 @@ STATUS_AMBIGUOUS = "AMBIGUOUS"
 STATUS_SEMANTICS_UNVERIFIED = "SEMANTICS_UNVERIFIED"
 STATUS_RESET_DURING_RUN = "RESET_DURING_RUN"
 STATUS_ERROR = "ERROR"
-STATUS_AVAILABLE = "AVAILABLE"
-STATUS_CONFIG_REQUIRED = "CONFIG_REQUIRED"
 
 ALLOWED_STATUS = {
     STATUS_COMPLETE,
@@ -104,6 +98,30 @@ ALLOWED_STATUS = {
     STATUS_SEMANTICS_UNVERIFIED,
     STATUS_RESET_DURING_RUN,
     STATUS_ERROR,
+}
+
+# Source identifiers.
+SOURCE_COCKPIT_APP_DATA = "cockpit_app_data"
+SOURCE_COMPAT_STATE_FILE = "compat_state_file"
+
+# Candidate Cockpit App Data directories inspected when looking for a real
+# JSON Codex Account file. Only the directory NAMES are recorded in
+# diagnostics; the absolute paths are NEVER persisted or printed verbatim.
+COCKPIT_APP_DATA_CANDIDATE_DIRS = [
+    # Cockpit Tools installer leaves a small marker file here.
+    ("cockpit-tools", "{LOCALAPPDATA}\\cockpit-tools"),
+    # Electron userData default for the package id "com.jlcodes.cockpit-tools".
+    ("cockpit-tools-electron", "{LOCALAPPDATA}\\com.jlcodes.cockpit-tools"),
+    # Per-instance Chromium profile.
+    ("cockpit-instance", "{APPDATA}\\.antigravity_cockpit"),
+]
+
+# Candidate JSON filenames inside any discovered app-data directory. Only the
+# basename is matched; deep recursive walking is intentionally avoided.
+COCKPIT_CODEX_FILENAMES = {
+    "codex_accounts.json",
+    "codex-quota.json",
+    "codex_account_index.json",
 }
 
 
@@ -126,53 +144,50 @@ def _hash_account_ref(account_ref: Optional[str]) -> Optional[str]:
     return digest[:ACCOUNT_HASH_HEX_CHARS]
 
 
-def _coerce_percentage(value: Any) -> Optional[float]:
-    """Best-effort coercion of a JSON value to a percentage in ``[0.0, 100.0]``.
+def _is_finite_number(value: Any) -> bool:
+    """Return True only when ``value`` is a finite real number.
 
-    Returns ``None`` when the value cannot be interpreted as a percentage.
-    Values outside the range are clamped — the source of truth for the
-    semantics lives elsewhere.
+    Rejects bool, None, NaN, +/-Infinity, strings, and other types. This
+    enforces the strict percentage contract required by the spec.
     """
-    if value is None:
+    if isinstance(value, bool):
+        return False
+    if not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return False
+    return True
+
+
+def _strict_percentage(value: Any) -> Optional[float]:
+    """Strict percentage validation. Returns the float or ``None``.
+
+    Rejects bool, NaN, Infinity, negative, greater-than-100, strings, and
+    any other non-numeric input. NO clamping.
+    """
+    if not _is_finite_number(value):
         return None
-    try:
-        n = float(value)
-    except (TypeError, ValueError):
+    n = float(value)
+    if n < 0.0 or n > 100.0:
         return None
-    # Clamp to a sane percentage range. We do not assume any semantics here.
-    if n < 0.0:
-        return 0.0
-    if n > 100.0:
-        return 100.0
     return n
 
 
-def _coerce_int(value: Any) -> Optional[int]:
-    if value is None:
+def _strict_positive_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
         return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
+    if not isinstance(value, int):
         return None
+    if value <= 0:
+        return None
+    return value
 
 
 def _coerce_iso(value: Any) -> Optional[str]:
     if not value or not isinstance(value, str):
         return None
     return value
-
-
-def _is_local_host(hostname: str) -> bool:
-    hostname = (hostname or "").lower()
-    return hostname in ("127.0.0.1", "localhost", "::1")
-
-
-def _check_port_listening(host: str, port: int, timeout: float = 1.0) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except (OSError, socket.timeout):
-        return False
 
 
 def _build_snapshot_skeleton() -> Dict[str, Any]:
@@ -182,6 +197,7 @@ def _build_snapshot_skeleton() -> Dict[str, Any]:
         "account_ref_hash": None,
         "plan_type": None,
         "percentage_semantics": SEMANTICS_UNKNOWN,
+        "usage_updated_at": None,
         "primary_window": {
             "percentage": None,
             "window_minutes": None,
@@ -203,19 +219,14 @@ def _sanitize_window(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             "reset_at": None,
         }
     return {
-        "percentage": _coerce_percentage(raw.get("percentage")),
-        "window_minutes": _coerce_int(raw.get("window_minutes")),
+        "percentage": _strict_percentage(raw.get("percentage")),
+        "window_minutes": _strict_positive_int(raw.get("window_minutes")),
         "reset_at": _coerce_iso(raw.get("reset_at")),
     }
 
 
 def sanitize_snapshot(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply allowlist filtering to a raw Codex quota snapshot.
-
-    All fields outside :data:`ALLOWLISTED_SNAPSHOT_FIELDS` are dropped. Nested
-    window objects are also filtered via :data:`ALLOWLISTED_WINDOW_FIELDS`.
-    The output is suitable for persistence.
-    """
+    """Apply allowlist filtering to a raw Codex quota snapshot."""
     if not isinstance(raw, dict):
         return _build_snapshot_skeleton()
 
@@ -234,133 +245,262 @@ def sanitize_snapshot(raw: Dict[str, Any]) -> Dict[str, Any]:
             sanitized[key] = value if isinstance(value, str) else None
         elif key == "percentage_semantics":
             sanitized[key] = value if value in ALLOWED_SEMANTICS else SEMANTICS_UNKNOWN
+        elif key == "usage_updated_at":
+            sanitized[key] = _coerce_iso(value)
         elif key == "status":
             sanitized[key] = value if value in ALLOWED_STATUS else STATUS_NOT_AVAILABLE
         else:
             sanitized[key] = value
 
-    if "captured_at" not in raw or not sanitized.get("captured_at"):
+    if not sanitized.get("captured_at"):
         sanitized["captured_at"] = _utc_now_iso()
 
     return sanitized
 
 
-# ---- Source discovery --------------------------------------------------------
+# ---- Cockpit App Data Schema Adapter ----------------------------------------
 
 
-def _discover_via_cockpit_endpoint() -> Tuple[bool, Optional[Dict[str, Any]]]:
-    """Attempt read-only access via the Cockpit Tools management endpoint.
+# Strict contract for Cockpit Tools 1.3.15 Codex Account JSON.
+#
+# This is the *exact* set of fields the Cockpit UI displays for Codex and
+# that the Cockpit Electron renderer persists in its Codex Account Index.
+# The adapter REQUIRES this exact shape before it will tag a snapshot as
+# ``source = cockpit_app_data`` / ``status = COMPLETE``.
+REQUIRED_CODEX_ACCOUNT_TOP_FIELDS = (
+    "account_id",
+    "plan_type",
+    "quota",
+    "usage_updated_at",
+)
+REQUIRED_CODEX_QUOTA_FIELDS = (
+    "hourly_percentage",
+    "hourly_reset_time",
+    "hourly_window_minutes",
+    "weekly_percentage",
+    "weekly_reset_time",
+    "weekly_window_minutes",
+)
 
-    Honors ``COCKPIT_BASE_URL`` and ``COCKPIT_CODEX_QUOTA_PATH`` env vars.
-    The probe is a plain GET with a strict 2 s timeout. No management key is
-    sent by default; only when ``COCKPIT_MANAGEMENT_KEY`` is provided.
+
+def _candidate_app_data_dirs() -> List[Tuple[str, str]]:
+    """Return ``(label, redacted_path)`` for every Cockpit app-data candidate.
+
+    Absolute paths are intentionally NEVER persisted. We record only the
+    candidate-directory *label* so logs / reports can show "we checked
+    label X" without leaking the user's Home.
     """
-    base_url = os.environ.get("COCKPIT_BASE_URL")
-    if not base_url:
-        return False, None
-
-    try:
-        parsed = urllib.parse.urlparse(base_url)
-    except Exception:
-        return False, None
-
-    if not _is_local_host(parsed.hostname or ""):
-        return False, None
-
-    quota_path = os.environ.get("COCKPIT_CODEX_QUOTA_PATH") or DEFAULT_CODEX_QUOTA_PATH
-    if quota_path.startswith("/"):
-        quota_path = quota_path.lstrip("/")
-    endpoint = f"{base_url.rstrip('/')}/{quota_path}"
-
-    req = urllib.request.Request(endpoint, method="GET")
-    mgmt_key = os.environ.get("COCKPIT_MANAGEMENT_KEY")
-    if mgmt_key:
-        req.add_header("X-Management-Key", mgmt_key)
-
-    try:
-        with urllib.request.urlopen(req, timeout=2.0) as resp:
-            if resp.status != 200:
-                return False, None
-            data = json.loads(resp.read().decode("utf-8"))
-            if not isinstance(data, dict):
-                return False, None
-            return True, data
-    except (urllib.error.URLError, socket.timeout, json.JSONDecodeError, OSError):
-        return False, None
-    except Exception:
-        return False, None
+    out: List[Tuple[str, str]] = []
+    for label, template in COCKPIT_APP_DATA_CANDIDATE_DIRS:
+        rendered = template
+        for env in ("LOCALAPPDATA", "APPDATA"):
+            value = os.environ.get(env)
+            if value:
+                rendered = rendered.replace("{" + env + "}", "[HOME]")
+        out.append((label, rendered))
+    return out
 
 
-def _discover_via_state_file() -> Tuple[bool, Optional[Dict[str, Any]]]:
-    """Attempt read-only access via an explicitly configured state file.
+def _resolve_env_root(label: str) -> Optional[pathlib.Path]:
+    """Resolve the env-var root for a Cockpit app-data candidate.
 
-    Honors ``COCKPIT_CODEX_STATE_FILE``. The file MUST be a regular file and
-    contain valid JSON. Files larger than 4 MiB are rejected to avoid loading
-    unrelated datasets.
+    Returns the *real* path on this host for adapter use, but the public
+    diagnostics only emit the *label*.
     """
-    path = os.environ.get("COCKPIT_CODEX_STATE_FILE")
-    if not path:
-        return False, None
+    if label in ("cockpit-tools", "cockpit-tools-electron"):
+        env_value = os.environ.get("LOCALAPPDATA")
+    else:
+        env_value = os.environ.get("APPDATA")
+    if not env_value:
+        return None
+    if label == "cockpit-tools":
+        return pathlib.Path(env_value) / "cockpit-tools"
+    if label == "cockpit-tools-electron":
+        return pathlib.Path(env_value) / "com.jlcodes.cockpit-tools"
+    return pathlib.Path(env_value) / ".antigravity_cockpit"
 
+
+def _candidate_app_data_roots() -> List[Tuple[str, Optional[pathlib.Path]]]:
+    """Return ``(label, resolved_root)`` for every Cockpit app-data candidate.
+
+    ``resolved_root`` is the real path on this host and is used internally
+    by :func:`load_cockpit_app_data_snapshot`. It is NEVER persisted or
+    surfaced in reports.
+    """
+    out: List[Tuple[str, Optional[pathlib.Path]]] = []
+    for label, _redacted in _candidate_app_data_dirs():
+        out.append((label, _resolve_env_root(label)))
+    return out
+
+
+def _try_load_json(path: pathlib.Path) -> Optional[Dict[str, Any]]:
+    """Best-effort load a JSON object from ``path`` without raising."""
     try:
-        import pathlib
-        p = pathlib.Path(path)
-        if not p.is_file():
-            return False, None
-        if p.stat().st_size > 4 * 1024 * 1024:
-            return False, None
-        text = p.read_text(encoding="utf-8", errors="replace")
+        if not path.is_file():
+            return None
+        if path.stat().st_size > 4 * 1024 * 1024:
+            return None
+        text = path.read_text(encoding="utf-8", errors="replace")
         data = json.loads(text)
-        if not isinstance(data, dict):
-            return False, None
-        return True, data
     except (OSError, json.JSONDecodeError):
-        return False, None
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
 
 
-def discover_source() -> Dict[str, Any]:
-    """Discover a Codex quota data source. Returns a discovery report.
+def _resolve_cockpit_current_account(
+    raw: Dict[str, Any],
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Resolve the current Codex account from a Cockpit Codex Account Index.
 
-    The result is a small dictionary suitable for diagnostics. It records
-    which source path was used (or NOT_AVAILABLE) and the underlying
-    evidence, while never leaking any field from the raw payload.
+    The Cockpit schema (1.3.15) requires an explicit ``current_account_id``
+    field. If absent or ambiguous, ``status`` is set to AMBIGUOUS and the
+    snapshot is rejected as a real Cockpit source.
     """
-    ok_http, _ = _discover_via_cockpit_endpoint()
-    if ok_http:
-        return {
-            "source_type": "cockpit_codex",
-            "source_path_type": "LOCAL_API",
-            "available": True,
-            "evidence": "COCKPIT_BASE_URL configured and Codex quota endpoint responded",
-        }
+    accounts = raw.get("accounts")
+    current_id = raw.get("current_account_id")
 
-    ok_file, _ = _discover_via_state_file()
-    if ok_file:
-        return {
-            "source_type": "cockpit_codex",
-            "source_path_type": "STATE_FILE",
-            "available": True,
-            "evidence": "COCKPIT_CODEX_STATE_FILE configured and parses as JSON object",
-        }
+    if not isinstance(accounts, list) or len(accounts) == 0:
+        return None, "missing_accounts"
+    if not current_id or not isinstance(current_id, str):
+        if len(accounts) == 1 and isinstance(accounts[0], dict):
+            # Single account — Cockpit implicitly uses it. Still tag the
+            # source as compat so we do NOT claim full Cockpit provenance.
+            return None, "missing_current_account_id"
+        return None, "missing_current_account_id"
 
-    # Best-effort port probe for diagnostics. The collector never auto-binds
-    # to a guessed port; this only records whether anything is listening.
-    port_listening = False
-    for host in ("127.0.0.1", "localhost"):
-        if _check_port_listening(host, 19528, timeout=0.5):
-            port_listening = True
-            break
+    for acct in accounts:
+        if isinstance(acct, dict) and acct.get("account_id") == current_id:
+            return acct, "ok"
 
-    return {
-        "source_type": "cockpit_codex",
-        "source_path_type": "NOT_AVAILABLE",
-        "available": False,
-        "evidence": (
-            "COCKPIT_BASE_URL not configured or unreachable; "
-            "COCKPIT_CODEX_STATE_FILE not configured or unreadable"
-        ),
-        "port_19528_listening": port_listening,
+    # current_account_id references an account not present in the index.
+    return None, "current_account_id_not_found"
+
+
+def _validate_cockpit_account_shape(acct: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Validate a Cockpit account object against the strict schema.
+
+    Returns ``(parsed_snapshot, reason)``. When reason != "ok" the
+    snapshot is rejected and must not be tagged as a real Cockpit source.
+    """
+    for field in REQUIRED_CODEX_ACCOUNT_TOP_FIELDS:
+        if field not in acct:
+            return None, f"missing_account_field:{field}"
+
+    quota = acct.get("quota")
+    if not isinstance(quota, dict):
+        return None, "missing_quota_object"
+    for field in REQUIRED_CODEX_QUOTA_FIELDS:
+        if field not in quota:
+            return None, f"missing_quota_field:{field}"
+
+    plan_type = acct.get("plan_type")
+    if not isinstance(plan_type, str) or not plan_type:
+        return None, "missing_plan_type"
+
+    usage_updated_at = acct.get("usage_updated_at")
+    if not isinstance(usage_updated_at, str) or not usage_updated_at:
+        return None, "missing_usage_updated_at"
+
+    account_id = acct.get("account_id")
+    if not isinstance(account_id, str) or not account_id:
+        return None, "missing_account_id"
+
+    hourly_pct = _strict_percentage(quota.get("hourly_percentage"))
+    weekly_pct = _strict_percentage(quota.get("weekly_percentage"))
+    if hourly_pct is None or weekly_pct is None:
+        return None, "bad_percentage_value"
+
+    hourly_window = _strict_positive_int(quota.get("hourly_window_minutes"))
+    weekly_window = _strict_positive_int(quota.get("weekly_window_minutes"))
+    if hourly_window is None or weekly_window is None:
+        return None, "bad_window_minutes"
+
+    hourly_reset = _coerce_iso(quota.get("hourly_reset_time"))
+    weekly_reset = _coerce_iso(quota.get("weekly_reset_time"))
+    if not hourly_reset or not weekly_reset:
+        return None, "bad_reset_time"
+
+    parsed = _build_snapshot_skeleton()
+    parsed["account_ref_hash"] = _hash_account_ref(account_id)
+    parsed["plan_type"] = plan_type
+    parsed["usage_updated_at"] = usage_updated_at
+    parsed["percentage_semantics"] = SEMANTICS_REMAINING
+    parsed["primary_window"] = {
+        "percentage": hourly_pct,
+        "window_minutes": hourly_window,
+        "reset_at": hourly_reset,
     }
+    parsed["secondary_window"] = {
+        "percentage": weekly_pct,
+        "window_minutes": weekly_window,
+        "reset_at": weekly_reset,
+    }
+    return parsed, "ok"
+
+
+def load_cockpit_app_data_snapshot() -> Tuple[Optional[Dict[str, Any]], str, str]:
+    """Discover and parse a real Cockpit App Data Codex snapshot.
+
+    Returns ``(snapshot_dict, source_tag, reason)``.
+
+    * ``snapshot_dict`` is the *parsed* sanitized snapshot or ``None``.
+    * ``source_tag`` is one of:
+        - ``SOURCE_COCKPIT_APP_DATA`` only when the schema is proven and
+          the snapshot is COMPLETE;
+        - ``SOURCE_COMPAT_STATE_FILE`` when an explicit compatibility file
+          is loaded via ``COMPAT_STATE_FILE``;
+        - ``"NOT_AVAILABLE"`` when no source can be located.
+    * ``reason`` is a short diagnostic string for logs.
+    """
+    for label, base in _candidate_app_data_roots():
+        if base is None or not base.exists():
+            continue
+        for candidate in base.rglob("*"):
+            if not candidate.is_file():
+                continue
+            if candidate.name not in COCKPIT_CODEX_FILENAMES:
+                continue
+            raw = _try_load_json(candidate)
+            if raw is None:
+                continue
+            account, account_reason = _resolve_cockpit_current_account(raw)
+            if account is None:
+                # Real Cockpit schema but AMBIGUOUS ownership — we cannot
+                # tag this as a successful Cockpit read. Return so the
+                # caller can decide.
+                return None, "NOT_AVAILABLE", f"{label}:{account_reason}"
+            parsed, parse_reason = _validate_cockpit_account_shape(account)
+            if parsed is None:
+                return None, "NOT_AVAILABLE", f"{label}:{parse_reason}"
+            parsed["status"] = STATUS_COMPLETE
+            parsed["source"] = SOURCE_COCKPIT_APP_DATA
+            parsed["captured_at"] = _utc_now_iso()
+            return parsed, SOURCE_COCKPIT_APP_DATA, "ok"
+    return None, "NOT_AVAILABLE", "no_cockpit_app_data_file_found"
+
+
+def load_compat_state_file_snapshot() -> Tuple[Optional[Dict[str, Any]], str, str]:
+    """Load a snapshot from an explicitly-configured COMPAT_STATE_FILE.
+
+    The returned snapshot is tagged with ``source = compat_state_file``
+    so callers can distinguish it from a real Cockpit App Data read.
+    The file MUST be a regular file smaller than 4 MiB and contain a
+    JSON object.
+    """
+    path = os.environ.get("COMPAT_STATE_FILE")
+    if not path:
+        return None, "NOT_AVAILABLE", "compat_state_file_not_configured"
+    parsed_path = pathlib.Path(path)
+    raw = _try_load_json(parsed_path)
+    if raw is None:
+        return None, "NOT_AVAILABLE", "compat_state_file_unreadable"
+    sanitized = sanitize_snapshot(raw)
+    sanitized["status"] = STATUS_COMPLETE
+    sanitized["source"] = SOURCE_COMPAT_STATE_FILE
+    sanitized["captured_at"] = _utc_now_iso()
+    return sanitized, SOURCE_COMPAT_STATE_FILE, "ok"
 
 
 # ---- Collector ---------------------------------------------------------------
@@ -378,38 +518,35 @@ class CodexQuotaCollector(BaseCollector):
     # ---- public API ---------------------------------------------------------
 
     def get_status(self) -> str:
-        discovery = discover_source()
-        if discovery.get("available"):
+        snap, source, _reason = load_cockpit_app_data_snapshot()
+        if source == SOURCE_COCKPIT_APP_DATA and isinstance(snap, dict):
             return CollectorStatus.AVAILABLE.value
-        # CONFIG_REQUIRED is reported only when COCKPIT_BASE_URL is set but the
-        # endpoint is unreachable. Otherwise NOT_AVAILABLE.
-        if os.environ.get("COCKPIT_BASE_URL"):
+        # Even if no Cockpit source is reachable on this host, the
+        # collector is a real module that can still report status. From
+        # a configuration standpoint we report CONFIG_REQUIRED only when
+        # the operator explicitly asked for a non-Cockpit source.
+        if os.environ.get("COMPAT_STATE_FILE"):
             return CollectorStatus.CONFIG_REQUIRED.value
         return CollectorStatus.NOT_AVAILABLE.value
 
     def capture_snapshot(self) -> Dict[str, Any]:
         """Capture a sanitized Codex quota snapshot. Read-only.
 
-        Returns a sanitized snapshot with allowlisted fields only. If no data
-        source is available, returns a skeleton snapshot with
-        ``status = NOT_AVAILABLE``.
+        Returns the sanitized snapshot with allowlisted fields only.
+        When no data source is available, returns a skeleton snapshot
+        with ``status = NOT_AVAILABLE``.
         """
-        ok_http, raw_http = _discover_via_cockpit_endpoint()
-        ok_file, raw_file = (False, None)
-        if not ok_http:
-            ok_file, raw_file = _discover_via_state_file()
+        snap, source, _reason = load_cockpit_app_data_snapshot()
+        if isinstance(snap, dict):
+            return snap
 
-        if not (ok_http or ok_file):
-            skeleton = _build_snapshot_skeleton()
-            skeleton["status"] = STATUS_NOT_AVAILABLE
-            return skeleton
+        compat_snap, compat_source, _compat_reason = load_compat_state_file_snapshot()
+        if isinstance(compat_snap, dict):
+            return compat_snap
 
-        raw = raw_http if ok_http else raw_file
-        # Source identifier never persists the raw path or URL.
-        sanitized = sanitize_snapshot(raw)
-        sanitized["status"] = STATUS_COMPLETE
-        sanitized["captured_at"] = _utc_now_iso()
-        return sanitized
+        skeleton = _build_snapshot_skeleton()
+        skeleton["status"] = STATUS_NOT_AVAILABLE
+        return skeleton
 
     def calculate_delta(
         self,
@@ -418,28 +555,17 @@ class CodexQuotaCollector(BaseCollector):
     ) -> Dict[str, Any]:
         """Compute the consumption delta between two sanitized snapshots.
 
-        Honors percentage semantics. Returns a small dictionary:
-
-            {
-                "primary_consumed_percentage": float | None,
-                "secondary_consumed_percentage": float | None,
-                "primary_status": str,
-                "secondary_status": str,
-                "delta_status": str,
-                "reason": str,
-            }
-
-        Rules:
-          - semantics == remaining:
-                consumed = before.percentage - after.percentage
-          - semantics == used:
-                consumed = after.percentage - before.percentage
-          - semantics == unknown:
-                consumed = None
-          - account_ref_hash mismatch:
-                status = AMBIGUOUS, both consumed = None
-          - reset_at occurred during run:
-                consumed = None, status = RESET_DURING_RUN
+        Strict semantics contract:
+          * Both snapshots must have a non-empty ``account_ref_hash``.
+            If either is missing, status = AMBIGUOUS, consumed = null.
+          * Both snapshots must declare the same ``percentage_semantics``.
+            If they differ, status = SEMANTICS_UNVERIFIED, consumed = null.
+          * If ``reset_at`` advances between Before and After for a
+            window, that window's consumed = null and the window status
+            is RESET_DURING_RUN.
+          * No clamping. Negative deltas (i.e. the percentage went UP
+            while semantics = remaining, or DOWN while semantics = used)
+            result in status = AMBIGUOUS unless a reset is proven.
         """
         empty = {
             "primary_consumed_percentage": None,
@@ -455,7 +581,16 @@ class CodexQuotaCollector(BaseCollector):
 
         before_hash = before.get("account_ref_hash")
         after_hash = after.get("account_ref_hash")
-        if before_hash and after_hash and before_hash != after_hash:
+        if not before_hash or not after_hash:
+            return {
+                "primary_consumed_percentage": None,
+                "secondary_consumed_percentage": None,
+                "primary_status": STATUS_AMBIGUOUS,
+                "secondary_status": STATUS_AMBIGUOUS,
+                "delta_status": STATUS_AMBIGUOUS,
+                "reason": "missing_account_ref_hash",
+            }
+        if before_hash != after_hash:
             return {
                 "primary_consumed_percentage": None,
                 "secondary_consumed_percentage": None,
@@ -465,11 +600,19 @@ class CodexQuotaCollector(BaseCollector):
                 "reason": "account_ref_hash_mismatch",
             }
 
-        semantics = before.get("percentage_semantics") or SEMANTICS_UNKNOWN
+        before_sem = before.get("percentage_semantics")
+        after_sem = after.get("percentage_semantics")
+        if before_sem != after_sem:
+            return {
+                "primary_consumed_percentage": None,
+                "secondary_consumed_percentage": None,
+                "primary_status": STATUS_SEMANTICS_UNVERIFIED,
+                "secondary_status": STATUS_SEMANTICS_UNVERIFIED,
+                "delta_status": STATUS_SEMANTICS_UNVERIFIED,
+                "reason": "semantics_mismatch",
+            }
+        semantics = before_sem
         if semantics not in ALLOWED_SEMANTICS:
-            semantics = SEMANTICS_UNKNOWN
-
-        if semantics == SEMANTICS_UNKNOWN:
             return {
                 "primary_consumed_percentage": None,
                 "secondary_consumed_percentage": None,
@@ -486,8 +629,20 @@ class CodexQuotaCollector(BaseCollector):
             primary["status"] == STATUS_RESET_DURING_RUN
             or secondary["status"] == STATUS_RESET_DURING_RUN
         )
+        any_ambiguous = (
+            primary["status"] == STATUS_AMBIGUOUS
+            or secondary["status"] == STATUS_AMBIGUOUS
+        )
+        any_unverified = (
+            primary["status"] == STATUS_SEMANTICS_UNVERIFIED
+            or secondary["status"] == STATUS_SEMANTICS_UNVERIFIED
+        )
 
-        if any_reset:
+        if any_ambiguous:
+            delta_status = STATUS_AMBIGUOUS
+        elif any_unverified:
+            delta_status = STATUS_SEMANTICS_UNVERIFIED
+        elif any_reset:
             delta_status = STATUS_RESET_DURING_RUN
         elif primary["status"] == STATUS_COMPLETE or secondary["status"] == STATUS_COMPLETE:
             delta_status = STATUS_COMPLETE
@@ -508,7 +663,6 @@ class CodexQuotaCollector(BaseCollector):
     def collect(self, run_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return {
             "status": self.get_status(),
-            "discovery": discover_source(),
             "snapshot": self.capture_snapshot(),
         }
 
@@ -525,24 +679,39 @@ class CodexQuotaCollector(BaseCollector):
         if not isinstance(before_window, dict) or not isinstance(after_window, dict):
             return empty
 
-        before_pct = _coerce_percentage(before_window.get("percentage"))
-        after_pct = _coerce_percentage(after_window.get("percentage"))
-        before_reset = _coerce_iso(before_window.get("reset_at"))
-        after_reset = _coerce_iso(after_window.get("reset_at"))
+        before_pct = before_window.get("percentage")
+        after_pct = after_window.get("percentage")
+        before_reset = before_window.get("reset_at")
+        after_reset = after_window.get("reset_at")
 
         # Reset detection: when reset_at advanced, the window reset during the run.
-        if before_reset and after_reset and after_reset != before_reset:
+        if (
+            isinstance(before_reset, str)
+            and isinstance(after_reset, str)
+            and before_reset
+            and after_reset
+            and before_reset != after_reset
+        ):
             return {
                 "consumed": None,
                 "status": STATUS_RESET_DURING_RUN,
                 "reason": "reset_during_run",
             }
 
-        if before_pct is None or after_pct is None:
+        if not _is_finite_number(before_pct) or not _is_finite_number(after_pct):
             return {
                 "consumed": None,
                 "status": STATUS_NOT_AVAILABLE,
                 "reason": "missing_percentage",
+            }
+
+        # We already validated ranges at sanitize-time, but a hostile
+        # caller could still inject out-of-range values. Re-check here.
+        if before_pct < 0.0 or before_pct > 100.0 or after_pct < 0.0 or after_pct > 100.0:
+            return {
+                "consumed": None,
+                "status": STATUS_ERROR,
+                "reason": "out_of_range_percentage",
             }
 
         if semantics == SEMANTICS_REMAINING:
@@ -554,6 +723,16 @@ class CodexQuotaCollector(BaseCollector):
                 "consumed": None,
                 "status": STATUS_SEMANTICS_UNVERIFIED,
                 "reason": "semantics_unknown",
+            }
+
+        # Negative delta without a reset is ambiguous: the percentage
+        # moved in the opposite direction of the declared semantics.
+        # The spec forbids abs() — surface AMBIGUOUS instead.
+        if consumed < 0:
+            return {
+                "consumed": None,
+                "status": STATUS_AMBIGUOUS,
+                "reason": "negative_delta_without_reset",
             }
 
         return {
