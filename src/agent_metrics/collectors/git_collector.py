@@ -1,32 +1,31 @@
 """
-Read-only Git collector.
+Git Read-Only Collector.
+Captures initial and final branch, head SHA, clean/dirty state, round commit count, and diff stats.
 """
 
+import os
+import re
 import subprocess
-import shutil
 from pathlib import Path
-from typing import Dict, Any, Optional
-from .base import BaseCollector
-from ..models import CollectorStatus, GitInfo
+from typing import Dict, Any, Optional, Tuple
+
+from agent_metrics.collectors.base import BaseCollector
+from agent_metrics.models import CollectorStatus, GitInfo
 
 
 class GitCollector(BaseCollector):
-    @property
-    def name(self) -> str:
-        return "git"
+    name = "git"
 
-    def check_availability(self) -> str:
-        if shutil.which("git") is None:
-            return CollectorStatus.NOT_AVAILABLE.value
-        return CollectorStatus.AVAILABLE.value
+    def __init__(self, config: Optional[Dict[str, Any]] = None, worktree: Optional[str] = None):
+        super().__init__()
+        self.config = config or {}
+        self.worktree = worktree or os.getcwd()
 
-    def _run_git_cmd(self, worktree: Path, args: list[str]) -> Optional[str]:
-        if shutil.which("git") is None:
-            return None
+    def run_git(self, args: list) -> Tuple[int, str]:
         try:
             res = subprocess.run(
                 ["git"] + args,
-                cwd=str(worktree),
+                cwd=self.worktree,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -34,66 +33,72 @@ class GitCollector(BaseCollector):
                 errors="replace",
                 timeout=10,
             )
-            if res.returncode == 0:
-                return res.stdout.strip()
-            return None
+            return res.returncode, res.stdout.strip()
         except Exception:
-            return None
+            return -1, ""
 
-    def get_git_snapshot(self, worktree_path: str) -> GitInfo:
-        if not worktree_path:
-            return GitInfo()
+    def get_status(self) -> str:
+        code, out = self.run_git(["rev-parse", "--is-inside-work-tree"])
+        if code == 0 and out == "true":
+            return CollectorStatus.AVAILABLE.value
+        return CollectorStatus.NOT_AVAILABLE.value
 
-        wt = Path(worktree_path)
-        if not wt.exists() or not wt.is_dir():
-            return GitInfo()
+    def collect(self, run_context: Optional[Dict[str, Any]] = None, initial_git_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if self.get_status() != CollectorStatus.AVAILABLE.value:
+            return GitInfo().to_dict()
 
-        branch = self._run_git_cmd(wt, ["branch", "--show-current"])
-        head_sha = self._run_git_cmd(wt, ["rev-parse", "HEAD"])
-        status_out = self._run_git_cmd(wt, ["status", "--porcelain"])
+        init_info = initial_git_info or (run_context.get("git_initial") if run_context else None)
 
-        is_clean = None
-        if status_out is not None:
-            is_clean = (len(status_out.strip()) == 0)
+        code_b, branch = self.run_git(["branch", "--show-current"])
+        code_h, head_sha = self.run_git(["rev-parse", "HEAD"])
+        code_s, status_out = self.run_git(["status", "--porcelain"])
 
-        commit_count_str = self._run_git_cmd(wt, ["rev-list", "--count", "HEAD"])
-        commit_count = None
-        if commit_count_str and commit_count_str.isdigit():
-            commit_count = int(commit_count_str)
+        lines = [l for l in status_out.splitlines() if l.strip()]
+        is_clean = len(lines) == 0
 
-        diff_stat = self._run_git_cmd(wt, ["diff", "--shortstat"])
-        files_changed = None
-        additions = None
-        deletions = None
+        unstaged = sum(1 for l in lines if l.startswith(" ") or (len(l) > 1 and l[1] not in (" ", "?")))
+        staged = sum(1 for l in lines if len(l) > 0 and l[0] not in (" ", "?"))
+        untracked = sum(1 for l in lines if l.startswith("??"))
 
-        if diff_stat:
-            # e.g., "3 files changed, 10 insertions(+), 5 deletions(-)"
-            import re
-            m_files = re.search(r"(\d+)\s+file", diff_stat)
-            m_ins = re.search(r"(\d+)\s+insertion", diff_stat)
-            m_del = re.search(r"(\d+)\s+deletion", diff_stat)
+        # Overall repository commit count
+        _, total_commits_str = self.run_git(["rev-list", "--count", "HEAD"])
+        total_commits = int(total_commits_str) if total_commits_str.isdigit() else 0
 
-            if m_files:
-                files_changed = int(m_files.group(1))
-            if m_ins:
-                additions = int(m_ins.group(1))
-            if m_del:
-                deletions = int(m_del.group(1))
+        initial_sha = init_info.get("initial_head_sha") if init_info else None
+        round_commit_count = None
+        round_changed_files = None
+        round_additions = None
+        round_deletions = None
 
-        return GitInfo(
-            initial_branch=branch,
-            initial_head_sha=head_sha,
-            initial_clean=is_clean,
+        if initial_sha and head_sha and initial_sha != head_sha:
+            code_rc, rc_str = self.run_git(["rev-list", "--count", f"{initial_sha}..{head_sha}"])
+            if code_rc == 0 and rc_str.isdigit():
+                round_commit_count = int(rc_str)
+
+            code_diff, diff_stat = self.run_git(["diff", "--shortstat", f"{initial_sha}..{head_sha}"])
+            if code_diff == 0 and diff_stat:
+                m_files = re.search(r"(\d+)\s+file", diff_stat)
+                m_adds = re.search(r"(\d+)\s+insertion", diff_stat)
+                m_dels = re.search(r"(\d+)\s+deletion", diff_stat)
+
+                round_changed_files = int(m_files.group(1)) if m_files else 0
+                round_additions = int(m_adds.group(1)) if m_adds else 0
+                round_deletions = int(m_dels.group(1)) if m_dels else 0
+
+        git_info = GitInfo(
+            initial_branch=init_info.get("initial_branch") if init_info else branch,
+            initial_head_sha=initial_sha or head_sha,
+            initial_clean=init_info.get("initial_clean") if init_info else is_clean,
             final_branch=branch,
             final_head_sha=head_sha,
             final_clean=is_clean,
-            commit_count=commit_count,
-            files_changed=files_changed,
-            additions=additions,
-            deletions=deletions,
+            commit_count=total_commits,
+            round_commit_count=round_commit_count,
+            round_changed_files=round_changed_files,
+            round_additions=round_additions,
+            round_deletions=round_deletions,
+            unstaged_changes=unstaged,
+            staged_changes=staged,
+            untracked_files=untracked,
         )
-
-    def collect(self, run_context: Dict[str, Any]) -> Dict[str, Any]:
-        wt_path = run_context.get("worktree", "")
-        info = self.get_git_snapshot(wt_path)
-        return info.to_dict()
+        return git_info.to_dict()

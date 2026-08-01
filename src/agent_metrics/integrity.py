@@ -1,49 +1,51 @@
 """
-Data integrity and atomic file writing utilities.
+Integrity module for calculating and verifying SHA-256 payload and file hashes.
 """
 
-import hashlib
 import json
-import os
-from pathlib import Path
-from typing import Any, Union
+import hashlib
+from typing import Dict, Any, Tuple
 
 
-def compute_sha256(content: Union[str, bytes]) -> str:
-    if isinstance(content, str):
-        content = content.encode("utf-8")
-    return hashlib.sha256(content).hexdigest()
+def compute_payload_sha256(summary_dict: Dict[str, Any]) -> str:
+    """
+    Computes SHA-256 hash over canonical JSON of summary payload with integrity cleared.
+    """
+    cleaned = dict(summary_dict)
+    # Remove integrity key for canonical calculation
+    if "integrity" in cleaned:
+        cleaned["integrity"] = {}
+
+    canonical_json = json.dumps(cleaned, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
-def compute_dict_sha256(data: dict) -> str:
-    canonical_json = json.dumps(data, indent=2, sort_keys=True)
-    return compute_sha256(canonical_json)
+def compute_file_sha256(file_bytes: bytes) -> str:
+    """
+    Computes SHA-256 hash over raw file bytes.
+    """
+    return hashlib.sha256(file_bytes).hexdigest()
 
 
-def atomic_write_file(file_path: Union[str, Path], content: str, encoding: str = "utf-8") -> None:
-    target = Path(file_path).resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
+def verify_summary_integrity(summary_dict: Dict[str, Any], raw_bytes: bytes, expected_file_sha: str) -> Tuple[bool, str]:
+    """
+    Verifies both payload_sha256 and file_sha256.
+    Returns (is_valid, error_message).
+    """
+    # 1. Verify file_sha256
+    actual_file_sha = compute_file_sha256(raw_bytes)
+    if expected_file_sha and actual_file_sha != expected_file_sha.strip():
+        return False, f"File SHA-256 mismatch: expected {expected_file_sha}, got {actual_file_sha}"
 
-    temp_file = target.parent / f".{target.name}.tmp_{os.getpid()}"
-    try:
-        with open(temp_file, "w", encoding=encoding) as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temp_file, target)
-    except Exception:
-        if temp_file.exists():
-            try:
-                temp_file.unlink()
-            except OSError:
-                pass
-        raise
+    # 2. Verify payload_sha256
+    integrity_obj = summary_dict.get("integrity", {})
+    expected_payload_sha = integrity_obj.get("payload_sha256")
+    actual_payload_sha = compute_payload_sha256(summary_dict)
 
+    if not expected_payload_sha:
+        return False, "Missing payload_sha256 in summary integrity"
 
-def verify_file_sha256(file_path: Union[str, Path], expected_sha256: str) -> bool:
-    target = Path(file_path)
-    if not target.is_file():
-        return False
-    content = target.read_bytes()
-    actual = hashlib.sha256(content).hexdigest()
-    return actual.lower() == expected_sha256.lower()
+    if expected_payload_sha != actual_payload_sha:
+        return False, f"Payload SHA-256 mismatch: expected {expected_payload_sha}, got {actual_payload_sha}"
+
+    return True, ""

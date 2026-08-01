@@ -1,12 +1,12 @@
 """
-Data models and enumeration constants for agent metrics collector.
+Data models, enums, and exit codes for agent metrics collector.
 """
 
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Optional, List, Dict, Any
 
-# Exit Codes
+# Standard Exit Codes
 EXIT_OK = 0
 EXIT_PARTIAL = 2
 EXIT_INVALID_INPUT = 4
@@ -37,6 +37,7 @@ class CorrelationConfidence(str, Enum):
     TIME_WINDOW_MATCH = "TIME_WINDOW_MATCH"
     AMBIGUOUS = "AMBIGUOUS"
     NOT_AVAILABLE = "NOT_AVAILABLE"
+    QUOTA_ONLY = "QUOTA_ONLY"
 
 
 class CollectorStatus(str, Enum):
@@ -68,7 +69,7 @@ class TimingInfo:
     started_at: str
     finished_at: Optional[str] = None
     wall_clock_seconds: Optional[float] = None
-    agent_active_seconds: Optional[float] = None  # null unless explicit telemetry
+    agent_active_seconds: Optional[float] = None  # Always null unless explicit telemetry
     ci_wait_seconds: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -83,7 +84,7 @@ class UsageInfo:
     cache_read_tokens: Optional[int] = None
     cache_write_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
-    collection_status: str = "NOT_AVAILABLE"  # NOT_AVAILABLE, PARTIAL, COMPLETE
+    collection_status: str = "NOT_AVAILABLE"
     source: Optional[str] = None
     correlation_confidence: str = CorrelationConfidence.NOT_AVAILABLE.value
 
@@ -98,7 +99,7 @@ class PricingInfo:
     currency: str = "USD"
     api_equivalent_cost_usd: Optional[float] = None
     actual_billed_cost_usd: Optional[float] = None  # Always null unless explicit real bill provided
-    status: str = "PRICE_NOT_AVAILABLE"  # PRICE_NOT_AVAILABLE, UNVERIFIED, CALCULATED
+    status: str = "PRICE_NOT_AVAILABLE"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -129,6 +130,13 @@ class GitInfo:
     files_changed: Optional[int] = None
     additions: Optional[int] = None
     deletions: Optional[int] = None
+    round_commit_count: Optional[int] = None
+    round_changed_files: Optional[int] = None
+    round_additions: Optional[int] = None
+    round_deletions: Optional[int] = None
+    unstaged_changes: Optional[int] = None
+    staged_changes: Optional[int] = None
+    untracked_files: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -150,8 +158,10 @@ class GithubInfo:
     ci_run_id: Optional[str] = None
     ci_started_at: Optional[str] = None
     ci_completed_at: Optional[str] = None
-    ci_duration_seconds: Optional[float] = None
+    workflow_duration_seconds: Optional[float] = None
+    ci_wait_seconds: Optional[float] = None
     ci_result: Optional[str] = None
+    status: str = "NOT_AVAILABLE"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -159,7 +169,7 @@ class GithubInfo:
 
 @dataclass
 class IntegrityInfo:
-    summary_sha256: Optional[str] = None
+    payload_sha256: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

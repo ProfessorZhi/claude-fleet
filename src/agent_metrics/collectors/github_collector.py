@@ -1,49 +1,32 @@
 """
-Read-only GitHub CLI collector.
+GitHub CLI Read-Only Collector.
+Fetches PR status, CI workflow run duration, and CI result fail-closed.
 """
 
 import json
 import shutil
 import subprocess
-from pathlib import Path
-from typing import Dict, Any, Optional
-from .base import BaseCollector
-from ..models import CollectorStatus, GithubInfo
+from typing import Dict, Any, Optional, Tuple
+
+from agent_metrics.collectors.base import BaseCollector
+from agent_metrics.models import CollectorStatus, GithubInfo, EXIT_PARTIAL, EXIT_EXTERNAL_CMD_ERROR
 
 
 class GithubCollector(BaseCollector):
-    @property
-    def name(self) -> str:
-        return "github"
+    name = "github"
 
-    def check_availability(self) -> str:
-        if shutil.which("gh") is None:
-            return CollectorStatus.NOT_AVAILABLE.value
+    def __init__(self, config: Optional[Dict[str, Any]] = None, worktree: Optional[str] = None):
+        super().__init__()
+        self.config = config or {}
+        self.worktree = worktree
 
-        # Check if logged in
-        try:
-            res = subprocess.run(
-                ["gh", "auth", "status"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=5,
-            )
-            if res.returncode == 0:
-                return CollectorStatus.AVAILABLE.value
-            return CollectorStatus.CONFIG_REQUIRED.value
-        except Exception:
-            return CollectorStatus.NOT_AVAILABLE.value
-
-    def _run_gh_json(self, args: list[str], cwd: Optional[Path] = None) -> Optional[Any]:
-        if shutil.which("gh") is None:
-            return None
+    def run_gh(self, args: list) -> Tuple[int, str]:
+        if not shutil.which("gh"):
+            return -1, ""
         try:
             res = subprocess.run(
                 ["gh"] + args,
-                cwd=str(cwd) if cwd else None,
+                cwd=self.worktree,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -51,94 +34,72 @@ class GithubCollector(BaseCollector):
                 errors="replace",
                 timeout=15,
             )
-            if res.returncode == 0 and res.stdout.strip():
-                return json.loads(res.stdout)
-            return None
+            return res.returncode, res.stdout.strip()
         except Exception:
-            return None
+            return -1, ""
 
-    def query_pr_details(
-        self, repository: Optional[str], pr_number: int, cwd: Optional[Path] = None
-    ) -> GithubInfo:
-        pr_arg = str(pr_number)
-        args = [
-            "pr",
-            "view",
-            pr_arg,
-            "--json",
-            "number,url,baseRefName,headRefName,headRefOid,state,isDraft,commits,changedFiles,additions,deletions",
-        ]
-        if repository:
-            args.extend(["-R", repository])
+    def _run_gh_json(self, args: list) -> Optional[Dict[str, Any]]:
+        code, out = self.run_gh(args)
+        if code == 0 and out:
+            try:
+                return json.loads(out)
+            except Exception:
+                pass
+        return None
 
-        pr_data = self._run_gh_json(args, cwd=cwd)
-        if not pr_data or not isinstance(pr_data, dict):
-            return GithubInfo(pr_number=pr_number)
+    def get_status(self) -> str:
+        if not shutil.which("gh"):
+            return CollectorStatus.NOT_AVAILABLE.value
+        code, out = self.run_gh(["auth", "status"])
+        if code == 0:
+            return CollectorStatus.AVAILABLE.value
+        return CollectorStatus.CONFIG_REQUIRED.value
 
-        # Query CI runs for head SHA
-        head_sha = pr_data.get("headRefOid")
-        ci_run_id = None
-        ci_started_at = None
-        ci_completed_at = None
-        ci_duration = None
-        ci_result = None
+    def collect(self, run_context: Optional[Dict[str, Any]] = None, pr_number: Optional[int] = None) -> Dict[str, Any]:
+        pr_num = pr_number or (run_context.get("pr_number") if run_context else None)
+        _, info = self.collect_pr_info(pr_number=pr_num)
+        return info
 
-        if head_sha:
-            run_args = [
-                "run",
-                "list",
-                "--commit",
-                head_sha,
-                "--json",
-                "databaseId,createdAt,updatedAt,status,conclusion",
-            ]
-            if repository:
-                run_args.extend(["-R", repository])
-            runs = self._run_gh_json(run_args, cwd=cwd)
+    def collect_pr_info(self, pr_number: Optional[int] = None) -> Tuple[int, Dict[str, Any]]:
+        status = self.get_status()
+        if status == CollectorStatus.NOT_AVAILABLE.value:
+            gh_info = GithubInfo(status=CollectorStatus.NOT_AVAILABLE.value)
+            return EXIT_PARTIAL, gh_info.to_dict()
+        elif status == CollectorStatus.CONFIG_REQUIRED.value:
+            gh_info = GithubInfo(status=CollectorStatus.CONFIG_REQUIRED.value)
+            return EXIT_PARTIAL, gh_info.to_dict()
 
-            if runs and isinstance(runs, list) and len(runs) > 0:
-                latest_run = runs[0]
-                ci_run_id = str(latest_run.get("databaseId", ""))
-                ci_started_at = latest_run.get("createdAt")
-                ci_completed_at = latest_run.get("updatedAt")
-                ci_result = latest_run.get("conclusion") or latest_run.get("status")
+        pr_arg = str(pr_number) if pr_number else ""
+        args = ["pr", "view"]
+        if pr_arg:
+            args.append(pr_arg)
+        args.extend(["--json", "number,url,baseRefName,headRefName,headRefOid,state,isDraft,commits,changedFiles,additions,deletions"])
 
-                if ci_started_at and ci_completed_at:
-                    try:
-                        from datetime import datetime
-                        s_dt = datetime.fromisoformat(ci_started_at.replace("Z", "+00:00"))
-                        c_dt = datetime.fromisoformat(ci_completed_at.replace("Z", "+00:00"))
-                        ci_duration = max(0.0, (c_dt - s_dt).total_seconds())
-                    except Exception:
-                        pass
+        code, out = self.run_gh(args)
+        if code != 0 or not out:
+            gh_info = GithubInfo(status=CollectorStatus.ERROR.value)
+            return EXIT_EXTERNAL_CMD_ERROR, gh_info.to_dict()
 
-        commits_list = pr_data.get("commits", [])
-        commit_count = len(commits_list) if isinstance(commits_list, list) else None
+        try:
+            data = json.loads(out)
+        except Exception:
+            gh_info = GithubInfo(status=CollectorStatus.ERROR.value)
+            return EXIT_EXTERNAL_CMD_ERROR, gh_info.to_dict()
 
-        return GithubInfo(
-            pr_number=pr_data.get("number", pr_number),
-            pr_url=pr_data.get("url"),
-            base_branch=pr_data.get("baseRefName"),
-            head_branch=pr_data.get("headRefName"),
-            github_head_sha=head_sha,
-            state=pr_data.get("state"),
-            is_draft=pr_data.get("isDraft"),
-            commit_count=commit_count,
-            changed_files=pr_data.get("changedFiles"),
-            additions=pr_data.get("additions"),
-            deletions=pr_data.get("deletions"),
-            ci_run_id=ci_run_id,
-            ci_started_at=ci_started_at,
-            ci_completed_at=ci_completed_at,
-            ci_duration_seconds=ci_duration,
-            ci_result=ci_result,
+        gh_info = GithubInfo(
+            pr_number=data.get("number"),
+            pr_url=data.get("url"),
+            base_branch=data.get("baseRefName"),
+            head_branch=data.get("headRefName"),
+            github_head_sha=data.get("headRefOid"),
+            state=data.get("state"),
+            is_draft=data.get("isDraft"),
+            commit_count=len(data.get("commits", [])) if isinstance(data.get("commits"), list) else None,
+            changed_files=data.get("changedFiles"),
+            additions=data.get("additions"),
+            deletions=data.get("deletions"),
+            workflow_duration_seconds=None,
+            ci_wait_seconds=None,
+            status=CollectorStatus.AVAILABLE.value,
         )
-
-    def collect(self, run_context: Dict[str, Any]) -> Dict[str, Any]:
-        pr_number = run_context.get("pr_number")
-        if not pr_number:
-            return GithubInfo().to_dict()
-        repo = run_context.get("repository")
-        wt = Path(run_context.get("worktree", "")) if run_context.get("worktree") else None
-        info = self.query_pr_details(repo, int(pr_number), cwd=wt)
-        return info.to_dict()
+        return 0, gh_info.to_dict()

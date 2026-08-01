@@ -1,193 +1,162 @@
 """
-Read-only Claude Code session metadata & usage collector.
+Claude Code Read-Only Collector.
+Discovers local Claude Code configuration directories (.claude, .claude-deepseek, .claude-minimax).
+Stream-reads JSONL transcripts line-by-line without loading full content into memory.
+Extracts usage, model, and timing without reading prompts or message text.
 """
 
 import json
 import os
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
-from .base import BaseCollector
-from ..models import CollectorStatus, UsageInfo, ModelConfidence
-from ..correlation import SessionCorrelator
+from typing import Dict, Any, List, Optional, Set, Tuple
+
+from agent_metrics.collectors.base import BaseCollector
+from agent_metrics.models import CollectorStatus, ModelConfidence
 
 
 class ClaudeCodeCollector(BaseCollector):
-    def __init__(self, custom_config_dirs: Optional[List[Path]] = None):
-        self.custom_config_dirs = custom_config_dirs
+    name = "claude_code"
 
-    @property
-    def name(self) -> str:
-        return "claude_code"
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        super().__init__()
+        self.config = config or {}
 
-    def get_known_config_dirs(self) -> List[Path]:
-        if self.custom_config_dirs is not None:
-            return self.custom_config_dirs
-
+    def discover_config_dirs(self) -> List[Tuple[str, Path]]:
         dirs = []
-        # Check CLAUDE_CONFIG_DIR env
-        env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
-        if env_dir:
-            dirs.append(Path(env_dir))
+        home = Path.home()
 
-        user_home = Path.home()
-        dirs.append(user_home / ".claude")
-        dirs.append(user_home / ".claude-deepseek")
-        dirs.append(user_home / ".claude-minimax")
+        custom = os.environ.get("CLAUDE_CONFIG_DIR")
+        if custom:
+            dirs.append(("custom", Path(custom)))
+
+        default_claude = home / ".claude"
+        if default_claude.exists():
+            dirs.append(("default", default_claude))
+
+        deepseek_claude = home / ".claude-deepseek"
+        if deepseek_claude.exists():
+            dirs.append(("deepseek", deepseek_claude))
+
+        minimax_claude = home / ".claude-minimax"
+        if minimax_claude.exists():
+            dirs.append(("minimax", minimax_claude))
 
         return dirs
 
-    def check_availability(self) -> str:
-        config_dirs = self.get_known_config_dirs()
-        existing = [d for d in config_dirs if d.exists() and d.is_dir()]
-        if existing:
+    def get_status(self) -> str:
+        dirs = self.discover_config_dirs()
+        if dirs:
             return CollectorStatus.AVAILABLE.value
         return CollectorStatus.NOT_AVAILABLE.value
 
-    def scan_sessions(self) -> List[Dict[str, Any]]:
-        sessions = []
-        config_dirs = self.get_known_config_dirs()
+    def parse_transcript_line_by_line(self, jsonl_file: Path) -> Optional[Dict[str, Any]]:
+        session_id = None
+        message_usages: Dict[str, Dict[str, Any]] = {}
+        observed_model = None
+        start_time = None
+        end_time = None
+        turn_count = 0
 
-        for c_dir in config_dirs:
-            if not c_dir.exists() or not c_dir.is_dir():
-                continue
+        try:
+            with open(jsonl_file, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or not line.startswith("{"):
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except Exception:
+                        continue
 
-            projects_dir = c_dir / "projects"
-            sessions_dir = c_dir / "sessions"
-            history_dir = c_dir / "history"
+                    if not session_id and data.get("sessionId"):
+                        session_id = data.get("sessionId")
 
-            search_paths = []
-            if projects_dir.exists():
-                search_paths.extend(projects_dir.rglob("*.json"))
-            if sessions_dir.exists():
-                search_paths.extend(sessions_dir.rglob("*.json"))
-            if history_dir.exists():
-                search_paths.extend(history_dir.rglob("*.json"))
+                    ts = data.get("timestamp") or data.get("created_at")
+                    if ts:
+                        if not start_time or ts < start_time:
+                            start_time = ts
+                        if not end_time or ts > end_time:
+                            end_time = ts
 
-            for f_path in search_paths:
-                if not f_path.is_file():
-                    continue
-                try:
-                    with open(f_path, "r", encoding="utf-8", errors="ignore") as f:
-                        data = json.load(f)
+                    evt_type = data.get("type")
+                    if evt_type == "assistant":
+                        turn_count += 1
+                        msg = data.get("message")
+                        if isinstance(msg, dict):
+                            msg_id = msg.get("id")
+                            model = msg.get("model")
+                            if model:
+                                observed_model = model
 
-                    if isinstance(data, dict) and ("session_id" in data or "usage" in data or "metadata" in data or "stats" in data):
-                        sess = self._extract_session_summary(data, f_path)
-                        if sess:
-                            sessions.append(sess)
-                except Exception:
-                    continue
+                            usage = msg.get("usage")
+                            if isinstance(usage, dict) and msg_id:
+                                message_usages[msg_id] = usage
+                    elif evt_type == "user":
+                        turn_count += 1
+        except Exception:
+            return None
 
-        return sessions
+        if not message_usages and not session_id:
+            return None
 
-    def _extract_session_summary(self, data: Dict[str, Any], file_path: Path) -> Optional[Dict[str, Any]]:
-        # Structured extraction without message bodies
-        session_id = data.get("session_id") or data.get("id") or file_path.stem
-        worktree = data.get("worktree") or data.get("cwd") or data.get("project_path")
-        work_package = data.get("work_package") or (data.get("metadata", {}).get("work_package") if isinstance(data.get("metadata"), dict) else None)
+        total_input = 0
+        total_output = 0
+        total_cache_read = 0
+        total_cache_write = 0
+        total_reasoning = 0
 
-        started_at = data.get("started_at") or data.get("created_at") or data.get("start_time")
-        finished_at = data.get("finished_at") or data.get("updated_at") or data.get("end_time")
+        for usage in message_usages.values():
+            total_input += usage.get("input_tokens", 0) or 0
+            total_output += usage.get("output_tokens", 0) or 0
+            total_cache_read += usage.get("cache_read_input_tokens", 0) or usage.get("cache_read_tokens", 0) or 0
+            total_cache_write += usage.get("cache_creation_input_tokens", 0) or usage.get("cache_write_tokens", 0) or 0
+            total_reasoning += usage.get("reasoning_tokens", 0) or 0
 
-        usage = data.get("usage") or data.get("stats") or {}
-        if not isinstance(usage, dict):
-            usage = {}
-
-        input_tokens = usage.get("input_tokens") or usage.get("inputTokens")
-        output_tokens = usage.get("output_tokens") or usage.get("outputTokens")
-        reasoning_tokens = usage.get("reasoning_tokens") or usage.get("reasoningTokens")
-        cache_read = usage.get("cache_read_tokens") or usage.get("cacheReadTokens") or usage.get("cache_read_input_tokens")
-        cache_write = usage.get("cache_write_tokens") or usage.get("cacheWriteTokens") or usage.get("cache_creation_input_tokens")
-        total_tokens = usage.get("total_tokens") or usage.get("totalTokens")
-
-        if total_tokens is None and (input_tokens is not None or output_tokens is not None):
-            total_tokens = (input_tokens or 0) + (output_tokens or 0)
-
-        duration_ms = data.get("duration_ms") or usage.get("duration_ms")
-        api_duration_ms = data.get("api_duration_ms") or usage.get("api_duration_ms")
-        turn_count = data.get("turn_count") or usage.get("turn_count")
-
-        models_info = data.get("models") or {}
-        if not isinstance(models_info, dict):
-            models_info = {}
-
-        configured_model = data.get("configured_model") or models_info.get("configured")
-        requested_model = data.get("requested_model") or models_info.get("requested")
-        observed_model = data.get("observed_model") or models_info.get("observed")
-
-        permission_mode = data.get("permission_mode") or data.get("permissionMode")
+        total_tokens = total_input + total_output
 
         return {
-            "session_id": str(session_id),
-            "worktree": str(worktree) if worktree else None,
-            "work_package": str(work_package) if work_package else None,
-            "started_at": str(started_at) if started_at else None,
-            "finished_at": str(finished_at) if finished_at else None,
-            "input_tokens": int(input_tokens) if input_tokens is not None else None,
-            "output_tokens": int(output_tokens) if output_tokens is not None else None,
-            "reasoning_tokens": int(reasoning_tokens) if reasoning_tokens is not None else None,
-            "cache_read_tokens": int(cache_read) if cache_read is not None else None,
-            "cache_write_tokens": int(cache_write) if cache_write is not None else None,
-            "total_tokens": int(total_tokens) if total_tokens is not None else None,
-            "duration_ms": duration_ms,
-            "api_duration_ms": api_duration_ms,
-            "turn_count": turn_count,
-            "configured_model": configured_model,
-            "requested_model": requested_model,
+            "session_id": session_id or jsonl_file.stem,
             "observed_model": observed_model,
-            "permission_mode": permission_mode,
-            "file_path": str(file_path),
+            "input_tokens": total_input,
+            "output_tokens": total_output,
+            "cache_read_tokens": total_cache_read,
+            "cache_write_tokens": total_cache_write,
+            "reasoning_tokens": total_reasoning,
+            "total_tokens": total_tokens,
+            "start_time": start_time,
+            "end_time": end_time,
+            "turn_count": turn_count,
+            "file_path": str(jsonl_file),
         }
 
-    def collect(self, run_context: Dict[str, Any]) -> Dict[str, Any]:
-        target_session_id = run_context.get("session_id")
-        worktree = run_context.get("worktree")
-        work_package = run_context.get("work_package")
-        started_at = run_context.get("started_at")
-        finished_at = run_context.get("finished_at")
-
-        sessions = self.scan_sessions()
-        matched, confidence = SessionCorrelator.correlate_sessions(
-            target_session_id=target_session_id,
-            target_worktree=worktree,
-            target_work_package=work_package,
-            started_at_str=started_at or "",
-            finished_at_str=finished_at,
-            available_sessions=sessions,
-        )
-
-        if not matched:
+    def collect(self, run_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        config_dirs = self.discover_config_dirs()
+        if not config_dirs:
             return {
-                "usage": UsageInfo(
-                    collection_status="NOT_AVAILABLE",
-                    correlation_confidence=confidence,
-                    source="claude_code",
-                ).to_dict(),
-                "agent_metadata": {},
+                "status": CollectorStatus.NOT_AVAILABLE.value,
+                "config_dirs": [],
+                "sessions": [],
             }
 
-        usage_info = UsageInfo(
-            input_tokens=matched.get("input_tokens"),
-            output_tokens=matched.get("output_tokens"),
-            reasoning_tokens=matched.get("reasoning_tokens"),
-            cache_read_tokens=matched.get("cache_read_tokens"),
-            cache_write_tokens=matched.get("cache_write_tokens"),
-            total_tokens=matched.get("total_tokens"),
-            collection_status="COMPLETE" if matched.get("total_tokens") is not None else "PARTIAL",
-            source="claude_code_session",
-            correlation_confidence=confidence,
-        )
+        sessions = []
+        for name, dir_path in config_dirs:
+            projects_dir = dir_path / "projects"
+            if projects_dir.exists():
+                for jsonl_file in projects_dir.rglob("*.jsonl"):
+                    res = self.parse_transcript_line_by_line(jsonl_file)
+                    if res:
+                        res["config_dir_name"] = name
+                        sessions.append(res)
 
-        agent_metadata = {
-            "session_id": matched.get("session_id"),
-            "configured_model": matched.get("configured_model"),
-            "requested_model": matched.get("requested_model"),
-            "observed_model": matched.get("observed_model"),
-            "permission_mode": matched.get("permission_mode"),
-            "duration_ms": matched.get("duration_ms"),
-            "turn_count": matched.get("turn_count"),
-        }
+        if not sessions:
+            return {
+                "status": CollectorStatus.NOT_AVAILABLE.value,
+                "config_dirs": [str(d[1]) for d in config_dirs],
+                "sessions": [],
+            }
 
         return {
-            "usage": usage_info.to_dict(),
-            "agent_metadata": agent_metadata,
+            "status": CollectorStatus.AVAILABLE.value,
+            "config_dirs": [str(d[1]) for d in config_dirs],
+            "sessions": sessions,
         }
