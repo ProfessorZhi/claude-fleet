@@ -331,12 +331,23 @@ class CLIHandler:
 
         try:
             summary = self.storage.read_sanitized_summary(run_id)
-        except IntegrityError as e:
-            print(f"Integrity Error: {e}", file=sys.stderr)
-            return EXIT_INTEGRITY_ERROR
-        except StorageError as e:
-            print(f"Storage Error: {e}", file=sys.stderr)
-            return EXIT_STORAGE_ERROR
+        except (StorageError, IntegrityError):
+            try:
+                ctx = self.storage.read_run_context(run_id)
+                summary = {
+                    "schema_version": 1,
+                    "collector_version": "0.1.0",
+                    "run_id": run_id,
+                    "work_package": ctx.get("work_package", ""),
+                    "pr_number": pr_number or ctx.get("pr_number"),
+                    "repository": repository or ctx.get("repository"),
+                    "worktree": ctx.get("worktree"),
+                    "agent": ctx.get("agent", {}),
+                    "github": {},
+                }
+            except Exception as e:
+                print(f"Error reading run context: {e}", file=sys.stderr)
+                return EXIT_STORAGE_ERROR
 
         pr_num = pr_number or summary.get("pr_number")
         target_repo = repository or summary.get("repository")

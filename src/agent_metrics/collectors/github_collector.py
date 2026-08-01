@@ -25,8 +25,12 @@ class GithubCollector(BaseCollector):
         if not shutil.which("gh"):
             return -1, ""
         try:
+            cmd = ["gh"] + args
+            if self.repository and "--repo" not in args:
+                cmd.extend(["--repo", self.repository])
+
             res = subprocess.run(
-                ["gh"] + args,
+                cmd,
                 cwd=self.worktree,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -58,6 +62,8 @@ class GithubCollector(BaseCollector):
 
     def query_pr_details(self, repo: Optional[str] = None, pr_number: Optional[int] = None) -> GithubInfo:
         target_repo = repo or self.repository
+        if target_repo:
+            self.repository = target_repo
         _, info = self.collect_pr_info(pr_number=pr_number)
         if pr_number and not info.get("pr_number"):
             info["pr_number"] = pr_number
@@ -69,30 +75,44 @@ class GithubCollector(BaseCollector):
         return info
 
     def collect_pr_info(self, pr_number: Optional[int] = None) -> Tuple[int, Dict[str, Any]]:
-        status = self.get_status()
-        if status == CollectorStatus.NOT_AVAILABLE.value:
-            gh_info = GithubInfo(status=CollectorStatus.NOT_AVAILABLE.value)
-            return EXIT_PARTIAL, gh_info.to_dict()
-        elif status == CollectorStatus.CONFIG_REQUIRED.value:
-            gh_info = GithubInfo(status=CollectorStatus.CONFIG_REQUIRED.value)
-            return EXIT_PARTIAL, gh_info.to_dict()
-
         pr_arg = str(pr_number) if pr_number else ""
         args = ["pr", "view"]
         if pr_arg:
             args.append(pr_arg)
         args.extend(["--json", "number,url,baseRefName,headRefName,headRefOid,state,isDraft,commits,changedFiles,additions,deletions"])
 
-        code, out = self.run_gh(args)
-        if code != 0 or not out:
+        data = self._run_gh_json(args)
+        if not data:
+            status = self.get_status()
+            if status == CollectorStatus.NOT_AVAILABLE.value:
+                gh_info = GithubInfo(status=CollectorStatus.NOT_AVAILABLE.value)
+                return EXIT_PARTIAL, gh_info.to_dict()
+            elif status == CollectorStatus.CONFIG_REQUIRED.value:
+                gh_info = GithubInfo(status=CollectorStatus.CONFIG_REQUIRED.value)
+                return EXIT_PARTIAL, gh_info.to_dict()
             gh_info = GithubInfo(status=CollectorStatus.ERROR.value)
             return EXIT_EXTERNAL_CMD_ERROR, gh_info.to_dict()
 
-        try:
-            data = json.loads(out)
-        except Exception:
-            gh_info = GithubInfo(status=CollectorStatus.ERROR.value)
-            return EXIT_EXTERNAL_CMD_ERROR, gh_info.to_dict()
+        # Try to fetch CI runs
+        runs = self._run_gh_json(["run", "list", "--limit", "1", "--json", "databaseId,createdAt,updatedAt,status,conclusion"])
+        ci_run_id = None
+        ci_result = None
+        ci_duration = None
+
+        if isinstance(runs, list) and len(runs) > 0:
+            r = runs[0]
+            ci_run_id = str(r.get("databaseId")) if r.get("databaseId") else None
+            ci_result = r.get("conclusion") or r.get("status")
+            c_at = r.get("createdAt")
+            u_at = r.get("updatedAt")
+            if c_at and u_at:
+                try:
+                    import datetime
+                    t1 = datetime.datetime.fromisoformat(c_at.replace("Z", "+00:00"))
+                    t2 = datetime.datetime.fromisoformat(u_at.replace("Z", "+00:00"))
+                    ci_duration = max(0.0, (t2 - t1).total_seconds())
+                except Exception:
+                    pass
 
         gh_info = GithubInfo(
             pr_number=data.get("number"),
@@ -106,8 +126,11 @@ class GithubCollector(BaseCollector):
             changed_files=data.get("changedFiles"),
             additions=data.get("additions"),
             deletions=data.get("deletions"),
-            workflow_duration_seconds=None,
-            ci_wait_seconds=None,
+            ci_run_id=ci_run_id,
+            ci_result=ci_result,
+            ci_duration_seconds=ci_duration,
+            workflow_duration_seconds=ci_duration,
+            ci_wait_seconds=ci_duration,
             status=CollectorStatus.AVAILABLE.value,
         )
         return 0, gh_info.to_dict()
