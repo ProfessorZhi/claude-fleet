@@ -61,9 +61,18 @@ class TestCodexRunner(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.powershell = _which_powershell()
         if not RUNNER.exists():
             raise unittest.SkipTest(f"Runner not present at {RUNNER}")
+        try:
+            cls.powershell = _which_powershell()
+        except RuntimeError:
+            raise unittest.SkipTest("PowerShell is not installed on this host")
+
+    def setUp(self):
+        # Per-test skip if PowerShell is unavailable (e.g. on a Linux CI image
+        # without PowerShell). The runner itself is a Windows-only artifact.
+        if not getattr(self, "powershell", None):
+            self.skipTest("PowerShell is not installed on this host")
 
     def tearDown(self):
         # Clean up .local/runs directories created during this test, leaving
