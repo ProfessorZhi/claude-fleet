@@ -151,6 +151,10 @@ AI Coding Agents often self-report execution metrics (model name, active duratio
 - **Claude Code Transcript Format**: Local session formats may change across CLI updates.
 - **Quota Delta**: Quota percentage drop cannot be converted into token numbers.
 - **API Equivalent Cost**: Represents standard provider list price (`api_equivalent_cost_usd`), not actual billed cost (`actual_billed_cost_usd = null`).
+- **Cockpit Measurement**: Blocked / NOT_AVAILABLE.
+- **Antigravity Measurement**: Blocked / NOT_AVAILABLE.
+- **Pricing**: Unverified.
+- **Production Readiness**: Not Production Ready.
 
 ### Updating Model Pricing Snapshot
 
@@ -158,3 +162,26 @@ Official provider pricing is maintained in [`config/model-pricing.json`](file://
 1. Verify prices from official provider pricing pages (e.g. `https://www.anthropic.com/pricing`, `https://platform.deepseek.com/pricing`).
 2. Update rates in `config/model-pricing.json`.
 3. Set `"verification_status": "VERIFIED"`, `"retrieved_at"`, and `"source_url"`.
+
+---
+
+## 9. Exit Codes
+
+All CLI entrypoints (`python -m agent_metrics`, installed `agent-metrics` console script, and `agent-metrics.ps1`) propagate identical, deterministic process exit codes:
+
+| Code | Symbol | Meaning |
+| :---: | :--- | :--- |
+| `0` | `EXIT_OK` | Complete Success |
+| `2` | `EXIT_PARTIAL` | Partial Success / Optional Dependency Unavailable (e.g., Doctor with optional collectors NOT_AVAILABLE) |
+| `4` | `EXIT_INVALID_INPUT` | Invalid Input Parameters or Malformed Run ID |
+| `5` | `EXIT_STORAGE_ERROR` | Storage IO / File Not Found Failure |
+| `6` | `EXIT_INTEGRITY_ERROR` | SHA-256 Payload Hash Mismatch or Corrupted Sidecar |
+| `7` | `EXIT_EXTERNAL_CMD_ERROR` | External Command (e.g. `gh` CLI) Failure |
+
+---
+
+## 10. Claude Baseline Privacy Policy
+
+The Claude Session Baseline collector minimal privacy policy guarantees:
+- **Preserved Metadata**: Logical Config Name (`default`, `deepseek`, `minimax`, `custom`), Session ID (UUID), File Size, and Last Modified Timestamp.
+- **NEVER Saved in Baseline**: Claude Config directory paths, Project directory paths, JSONL file paths, Worktree paths, or Home username.

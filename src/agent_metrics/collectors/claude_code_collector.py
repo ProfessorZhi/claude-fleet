@@ -7,11 +7,34 @@ Extracts usage, model, and timing without reading prompts or message text.
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Set, Tuple
 
 from agent_metrics.collectors.base import BaseCollector
 from agent_metrics.models import CollectorStatus, CorrelationConfidence
+
+
+RE_SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def is_valid_session_id(session_id: str) -> bool:
+    if not isinstance(session_id, str):
+        return False
+    if session_id in (".", ".."):
+        return False
+    if not RE_SESSION_ID.match(session_id):
+        return False
+    if ":" in session_id or "\\" in session_id or "/" in session_id or " " in session_id:
+        return False
+    if "--Users-" in session_id or "-home-" in session_id:
+        return False
+    if len(session_id) >= 3 and session_id[0].isalpha() and session_id[1:3] == "--":
+        return False
+    user = os.environ.get("USERNAME") or os.environ.get("USER")
+    if user and len(user) > 2 and user.lower() in session_id.lower():
+        return False
+    return True
 
 
 class ClaudeCodeCollector(BaseCollector):
@@ -22,26 +45,25 @@ class ClaudeCodeCollector(BaseCollector):
         self.config = config or {}
 
     def discover_config_dirs(self) -> List[Tuple[str, Path]]:
-        dirs = []
         home = Path.home()
+        config_dirs = []
+        mapping = {
+            "default": home / ".claude",
+            "deepseek": home / ".claude-deepseek",
+            "minimax": home / ".claude-minimax",
+        }
 
-        custom = os.environ.get("CLAUDE_CONFIG_DIR")
-        if custom:
-            dirs.append(("custom", Path(custom)))
+        custom_env = os.environ.get("CLAUDE_CONFIG_DIR")
+        if custom_env:
+            config_dirs.append(("custom", Path(custom_env)))
+        elif self.config.get("claude_config_dir"):
+            config_dirs.append(("custom", Path(self.config["claude_config_dir"])))
 
-        default_claude = home / ".claude"
-        if default_claude.exists():
-            dirs.append(("default", default_claude))
+        for name, dir_path in mapping.items():
+            if dir_path.exists():
+                config_dirs.append((name, dir_path))
 
-        deepseek_claude = home / ".claude-deepseek"
-        if deepseek_claude.exists():
-            dirs.append(("deepseek", deepseek_claude))
-
-        minimax_claude = home / ".claude-minimax"
-        if minimax_claude.exists():
-            dirs.append(("minimax", minimax_claude))
-
-        return dirs
+        return config_dirs
 
     def get_status(self) -> str:
         dirs = self.discover_config_dirs()
@@ -57,14 +79,15 @@ class ClaudeCodeCollector(BaseCollector):
             if projects_dir.exists():
                 for jsonl_file in projects_dir.rglob("*.jsonl"):
                     try:
+                        session_id = jsonl_file.stem
+                        if not is_valid_session_id(session_id):
+                            continue
                         stat = jsonl_file.stat()
-                        rel_path = str(jsonl_file.relative_to(dir_path))
                         baseline.append({
                             "config_dir_name": name,
-                            "relative_path": rel_path,
+                            "session_id": session_id,
                             "file_size": stat.st_size,
                             "last_modified": stat.st_mtime,
-                            "file_path": str(jsonl_file),
                         })
                     except Exception:
                         pass

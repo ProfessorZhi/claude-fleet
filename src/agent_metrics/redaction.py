@@ -123,20 +123,47 @@ def get_home_username() -> str:
     return user if user else ""
 
 
+def get_home_candidates() -> List[str]:
+    candidates = []
+    try:
+        h = str(Path.home())
+        if h:
+            candidates.append(h)
+    except Exception:
+        pass
+    for env_var in ("USERPROFILE", "HOME"):
+        val = os.environ.get(env_var)
+        if val:
+            candidates.append(val)
+
+    unique = []
+    seen = set()
+    for c in candidates:
+        if not c:
+            continue
+        c_clean = c.rstrip("/\\")
+        if c_clean and c_clean.lower() not in seen:
+            seen.add(c_clean.lower())
+            unique.append(c_clean)
+    return unique
+
+
 def redact_home_path(text: str) -> str:
     if not isinstance(text, str):
         return text
 
-    home_str = str(Path.home())
-    if home_str and home_str in text:
-        text = text.replace(home_str, "[HOME]")
+    for candidate in get_home_candidates():
+        bs = candidate.replace("/", "\\")
+        fs = candidate.replace("\\", "/")
+        for path_form in (bs, fs):
+            if path_form:
+                text = re.sub(re.escape(path_form), "[HOME]", text, flags=re.IGNORECASE)
 
     user = get_home_username()
     if user and len(user) > 2:
-        # Match Windows path C:\Users\Username or /home/username
         text = re.sub(
-            rf"(?:Users|home)[/\\]{re.escape(user)}(?=[/\\\s\"']|$)",
-            r"\g<0>".replace(user, "[HOME]"),
+            rf"(?:Users|home)[/\\]{re.escape(user)}",
+            r"[HOME]",
             text,
             flags=re.IGNORECASE,
         )

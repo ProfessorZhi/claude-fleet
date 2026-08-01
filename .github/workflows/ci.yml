@@ -29,8 +29,32 @@ jobs:
       - name: Repository Secret Scan Gate
         run: python -m agent_metrics internal-scan-secrets --path .
 
-      - name: Test PowerShell Launcher
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\agent-metrics.ps1 doctor --json
+      - name: Verify CLI Process Exit Codes (Windows)
+        shell: powershell
+        run: |
+          & python -m agent_metrics doctor --json
+          $code = $LASTEXITCODE
+          if ($code -ne 2) { Write-Error "Expected exit 2 for module doctor, got $code"; exit 1 }
+
+          & agent-metrics doctor --json
+          $code = $LASTEXITCODE
+          if ($code -ne 2) { Write-Error "Expected exit 2 for console doctor, got $code"; exit 1 }
+
+          & powershell -NoProfile -ExecutionPolicy Bypass -File .\agent-metrics.ps1 doctor --json
+          $code = $LASTEXITCODE
+          if ($code -ne 2) { Write-Error "Expected exit 2 for ps1 doctor, got $code"; exit 1 }
+
+          & python -m agent_metrics finish "bad id"
+          $code = $LASTEXITCODE
+          if ($code -ne 4) { Write-Error "Expected exit 4 for module finish bad id, got $code"; exit 1 }
+
+          & agent-metrics finish "bad id"
+          $code = $LASTEXITCODE
+          if ($code -ne 4) { Write-Error "Expected exit 4 for console finish bad id, got $code"; exit 1 }
+
+          & powershell -NoProfile -ExecutionPolicy Bypass -File .\agent-metrics.ps1 finish "bad id"
+          $code = $LASTEXITCODE
+          if ($code -ne 4) { Write-Error "Expected exit 4 for ps1 finish bad id, got $code"; exit 1 }
 
   test-ubuntu:
     runs-on: ubuntu-latest
@@ -53,3 +77,24 @@ jobs:
 
       - name: Repository Secret Scan Gate
         run: python -m agent_metrics internal-scan-secrets --path .
+
+      - name: Verify CLI Process Exit Codes (Ubuntu)
+        shell: bash
+        run: |
+          set +e
+          python -m agent_metrics doctor --json > /dev/null 2>&1
+          code=$?
+          if [ "$code" -ne 2 ]; then echo "Expected exit 2 for module doctor, got $code"; exit 1; fi
+
+          agent-metrics doctor --json > /dev/null 2>&1
+          code=$?
+          if [ "$code" -ne 2 ]; then echo "Expected exit 2 for console doctor, got $code"; exit 1; fi
+
+          python -m agent_metrics finish "bad id" > /dev/null 2>&1
+          code=$?
+          if [ "$code" -ne 4 ]; then echo "Expected exit 4 for module finish bad id, got $code"; exit 1; fi
+
+          agent-metrics finish "bad id" > /dev/null 2>&1
+          code=$?
+          if [ "$code" -ne 4 ]; then echo "Expected exit 4 for console finish bad id, got $code"; exit 1; fi
+          set -e

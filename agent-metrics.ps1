@@ -7,7 +7,8 @@ param(
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $srcDir = Join-Path $ScriptDir "src"
 
-$pyScript = "import sys; sys.path.insert(0, r'$srcDir'); from agent_metrics.cli import main; main()"
+$srcDirEscaped = $srcDir.Replace('\', '\\')
+$pyScript = "import sys; sys.path.insert(0, '$srcDirEscaped'); from agent_metrics.cli import main; raise SystemExit(main())"
 python -c $pyScript @ScriptArgs
 $exitCode = $LASTEXITCODE
 exit $exitCode
