@@ -44,6 +44,7 @@ class StorageManager:
     def validate_run_id(run_id: str) -> None:
         if not run_id or not isinstance(run_id, str):
             raise ValueError("run_id must be a non-empty string")
+        run_id = run_id.strip('"\' \n\r\t')
         if not RE_RUN_ID.match(run_id):
             raise ValueError(f"Invalid or unsafe run_id: {run_id!r}")
         if run_id.upper() in RESERVED_DEVICE_NAMES:

@@ -96,8 +96,10 @@ class PricingEngine:
                 status="UNVERIFIED",
             )
 
-        if input_tokens is None or output_tokens is None:
-            return PricingInfo(status="PRICE_NOT_AVAILABLE")
+        if input_tokens is None:
+            input_tokens = 0
+        if output_tokens is None:
+            output_tokens = 0
 
         # Invalid usage checks (non-integer or negative)
         for tok_val, tok_name in [

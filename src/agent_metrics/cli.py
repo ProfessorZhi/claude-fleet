@@ -190,7 +190,7 @@ class CLIHandler:
             return EXIT_STORAGE_ERROR
 
         started_at = ctx.get("started_at")
-        finished_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        finished_at = get_utc_now_iso()
 
         # Calculate wall clock
         wall_clock = 0.0
@@ -344,10 +344,6 @@ class CLIHandler:
 
         gh_coll = GithubCollector(worktree=target_worktree, repository=target_repo)
         code_gh, gh_stats = gh_coll.collect_pr_info(pr_number=pr_num)
-
-        if code_gh != 0:
-            print(f"GitHub collection failed with exit code {code_gh}", file=sys.stderr)
-            return code_gh
 
         summary["github"] = gh_stats
         if pr_num:

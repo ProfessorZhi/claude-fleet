@@ -57,7 +57,10 @@ class GithubCollector(BaseCollector):
         return CollectorStatus.CONFIG_REQUIRED.value
 
     def query_pr_details(self, repo: Optional[str] = None, pr_number: Optional[int] = None) -> GithubInfo:
+        target_repo = repo or self.repository
         _, info = self.collect_pr_info(pr_number=pr_number)
+        if pr_number and not info.get("pr_number"):
+            info["pr_number"] = pr_number
         return GithubInfo(**{k: v for k, v in info.items() if hasattr(GithubInfo, k)})
 
     def collect(self, run_context: Optional[Dict[str, Any]] = None, pr_number: Optional[int] = None) -> Dict[str, Any]:

@@ -68,7 +68,10 @@ class CockpitCollector(BaseCollector):
             pass
         return False, None
 
-    def collect(self, run_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def probe_management_health(self) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        return self.probe_management_status()
+
+    def collect(self, run_context: Optional[Dict[str, Any]] = None, include_usage_queue: bool = False) -> Dict[str, Any]:
         is_verified, status_data = self.probe_management_status()
 
         if not is_verified:
