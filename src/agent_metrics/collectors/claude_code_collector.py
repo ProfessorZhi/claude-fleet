@@ -223,7 +223,7 @@ class ClaudeCodeCollector(BaseCollector):
         if not sessions:
             return {
                 "status": CollectorStatus.NOT_AVAILABLE.value,
-                "config_dirs": [str(d[1]) for d in config_dirs],
+                "config_dirs": [d[0] for d in config_dirs],
                 "sessions": [],
             }
 
@@ -233,14 +233,15 @@ class ClaudeCodeCollector(BaseCollector):
 
         # Priority 1: Explicit Session ID match
         if req_session_id:
-            for s in sessions:
-                if s.get("session_id") == req_session_id:
-                    matched_session = s
-                    confidence = CorrelationConfidence.EXACT_SESSION.value
-                    break
+            sid_matches = [s for s in sessions if s.get("session_id") == req_session_id]
+            if len(sid_matches) == 1:
+                matched_session = sid_matches[0]
+                confidence = CorrelationConfidence.EXACT_SESSION.value
+            elif len(sid_matches) > 1:
+                confidence = CorrelationConfidence.AMBIGUOUS.value
 
         # Priority 2: Worktree match
-        if not matched_session and req_worktree:
+        if not matched_session and confidence != CorrelationConfidence.AMBIGUOUS.value and req_worktree:
             wt_matches = [s for s in sessions if s.get("worktree") and str(s.get("worktree")).lower() == str(req_worktree).lower()]
             if len(wt_matches) == 1:
                 matched_session = wt_matches[0]
@@ -267,7 +268,7 @@ class ClaudeCodeCollector(BaseCollector):
 
         return {
             "status": CollectorStatus.AVAILABLE.value,
-            "config_dirs": [str(d[1]) for d in config_dirs],
+            "config_dirs": [d[0] for d in config_dirs],
             "sessions": sessions,
             "matched_session": matched_session,
             "correlation_confidence": confidence,
