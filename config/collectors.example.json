@@ -1,0 +1,37 @@
+{
+  "claude_code": {
+    "default_config_dir": "~/.claude",
+    "known_config_dirs": [
+      "~/.claude",
+      "~/.claude-deepseek",
+      "~/.claude-minimax"
+    ],
+    "env_config_var": "CLAUDE_CONFIG_DIR"
+  },
+  "cockpit": {
+    "process_names": [
+      "Cockpit.exe",
+      "cockpit.exe",
+      "cockpit-cliproxy.exe",
+      "cliproxy.exe"
+    ],
+    "default_ports": [
+      8314,
+      8315,
+      9090,
+      18314
+    ],
+    "local_cache_paths": [
+      "~/.cockpit/cache",
+      "~/AppData/Local/Cockpit/cache"
+    ],
+    "env_base_url_var": "COCKPIT_BASE_URL",
+    "env_management_key_var": "COCKPIT_MANAGEMENT_KEY"
+  },
+  "antigravity": {
+    "log_paths": [
+      "~/.gemini/antigravity/logs",
+      "~/AppData/Local/Antigravity/logs"
+    ]
+  }
+}

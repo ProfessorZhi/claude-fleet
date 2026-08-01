@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-metrics-collector"
+version = "0.1.0"
+description = "External performance ledger and telemetry collector for Zuno coding agent work packages and PRs."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "ProfessorZhi" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: Microsoft :: Windows",
+]
+
+[project.scripts]
+agent-metrics = "agent_metrics.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
