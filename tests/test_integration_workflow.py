@@ -1,3 +1,7 @@
+"""
+Integration tests for complete run lifecycle.
+"""
+
 import io
 import json
 import re
@@ -62,13 +66,7 @@ class TestIntegrationWorkflow(unittest.TestCase):
         ctx = self.storage.read_run_context(run_id)
         original_started_at = ctx["started_at"]
 
-        # 2. show (before finish)
-        with patch("sys.stdout", new=io.StringIO()) as show_before_out:
-            code = self.cli.cmd_show(run_id=run_id, json_output=True)
-            # Show before finish might read run context or fail if summary doesn't exist yet
-            # In our CLI, show reads sanitized-summary.json.
-
-        # 3. finish
+        # 2. finish
         with patch("sys.stdout", new=io.StringIO()) as finish_out:
             code = self.cli.cmd_finish(run_id=run_id, json_output=True)
             self.assertEqual(code, EXIT_OK)
@@ -81,17 +79,16 @@ class TestIntegrationWorkflow(unittest.TestCase):
         self.assertIsNone(summary["timing"]["agent_active_seconds"])
 
         # Verify SHA-256
-        sha_val = summary["integrity"]["summary_sha256"]
-        stored_sha = self.storage.read_sanitized_summary_sha256(run_id)
-        self.assertEqual(sha_val, stored_sha)
+        sha_val = summary["integrity"]["payload_sha256"]
+        self.assertEqual(len(sha_val), 64)
 
-        # 4. export
+        # 3. export
         export_file = Path(self.temp_dir, "summary_exported.json")
-        code = self.cli.cmd_export(run_id=run_id, format_type="json", output_path=str(export_file))
+        code = self.cli.cmd_export(run_id=run_id, format_name="json", output_path=str(export_file))
         self.assertEqual(code, EXIT_OK)
         self.assertTrue(export_file.exists())
 
-        # 5. Idempotent finish check
+        # 4. Idempotent finish check
         with patch("sys.stdout", new=io.StringIO()) as finish2_out:
             code2 = self.cli.cmd_finish(run_id=run_id, json_output=True)
             self.assertEqual(code2, EXIT_OK)

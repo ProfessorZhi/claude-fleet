@@ -1,10 +1,10 @@
 """
-Base collector class.
+Base collector abstract class.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
-from ..models import CollectorStatus
+from typing import Dict, Any, Optional
+from agent_metrics.models import CollectorStatus
 
 
 class BaseCollector(ABC):
@@ -13,10 +13,13 @@ class BaseCollector(ABC):
     def name(self) -> str:
         pass
 
-    @abstractmethod
     def check_availability(self) -> str:
+        return self.get_status()
+
+    @abstractmethod
+    def get_status(self) -> str:
         pass
 
     @abstractmethod
-    def collect(self, run_context: Dict[str, Any]) -> Dict[str, Any]:
+    def collect(self, run_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         pass

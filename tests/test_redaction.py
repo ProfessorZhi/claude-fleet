@@ -1,79 +1,81 @@
 """
-Redaction & Integrity unit tests (Tests 43-50).
+Unit tests for Redaction Engine and Integrity hashing.
+Reads fake secrets strictly from fixture file.
 """
 
 import json
-import sys
 import unittest
 from pathlib import Path
 
-SRC_DIR = Path(__file__).resolve().parent.parent / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+from agent_metrics.redaction import redact_text, sanitize_dict, scan_text_for_secret_types
+from agent_metrics.integrity import compute_payload_sha256, compute_file_sha256, verify_summary_integrity
 
-from agent_metrics.redaction import redact_string, redact_data, scan_text_for_secret_types
-from agent_metrics.integrity import compute_sha256, compute_dict_sha256
+FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "known-fake-secrets" / "fake_secrets.json"
 
 
 class TestRedactionAndIntegrity(unittest.TestCase):
-    # Test 43: Bearer Token redaction
+    def setUp(self):
+        with open(FIXTURE_PATH, "r", encoding="utf-8") as f:
+            self.fake_secrets = json.load(f)
+
     def test_bearer_token_redaction(self):
-        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature"
-        redacted, warnings = redact_string(text)
-        self.assertNotIn("eyJhbGciOiJI", redacted)
-        self.assertIn("secret_like_value_redacted", warnings)
+        txt = f"Header: {self.fake_secrets['fake_bearer']}"
+        res = redact_text(txt)
+        self.assertNotIn("eyJhbGci", res)
+        self.assertIn("Bearer [REDACTED]", res)
 
-    # Test 44: API Key redaction (sk-... & GOCSPX-...)
     def test_api_key_redaction(self):
-        text = "Key: sk-1234567890abcdef1234567890 and GOCSPX-1234567890abcdef"
-        redacted, warnings = redact_string(text)
-        self.assertNotIn("sk-1234567890", redacted)
-        self.assertNotIn("GOCSPX-1234567890", redacted)
+        txt = f"Key is {self.fake_secrets['fake_sk_api_key']}"
+        res = redact_text(txt)
+        self.assertNotIn("sk-1234567890", res)
+        self.assertIn("[REDACTED_API_KEY]", res)
 
-    # Test 45: Email address redaction
-    def test_email_redaction(self):
-        text = "User email: developer@example.com is secret"
-        redacted, warnings = redact_string(text)
-        self.assertNotIn("developer@example.com", redacted)
-        self.assertIn("[REDACTED_EMAIL]", redacted)
-
-    # Test 46: JWT redaction
     def test_jwt_redaction(self):
-        text = "Token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc123def456ghi789jkl"
-        redacted, warnings = redact_string(text)
-        self.assertNotIn("eyJhbGciOiJIUzI1NiJ9", redacted)
+        txt = f"JWT: {self.fake_secrets['fake_jwt']}"
+        res = redact_text(txt)
+        self.assertNotIn("eyJhbGci", res)
+        self.assertIn("[REDACTED_JWT]", res)
 
-    # Test 47: URL Query secret redaction
+    def test_email_redaction(self):
+        txt = f"Contact {self.fake_secrets['fake_email']}"
+        res = redact_text(txt)
+        self.assertNotIn(self.fake_secrets["fake_email"], res)
+        self.assertIn("[REDACTED_EMAIL]", res)
+
     def test_query_secret_redaction(self):
-        url = "https://api.example.com/data?api_key=secretkey123456789&user=john"
-        redacted, warnings = redact_string(url)
-        self.assertNotIn("secretkey123456789", redacted)
+        txt = self.fake_secrets['fake_query']
+        res = redact_text(txt)
+        self.assertNotIn("secret12345", res)
+        self.assertIn("[REDACTED]", res)
 
-    # Test 48: Prompt body excluded from summary
     def test_prompt_body_excluded(self):
         data = {
-            "work_package": "WP-01",
-            "prompt": "SELECT * FROM users; -- SECRET PROMPT",
+            "input_tokens": 150,
+            "output_tokens": 80,
+            "prompt": "Secret prompt text",
             "messages": [{"role": "user", "content": "hello"}],
+            "commit_sha": "adbe2efdbaa6fc56ac7f732158c18b1818cd3ce2",
         }
-        sanitized, warnings = redact_data(data)
-        self.assertIn("prompt", sanitized)
-        # Note: In summary model dataclass, prompt & messages fields are completely omitted from schema!
+        sanitized = sanitize_dict(data)
+        self.assertNotIn("prompt", sanitized)
+        self.assertNotIn("messages", sanitized)
+        self.assertEqual(sanitized["input_tokens"], 150)
+        self.assertEqual(sanitized["output_tokens"], 80)
+        self.assertEqual(sanitized["commit_sha"], "adbe2efdbaa6fc56ac7f732158c18b1818cd3ce2")
 
-    # Test 49: SHA-256 calculation stability
     def test_sha256_stability(self):
-        data = {"run_id": "uuid-1", "work_package": "WP-01"}
-        hash1 = compute_dict_sha256(data)
-        hash2 = compute_dict_sha256(data)
-        self.assertEqual(hash1, hash2)
+        payload = {"run_id": "test-uuid", "work_package": "WP-01", "integrity": {}}
+        h1 = compute_payload_sha256(payload)
+        h2 = compute_payload_sha256(payload)
+        self.assertEqual(h1, h2)
+        self.assertEqual(len(h1), 64)
 
-    # Test 50: Summary modification changes SHA-256 hash
     def test_summary_mutation_changes_hash(self):
-        data1 = {"run_id": "uuid-1", "work_package": "WP-01"}
-        data2 = {"run_id": "uuid-1", "work_package": "WP-02"}
-        hash1 = compute_dict_sha256(data1)
-        hash2 = compute_dict_sha256(data2)
-        self.assertNotEqual(hash1, hash2)
+        payload = {"run_id": "test-uuid", "work_package": "WP-01", "integrity": {}}
+        h1 = compute_payload_sha256(payload)
+        payload["work_package"] = "WP-02"
+        h2 = compute_payload_sha256(payload)
+        self.assertNotEqual(h1, h2)
 
 
 if __name__ == "__main__":
