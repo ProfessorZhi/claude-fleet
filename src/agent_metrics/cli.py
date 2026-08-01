@@ -47,6 +47,7 @@ from agent_metrics.collectors.provider_balance_collectors import (
     MiniMaxTokenPlanCollector,
 )
 from agent_metrics.collectors.cockpit_local_snapshot_collector import CockpitLocalSnapshotCollector
+from agent_metrics.collectors.cockpit_report_http_collector import CockpitReportHttpCollector
 from agent_metrics.collectors.antigravity_collector import AntigravityCollector
 from agent_metrics.redaction import sanitize_dict, scan_text_for_secret_types
 from agent_metrics.validators import validate_sanitized_summary
@@ -87,6 +88,7 @@ class CLIHandler:
         deepseek_balance = DeepSeekBalanceCollector()
         minimax_plan = MiniMaxTokenPlanCollector()
         cockpit_local = CockpitLocalSnapshotCollector()
+        cockpit_report_http = CockpitReportHttpCollector()
 
         results = {
             "version": "0.1.0",
@@ -99,6 +101,7 @@ class CLIHandler:
             "codex_exec_json": CodexExecJsonCollector().get_status(),
             "antigravity": antigravity_coll.get_status(),
             "cockpit_local_snapshot": cockpit_local.get_status(),
+            "cockpit_report_http": cockpit_report_http.get_status(),
             "deepseek_balance": deepseek_balance.get_status(),
             "minimax_token_plan": minimax_plan.get_status(),
         }
@@ -445,6 +448,7 @@ class CLIHandler:
                 "codex_exec_json": CodexExecJsonCollector({"json_log_path": codex_json_log}).get_status() if codex_json_log else CodexExecJsonCollector().get_status(),
                 "antigravity": AntigravityCollector().get_status(),
                 "cockpit_local_snapshot": CockpitLocalSnapshotCollector().get_status(),
+                "cockpit_report_http": CockpitReportHttpCollector().get_status(),
                 "deepseek_balance": DeepSeekBalanceCollector().get_status(),
                 "minimax_token_plan": MiniMaxTokenPlanCollector().get_status(),
             },

@@ -265,6 +265,12 @@ class TestCockpitAppDataSchema(unittest.TestCase):
         # No patches, no COMPAT_STATE_FILE -> must report NOT_AVAILABLE.
         env = {k: v for k, v in os.environ.items() if k != "COMPAT_STATE_FILE"}
         with patch.dict(os.environ, env, clear=True), patch(
+            "agent_metrics.collectors.cockpit_report_http_collector.CockpitReportHttpCollector.get_status",
+            return_value="NOT_AVAILABLE",
+        ), patch(
+            "agent_metrics.collectors.cockpit_report_http_collector.CockpitReportHttpCollector.collect",
+            return_value={"status": "NOT_AVAILABLE"},
+        ), patch(
             "agent_metrics.collectors.codex_quota_collector._candidate_app_data_roots",
             return_value=[],
         ):

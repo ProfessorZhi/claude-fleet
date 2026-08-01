@@ -588,6 +588,13 @@ class CodexQuotaCollector(BaseCollector):
     # ---- public API ---------------------------------------------------------
 
     def get_status(self) -> str:
+        try:
+            from agent_metrics.collectors.cockpit_report_http_collector import CockpitReportHttpCollector
+            report = CockpitReportHttpCollector()
+            if report.get_status() == CollectorStatus.AVAILABLE.value:
+                return CollectorStatus.AVAILABLE.value
+        except Exception:
+            pass
         snap, source, _reason = load_cockpit_app_data_snapshot()
         if source == CREDENTIAL_EXPORT_REJECTED:
             return CollectorStatus.ERROR.value
@@ -608,6 +615,15 @@ class CodexQuotaCollector(BaseCollector):
         When no data source is available, returns a skeleton snapshot
         with ``status = NOT_AVAILABLE``.
         """
+        try:
+            from agent_metrics.collectors.cockpit_report_http_collector import CockpitReportHttpCollector
+            report_res = CockpitReportHttpCollector().collect()
+            snap = report_res.get("codex_quota") if isinstance(report_res, dict) else None
+            if isinstance(snap, dict) and snap.get("status") in (STATUS_COMPLETE, STATUS_PARTIAL):
+                return snap
+        except Exception:
+            pass
+
         snap, source, _reason = load_cockpit_app_data_snapshot()
         if isinstance(snap, dict):
             return snap
