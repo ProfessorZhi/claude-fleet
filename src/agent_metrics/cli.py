@@ -338,7 +338,33 @@ class CLIHandler:
 
         return EXIT_OK
 
-    def cmd_export(self, run_id: str, output_path: str, format_name: str = "json") -> int:
+    def cmd_reconcile(self, run_id: str, pr_number: Optional[int] = None, json_output: bool = False) -> int:
+        try:
+            summary = self.storage.read_sanitized_summary(run_id)
+        except (StorageError, IntegrityError) as e:
+            print(f"Error reading summary: {e}", file=sys.stderr)
+            return EXIT_STORAGE_ERROR
+
+        pr_num = pr_number or summary.get("pr_number")
+        gh_coll = GithubCollector()
+        _, gh_stats = gh_coll.collect_pr_info(pr_number=pr_num)
+        summary["github"] = gh_stats
+        if pr_num:
+            summary["pr_number"] = pr_num
+
+        try:
+            written = self.storage.write_sanitized_summary(run_id, summary, overwrite=True)
+            if json_output:
+                print(json.dumps(written, indent=2))
+            else:
+                print(f"Reconciled run {run_id} with PR #{pr_num}.")
+            return EXIT_OK
+        except Exception as e:
+            print(f"Error saving summary: {e}", file=sys.stderr)
+            return EXIT_STORAGE_ERROR
+
+    def cmd_export(self, run_id: str, output_path: str, format_name: str = "json", format_type: Optional[str] = None) -> int:
+        fmt = format_type or format_name
         try:
             summary = self.storage.read_sanitized_summary(run_id)
         except IntegrityError as e:
@@ -353,7 +379,7 @@ class CLIHandler:
 
         try:
             StorageManager.atomic_write(out_path, data_bytes)
-            print(f"Exported run {run_id} to {out_path} ({format_name})")
+            print(f"Exported run {run_id} to {out_path} ({fmt})")
             return EXIT_OK
         except Exception as e:
             print(f"Error exporting run: {e}", file=sys.stderr)
@@ -401,6 +427,12 @@ def main(args: Optional[List[str]] = None) -> int:
     scan_p = subparsers.add_parser("internal-scan-secrets")
     scan_p.add_argument("--path", default=".")
 
+    # reconcile
+    rec_p = subparsers.add_parser("reconcile")
+    rec_p.add_argument("run_id")
+    rec_p.add_argument("--pr-number", type=int)
+    rec_p.add_argument("--json", action="store_true")
+
     parsed = parser.parse_args(args)
     cli = CLIHandler()
 
@@ -420,6 +452,8 @@ def main(args: Optional[List[str]] = None) -> int:
     elif parsed.command == "finish":
         r_id = parsed.run_id or parsed.run_id
         return cli.cmd_finish(run_id=r_id, refresh=parsed.refresh, json_output=parsed.json)
+    elif parsed.command == "reconcile":
+        return cli.cmd_reconcile(run_id=parsed.run_id, pr_number=parsed.pr_number, json_output=parsed.json)
     elif parsed.command == "show":
         return cli.cmd_show(run_id=parsed.run_id, json_output=parsed.json)
     elif parsed.command == "export":
