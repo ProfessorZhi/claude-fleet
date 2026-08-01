@@ -57,10 +57,20 @@ def _make_named_fake_codex_dir(exit_code: int, stdout_line: str):
 
 
 class TestCodexRunner(unittest.TestCase):
-    """Exercise the Codex PowerShell wrapper using a fake codex executable."""
+    """Exercise the Codex PowerShell wrapper using a fake codex executable.
+
+    The runner is a Windows PowerShell script that shells out to
+    ``powershell`` itself. On non-Windows hosts the nested invocation is
+    unreliable, so the whole class is skipped.
+    """
 
     @classmethod
     def setUpClass(cls):
+        if os.name != "nt":
+            raise unittest.SkipTest(
+                "run-codex-with-metrics.ps1 is a Windows-only runner; "
+                "non-Windows hosts are not supported."
+            )
         if not RUNNER.exists():
             raise unittest.SkipTest(f"Runner not present at {RUNNER}")
         try:
@@ -69,8 +79,8 @@ class TestCodexRunner(unittest.TestCase):
             raise unittest.SkipTest("PowerShell is not installed on this host")
 
     def setUp(self):
-        # Per-test skip if PowerShell is unavailable (e.g. on a Linux CI image
-        # without PowerShell). The runner itself is a Windows-only artifact.
+        # Per-test skip if PowerShell is unavailable. The runner itself is
+        # a Windows-only artifact.
         if not getattr(self, "powershell", None):
             self.skipTest("PowerShell is not installed on this host")
 
