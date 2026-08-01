@@ -148,7 +148,8 @@ class TestCodexRunner(unittest.TestCase):
             )
             self.assertIn("RUN_ID=", proc.stdout)
             self.assertIn("SUMMARY_PATH=", proc.stdout)
-            self.assertIn("fake-codex-ok", proc.stdout)
+            self.assertNotIn("fake-codex-ok", proc.stdout)
+            self.assertIn("AGENT_EXIT_CODE=0", proc.stdout)
         finally:
             shutil.rmtree(worktree, ignore_errors=True)
             shutil.rmtree(fake_dir, ignore_errors=True)
@@ -164,7 +165,8 @@ class TestCodexRunner(unittest.TestCase):
             )
             self.assertIn("RUN_ID=", proc.stdout)
             self.assertIn("SUMMARY_PATH=", proc.stdout)
-            self.assertIn("fake-codex-failed", proc.stdout)
+            self.assertNotIn("fake-codex-failed", proc.stdout)
+            self.assertIn("AGENT_EXIT_CODE=3", proc.stdout)
 
             # Finish MUST have run even though Codex failed. The summary
             # lives at <repo_root>/.local/runs/<run_id>/sanitized-summary.json

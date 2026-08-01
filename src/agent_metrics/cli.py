@@ -41,6 +41,12 @@ from agent_metrics.collectors.codex_quota_collector import (
     SOURCE_COMPAT_STATE_FILE,
     STATUS_NOT_AVAILABLE,
 )
+from agent_metrics.collectors.codex_exec_json_collector import CodexExecJsonCollector
+from agent_metrics.collectors.provider_balance_collectors import (
+    DeepSeekBalanceCollector,
+    MiniMaxTokenPlanCollector,
+)
+from agent_metrics.collectors.cockpit_local_snapshot_collector import CockpitLocalSnapshotCollector
 from agent_metrics.collectors.antigravity_collector import AntigravityCollector
 from agent_metrics.redaction import sanitize_dict, scan_text_for_secret_types
 from agent_metrics.validators import validate_sanitized_summary
@@ -78,6 +84,9 @@ class CLIHandler:
         cockpit_coll = CockpitCollector()
         codex_quota_coll = CodexQuotaCollector()
         antigravity_coll = AntigravityCollector()
+        deepseek_balance = DeepSeekBalanceCollector()
+        minimax_plan = MiniMaxTokenPlanCollector()
+        cockpit_local = CockpitLocalSnapshotCollector()
 
         results = {
             "version": "0.1.0",
@@ -87,7 +96,11 @@ class CLIHandler:
             "claude_code": claude_coll.get_status(),
             "cockpit": cockpit_coll.get_status(),
             "codex_quota": codex_quota_coll.get_status(),
+            "codex_exec_json": CodexExecJsonCollector().get_status(),
             "antigravity": antigravity_coll.get_status(),
+            "cockpit_local_snapshot": cockpit_local.get_status(),
+            "deepseek_balance": deepseek_balance.get_status(),
+            "minimax_token_plan": minimax_plan.get_status(),
         }
 
         all_available = all(v == CollectorStatus.AVAILABLE.value for k, v in results.items() if k not in ("version", "python_version"))
@@ -206,7 +219,14 @@ class CLIHandler:
 
         return EXIT_OK
 
-    def cmd_finish(self, run_id: str, refresh: bool = False, json_output: bool = False) -> int:
+    def cmd_finish(
+        self,
+        run_id: str,
+        refresh: bool = False,
+        json_output: bool = False,
+        codex_json_log: Optional[str] = None,
+        agent_process_seconds: Optional[float] = None,
+    ) -> int:
         if not run_id:
             print("Error: run_id is required.", file=sys.stderr)
             return EXIT_INVALID_INPUT
@@ -271,11 +291,9 @@ class CLIHandler:
         agent_shell = ctx.get("agent", {}).get("shell", "")
         usage = UsageInfo(collection_status="NOT_AVAILABLE")
         observed_model = None
-
-        # Telemetry collection based on agent shell
-        agent_shell = ctx.get("agent", {}).get("shell", "")
-        usage = UsageInfo(collection_status="NOT_AVAILABLE")
-        observed_model = None
+        model_event_started_at = None
+        model_event_finished_at = None
+        model_event_span_seconds = None
 
         # Codex quota: capture After snapshot and compute delta.
         codex_quota_snapshot_before = None
@@ -324,12 +342,29 @@ class CLIHandler:
                 if codex_quota_status in (None, "NOT_AVAILABLE"):
                     codex_quota_status = "ERROR"
 
-        if agent_shell.lower() in ("claude-code", "claudecode", "claude"):
+        if agent_shell.strip().lower() == "codex":
+            codex_res = CodexExecJsonCollector().collect(run_context={"codex_json_log": codex_json_log})
+            if isinstance(codex_res.get("usage"), dict) and codex_res.get("status") in ("COMPLETE", "PARTIAL"):
+                usage = UsageInfo(**codex_res["usage"])
+                observed_model = codex_res.get("observed_model")
+                model_event_started_at = codex_res.get("model_event_started_at")
+                model_event_finished_at = codex_res.get("model_event_finished_at")
+                model_event_span_seconds = codex_res.get("model_event_span_seconds")
+        elif agent_shell.lower() in ("claude-code", "claudecode", "claude"):
             claude_coll = ClaudeCodeCollector()
             claude_res = claude_coll.collect(run_context=ctx)
             if claude_res.get("matched_session"):
                 sess = claude_res["matched_session"]
                 observed_model = sess.get("observed_model")
+                model_event_started_at = sess.get("start_time")
+                model_event_finished_at = sess.get("end_time")
+                if model_event_started_at and model_event_finished_at:
+                    try:
+                        t1 = datetime.datetime.fromisoformat(str(model_event_started_at).replace("Z", "+00:00"))
+                        t2 = datetime.datetime.fromisoformat(str(model_event_finished_at).replace("Z", "+00:00"))
+                        model_event_span_seconds = max(0.0, (t2 - t1).total_seconds())
+                    except Exception:
+                        model_event_span_seconds = None
                 usage = UsageInfo(
                     input_tokens=sess.get("input_tokens"),
                     output_tokens=sess.get("output_tokens"),
@@ -368,8 +403,17 @@ class CLIHandler:
             started_at=started_at,
             finished_at=finished_at,
             wall_clock_seconds=wall_clock,
+            agent_process_seconds=agent_process_seconds,
+            model_event_started_at=model_event_started_at,
+            model_event_finished_at=model_event_finished_at,
+            model_event_span_seconds=model_event_span_seconds,
+            ci_queued_at=gh_stats.get("ci_queued_at"),
+            ci_started_at=gh_stats.get("ci_started_at"),
+            ci_completed_at=gh_stats.get("ci_completed_at"),
+            ci_queue_seconds=gh_stats.get("ci_queue_seconds"),
+            ci_run_seconds=gh_stats.get("ci_run_seconds"),
             agent_active_seconds=None,
-            ci_wait_seconds=gh_stats.get("ci_wait_seconds"),
+            ci_wait_seconds=None,
         )
 
         summary_obj = SanitizedSummary(
@@ -398,7 +442,11 @@ class CLIHandler:
                 "claude_code": ClaudeCodeCollector().get_status(),
                 "cockpit": CockpitCollector().get_status(),
                 "codex_quota": CodexQuotaCollector().get_status(),
+                "codex_exec_json": CodexExecJsonCollector({"json_log_path": codex_json_log}).get_status() if codex_json_log else CodexExecJsonCollector().get_status(),
                 "antigravity": AntigravityCollector().get_status(),
+                "cockpit_local_snapshot": CockpitLocalSnapshotCollector().get_status(),
+                "deepseek_balance": DeepSeekBalanceCollector().get_status(),
+                "minimax_token_plan": MiniMaxTokenPlanCollector().get_status(),
             },
             warnings=[],
             integrity=IntegrityInfo(),
@@ -408,6 +456,12 @@ class CLIHandler:
         summary_dict["repository"] = target_repo
         summary_dict["worktree"] = target_worktree
         summary_dict["session_id"] = ctx.get("session_id")
+
+        provider_quota = {}
+        if agent_shell.lower() in ("antigravity", "agy"):
+            provider_quota["antigravity_quota"] = CockpitLocalSnapshotCollector().collect(run_context=ctx)
+        if provider_quota:
+            summary_dict["provider_quota"] = provider_quota
 
         try:
             written_summary = self.storage.write_sanitized_summary(run_id, summary_dict, overwrite=True)
@@ -711,6 +765,8 @@ def main(args: Optional[List[str]] = None) -> int:
     fin_p.add_argument("--run-id", dest="kw_run_id")
     fin_p.add_argument("--refresh", action="store_true")
     fin_p.add_argument("--json", action="store_true")
+    fin_p.add_argument("--codex-json-log")
+    fin_p.add_argument("--agent-process-seconds", type=float)
 
     # show
     show_p = subparsers.add_parser("show")
@@ -771,7 +827,13 @@ def main(args: Optional[List[str]] = None) -> int:
         )
     elif parsed.command == "finish":
         r_id = parsed.kw_run_id or parsed.pos_run_id
-        return cli.cmd_finish(run_id=r_id, refresh=parsed.refresh, json_output=parsed.json)
+        return cli.cmd_finish(
+            run_id=r_id,
+            refresh=parsed.refresh,
+            json_output=parsed.json,
+            codex_json_log=parsed.codex_json_log,
+            agent_process_seconds=parsed.agent_process_seconds,
+        )
     elif parsed.command == "reconcile":
         r_id = parsed.kw_run_id or parsed.pos_run_id
         return cli.cmd_reconcile(run_id=r_id, repository=parsed.repository, pr_number=parsed.pr_number, json_output=parsed.json)

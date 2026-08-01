@@ -45,6 +45,15 @@
         "started_at",
         "finished_at",
         "wall_clock_seconds",
+        "agent_process_seconds",
+        "model_event_started_at",
+        "model_event_finished_at",
+        "model_event_span_seconds",
+        "ci_queued_at",
+        "ci_started_at",
+        "ci_completed_at",
+        "ci_queue_seconds",
+        "ci_run_seconds",
         "agent_active_seconds",
         "ci_wait_seconds"
       ]
@@ -68,6 +77,7 @@
       "required": [
         "price_snapshot_date",
         "price_source",
+        "price_snapshot_version",
         "currency",
         "api_equivalent_cost_usd",
         "actual_billed_cost_usd",
@@ -94,7 +104,7 @@
     },
     "integrity": {
       "type": "object",
-      "required": ["summary_sha256"]
+      "required": ["payload_sha256"]
     }
   }
 }

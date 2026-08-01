@@ -10,6 +10,8 @@ param(
 
     [string]$CodexCommand = "codex",
 
+    [string]$ConfiguredModel = "",
+
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$CodexArgs
 )
@@ -131,6 +133,9 @@ $startArgs = @(
 if (-not [string]::IsNullOrWhiteSpace($Repository)) {
     $startArgs += @("--repository", $Repository)
 }
+if (-not [string]::IsNullOrWhiteSpace($ConfiguredModel)) {
+    $startArgs += @("--configured-model", $ConfiguredModel)
+}
 
 $startOutput = ""
 $startExit = $null
@@ -161,6 +166,10 @@ if (-not $runId) {
 
 Write-Output ("RUN_ID=$runId")
 
+$runPrivateDir = Join-Path $repoRoot ".local/runs/$runId/private"
+New-Item -ItemType Directory -Force -Path $runPrivateDir | Out-Null
+$codexJsonLog = Join-Path $runPrivateDir "codex-exec.jsonl"
+
 # --- 4. Codex invocation ----------------------------------------------------
 
 $codexExit = 0
@@ -169,12 +178,15 @@ $codexFailure = $false
 
 try {
     $codexInvoked = $true
-    & $CodexCommand @CodexArgs
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    & $CodexCommand exec --json @CodexArgs *> $codexJsonLog
     $codexExit = $LASTEXITCODE
+    $sw.Stop()
     if ($codexExit -ne 0) {
         $codexFailure = $true
     }
 } catch {
+    if ($sw) { $sw.Stop() }
     Write-StderrLine "ERROR: Codex invocation threw an exception: $($_.Exception.Message)"
     $codexExit = 1
     $codexFailure = $true
@@ -187,7 +199,11 @@ $finishExit = 0
 $finishFailed = $false
 
 try {
-    $finishArgs = @("finish", "--run-id", $runId)
+    $processSeconds = if ($sw) { [Math]::Round($sw.Elapsed.TotalSeconds, 3) } else { $null }
+    $finishArgs = @("finish", "--run-id", $runId, "--codex-json-log", $codexJsonLog)
+    if ($null -ne $processSeconds) {
+        $finishArgs += @("--agent-process-seconds", ([string]::Format([Globalization.CultureInfo]::InvariantCulture, "{0}", $processSeconds)))
+    }
     $finishOutput = (Invoke-Am @finishArgs) | Out-String
     $finishExit = $LASTEXITCODE
 
@@ -217,9 +233,18 @@ try {
     $finishExit = 1
 }
 
+try {
+    if (Test-Path -LiteralPath $codexJsonLog) {
+        Remove-Item -LiteralPath $codexJsonLog -Force -ErrorAction SilentlyContinue
+    }
+} catch {
+    # Best-effort cleanup only. The file is in the run-private directory.
+}
+
 if ($summaryPath) {
     Write-Output ("SUMMARY_PATH=$summaryPath")
 }
+Write-Output ("AGENT_EXIT_CODE=$codexExit")
 
 # --- 6. Final exit code propagation -----------------------------------------
 # Priority:
