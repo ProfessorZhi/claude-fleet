@@ -41,17 +41,19 @@ class CockpitCollector(BaseCollector):
 
     def get_status(self) -> str:
         if self.base_url and is_local_url(self.base_url):
-            parsed = urllib.parse.urlparse(self.base_url)
-            if parsed.port and check_port_listening("127.0.0.1", parsed.port):
+            is_verified, _ = self.probe_management_status()
+            if is_verified:
                 return CollectorStatus.AVAILABLE.value
+            return CollectorStatus.CONFIG_REQUIRED.value
         return CollectorStatus.NOT_AVAILABLE.value
 
-    def probe_management_health(self) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    def probe_management_status(self) -> Tuple[bool, Optional[Dict[str, Any]]]:
         if not self.base_url or not is_local_url(self.base_url):
             return False, None
 
-        health_url = f"{self.base_url.rstrip('/')}/v0/management/health"
-        req = urllib.request.Request(health_url, method="GET")
+        # Non-destructive endpoint check (/v0/management/status or /v0/management/version)
+        status_url = f"{self.base_url.rstrip('/')}/v0/management/status"
+        req = urllib.request.Request(status_url, method="GET")
 
         mgmt_key = os.environ.get("COCKPIT_MANAGEMENT_KEY")
         if mgmt_key:
@@ -66,12 +68,12 @@ class CockpitCollector(BaseCollector):
             pass
         return False, None
 
-    def collect(self, run_context: Optional[Dict[str, Any]] = None, include_usage_queue: bool = False) -> Dict[str, Any]:
-        is_healthy, health_data = self.probe_management_health()
+    def collect(self, run_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        is_verified, status_data = self.probe_management_status()
 
-        if not is_healthy:
+        if not is_verified:
             return {
-                "status": CollectorStatus.NOT_AVAILABLE.value,
+                "status": self.get_status(),
                 "process_detected": False,
                 "cliproxy_detected": False,
                 "request_usage_surface": "UNSUPPORTED",
@@ -80,31 +82,12 @@ class CockpitCollector(BaseCollector):
                 "confidence": CockpitConfidence.NOT_AVAILABLE.value,
             }
 
-        result = {
+        return {
             "status": CollectorStatus.AVAILABLE.value,
             "process_detected": True,
             "cliproxy_detected": True,
-            "health": health_data,
+            "status_info": status_data,
+            "request_usage_surface": "UNSUPPORTED",
             "quota_surface": "UNSUPPORTED",
             "confidence": CockpitConfidence.CONFIGURED.value,
         }
-
-        if include_usage_queue:
-            usage_url = f"{self.base_url.rstrip('/')}/v0/management/usage-queue"
-            req = urllib.request.Request(usage_url, method="GET")
-            mgmt_key = os.environ.get("COCKPIT_MANAGEMENT_KEY")
-            if mgmt_key:
-                req.add_header("X-Management-Key", mgmt_key)
-            try:
-                with urllib.request.urlopen(req, timeout=3.0) as resp:
-                    if resp.status == 200:
-                        usage_events = json.loads(resp.read().decode("utf-8"))
-                        result["request_usage_surface"] = "AVAILABLE"
-                        result["usage_events"] = usage_events
-                        result["confidence"] = CockpitConfidence.REQUEST_OBSERVED.value
-                        return result
-            except Exception:
-                pass
-
-        result["request_usage_surface"] = "UNSUPPORTED"
-        return result

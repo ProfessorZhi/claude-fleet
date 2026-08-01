@@ -23,11 +23,13 @@ class AntigravityCollector(BaseCollector):
         self.config = config or {}
 
     def get_status(self) -> str:
-        return CollectorStatus.AVAILABLE.value
+        # Returns NOT_AVAILABLE unless a real persistent telemetry source is configured
+        return CollectorStatus.NOT_AVAILABLE.value
 
     def collect(self, run_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return {
-            "status": CollectorStatus.AVAILABLE.value,
+            "status": CollectorStatus.NOT_AVAILABLE.value,
+            "usage": UsageInfo(collection_status="NOT_AVAILABLE").to_dict(),
         }
 
     def correlate_usage(
@@ -38,6 +40,7 @@ class AntigravityCollector(BaseCollector):
         expected_provider: Optional[str] = None,
         expected_model: Optional[str] = None,
         active_runs_count: int = 1,
+        session_id: Optional[str] = None,
     ) -> UsageInfo:
         if not candidate_events:
             return UsageInfo(
@@ -54,21 +57,28 @@ class AntigravityCollector(BaseCollector):
                 cache_write_tokens=None,
                 total_tokens=None,
                 collection_status="NOT_AVAILABLE",
-                source="antigravity_log",
+                source="antigravity_telemetry",
                 correlation_confidence=CorrelationConfidence.AMBIGUOUS.value,
             )
 
         valid_events = []
         for ev in candidate_events:
             ts = ev.get("timestamp")
-            if ts and (ts < started_at or (finished_at and ts > finished_at)):
+            if not ts:
+                # Reject event lacking timestamp
+                continue
+            if ts < started_at or (finished_at and ts > finished_at):
                 continue
 
             provider = ev.get("provider")
+            if expected_provider and not provider:
+                continue
             if expected_provider and provider and provider.lower() != expected_provider.lower():
                 continue
 
             model = ev.get("model")
+            if expected_model and not model:
+                continue
             if expected_model and model and model.lower() != expected_model.lower():
                 continue
 
@@ -95,6 +105,8 @@ class AntigravityCollector(BaseCollector):
 
         total_tokens = total_input + total_output
 
+        confidence = CorrelationConfidence.EXACT_SESSION.value if session_id else CorrelationConfidence.TIME_WINDOW_MATCH.value
+
         return UsageInfo(
             input_tokens=total_input,
             output_tokens=total_output,
@@ -104,5 +116,5 @@ class AntigravityCollector(BaseCollector):
             total_tokens=total_tokens,
             collection_status="COMPLETE",
             source="antigravity_telemetry",
-            correlation_confidence=CorrelationConfidence.EXACT_SESSION.value,
+            correlation_confidence=confidence,
         )

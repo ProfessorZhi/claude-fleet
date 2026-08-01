@@ -15,10 +15,11 @@ from agent_metrics.models import CollectorStatus, GithubInfo, EXIT_PARTIAL, EXIT
 class GithubCollector(BaseCollector):
     name = "github"
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None, worktree: Optional[str] = None):
+    def __init__(self, config: Optional[Dict[str, Any]] = None, worktree: Optional[str] = None, repository: Optional[str] = None):
         super().__init__()
         self.config = config or {}
         self.worktree = worktree
+        self.repository = repository
 
     def run_gh(self, args: list) -> Tuple[int, str]:
         if not shutil.which("gh"):
