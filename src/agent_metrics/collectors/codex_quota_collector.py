@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -103,6 +104,15 @@ ALLOWED_STATUS = {
 # Source identifiers.
 SOURCE_COCKPIT_APP_DATA = "cockpit_app_data"
 SOURCE_COMPAT_STATE_FILE = "compat_state_file"
+CREDENTIAL_EXPORT_REJECTED = "CREDENTIAL_EXPORT_REJECTED"
+CREDENTIAL_FIELD_NAMES = {
+    "id_token",
+    "access_token",
+    "refresh_token",
+    "api_key",
+    "authorization",
+    "cookie",
+}
 
 # Candidate Cockpit App Data directories inspected when looking for a real
 # JSON Codex Account file. Only the directory NAMES are recorded in
@@ -133,15 +143,45 @@ def _utc_now_iso() -> str:
 
 
 def _hash_account_ref(account_ref: Optional[str]) -> Optional[str]:
-    """Return the truncated SHA-256 hex hash for an opaque account reference.
+    """Return the truncated HMAC-SHA256 hex hash for an opaque account reference.
 
     Returns ``None`` for empty / non-string inputs. The original value is
     NEVER persisted.
     """
     if not account_ref or not isinstance(account_ref, str):
         return None
-    digest = hashlib.sha256(account_ref.encode("utf-8")).hexdigest()
+    salt = _load_local_install_salt()
+    digest = hmac.new(salt, account_ref.encode("utf-8"), hashlib.sha256).hexdigest()
     return digest[:ACCOUNT_HASH_HEX_CHARS]
+
+
+def _load_local_install_salt() -> bytes:
+    root = pathlib.Path(__file__).resolve().parent.parent.parent.parent / ".local" / "private"
+    root.mkdir(parents=True, exist_ok=True)
+    salt_file = root / "install-salt.bin"
+    try:
+        if salt_file.exists():
+            data = salt_file.read_bytes()
+            if len(data) >= 16:
+                return data
+        data = os.urandom(32)
+        salt_file.write_bytes(data)
+        return data
+    except OSError:
+        fallback = socket.gethostname().encode("utf-8", errors="ignore") or b"agent-metrics-local"
+        return hashlib.sha256(fallback).digest()
+
+
+def contains_credential_fields(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).lower() in CREDENTIAL_FIELD_NAMES:
+                return True
+            if contains_credential_fields(item):
+                return True
+    elif isinstance(value, list):
+        return any(contains_credential_fields(item) for item in value)
+    return False
 
 
 def _is_finite_number(value: Any) -> bool:
@@ -423,7 +463,7 @@ def _validate_cockpit_account_shape(acct: Dict[str, Any]) -> Tuple[Optional[Dict
         return None, "bad_reset_time"
 
     parsed = _build_snapshot_skeleton()
-    parsed["account_ref_hash"] = _hash_account_ref(account_id)
+    parsed["account_ref_hash"] = _hash_account_ref("OpenAI:" + account_id)
     parsed["plan_type"] = plan_type
     parsed["usage_updated_at"] = usage_updated_at
     parsed["percentage_semantics"] = SEMANTICS_REMAINING
@@ -465,6 +505,8 @@ def load_cockpit_app_data_snapshot() -> Tuple[Optional[Dict[str, Any]], str, str
             raw = _try_load_json(candidate)
             if raw is None:
                 continue
+            if contains_credential_fields(raw):
+                return None, CREDENTIAL_EXPORT_REJECTED, "credential_fields_present"
             account, account_reason = _resolve_cockpit_current_account(raw)
             if account is None:
                 # Real Cockpit schema but AMBIGUOUS ownership — we cannot
@@ -496,6 +538,8 @@ def load_compat_state_file_snapshot() -> Tuple[Optional[Dict[str, Any]], str, st
     raw = _try_load_json(parsed_path)
     if raw is None:
         return None, "NOT_AVAILABLE", "compat_state_file_unreadable"
+    if contains_credential_fields(raw):
+        return None, CREDENTIAL_EXPORT_REJECTED, "credential_fields_present"
     sanitized = sanitize_snapshot(raw)
     sanitized["status"] = STATUS_COMPLETE
     sanitized["source"] = SOURCE_COMPAT_STATE_FILE
@@ -519,6 +563,8 @@ class CodexQuotaCollector(BaseCollector):
 
     def get_status(self) -> str:
         snap, source, _reason = load_cockpit_app_data_snapshot()
+        if source == CREDENTIAL_EXPORT_REJECTED:
+            return CollectorStatus.ERROR.value
         if source == SOURCE_COCKPIT_APP_DATA and isinstance(snap, dict):
             return CollectorStatus.AVAILABLE.value
         # Even if no Cockpit source is reachable on this host, the
@@ -539,10 +585,20 @@ class CodexQuotaCollector(BaseCollector):
         snap, source, _reason = load_cockpit_app_data_snapshot()
         if isinstance(snap, dict):
             return snap
+        if source == CREDENTIAL_EXPORT_REJECTED:
+            skeleton = _build_snapshot_skeleton()
+            skeleton["status"] = CREDENTIAL_EXPORT_REJECTED
+            skeleton["source"] = source
+            return skeleton
 
         compat_snap, compat_source, _compat_reason = load_compat_state_file_snapshot()
         if isinstance(compat_snap, dict):
             return compat_snap
+        if compat_source == CREDENTIAL_EXPORT_REJECTED:
+            skeleton = _build_snapshot_skeleton()
+            skeleton["status"] = CREDENTIAL_EXPORT_REJECTED
+            skeleton["source"] = compat_source
+            return skeleton
 
         skeleton = _build_snapshot_skeleton()
         skeleton["status"] = STATUS_NOT_AVAILABLE

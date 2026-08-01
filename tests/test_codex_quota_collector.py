@@ -185,7 +185,7 @@ class TestCockpitAppDataSchema(unittest.TestCase):
             snap, source, _ = load_cockpit_app_data_snapshot()
 
         self.assertEqual(source, SOURCE_COCKPIT_APP_DATA)
-        self.assertEqual(snap["account_ref_hash"], _hash_account_ref("acct-b"))
+        self.assertEqual(snap["account_ref_hash"], _hash_account_ref("OpenAI:acct-b"))
         self.assertEqual(snap["primary_window"]["percentage"], 50.0)
         self.assertEqual(snap["plan_type"], "pro")
 
