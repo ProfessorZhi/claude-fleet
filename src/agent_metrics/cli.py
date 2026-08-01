@@ -147,8 +147,10 @@ class CLIHandler:
         if json_output:
             print(json.dumps({"run_id": run_id, "started_at": started_at}))
         else:
+            # Exactly one line starts with RUN_ID= for machine parsing.
             print(f"RUN_ID={run_id}")
-            print(f'$env:ZUNO_AGENT_RUN_ID="{run_id}"')
+            # PowerShell env-var hint: spaces around = so this line does NOT contain 'RUN_ID='.
+            print(f'$env:ZUNO_AGENT_RUN_ID = "{run_id}"')
 
         return EXIT_OK
 
@@ -156,9 +158,6 @@ class CLIHandler:
         if not run_id:
             print("Error: run_id is required.", file=sys.stderr)
             return EXIT_INVALID_INPUT
-
-        # Sanitize first: callers like split("RUN_ID=")[1].strip() may capture extra lines.
-        run_id = StorageManager.sanitize_run_id(run_id)
 
         try:
             StorageManager.validate_run_id(run_id)
@@ -332,9 +331,20 @@ class CLIHandler:
             print("Error: run_id is required.", file=sys.stderr)
             return EXIT_INVALID_INPUT
 
-        try:
-            summary = self.storage.read_sanitized_summary(run_id)
-        except (StorageError, IntegrityError):
+        # --- Load existing summary or fall back to run-context ---
+        # Integrity errors must not allow fallback to context: fail-closed.
+        summary_present = self.storage.summary_exists(run_id)
+        if summary_present:
+            try:
+                summary = self.storage.read_sanitized_summary(run_id)
+            except IntegrityError as e:
+                print(f"Integrity error: {e}", file=sys.stderr)
+                return EXIT_INTEGRITY_ERROR
+            except StorageError as e:
+                print(f"Storage error reading summary: {e}", file=sys.stderr)
+                return EXIT_STORAGE_ERROR
+        else:
+            # Summary does not exist: fall back to run-context to build initial stub.
             try:
                 ctx = self.storage.read_run_context(run_id)
                 started_at = ctx.get("started_at", get_utc_now_iso())
@@ -372,7 +382,7 @@ class CLIHandler:
                     "warnings": [],
                     "integrity": IntegrityInfo().to_dict(),
                 }
-            except Exception as e:
+            except StorageError as e:
                 print(f"Error reading run context: {e}", file=sys.stderr)
                 return EXIT_STORAGE_ERROR
 
@@ -380,9 +390,21 @@ class CLIHandler:
         target_repo = repository or summary.get("repository")
         target_worktree = summary.get("worktree") or os.getcwd()
 
+        # --- Query GitHub — fail-closed on any non-zero result ---
         gh_coll = GithubCollector(worktree=target_worktree, repository=target_repo)
         code_gh, gh_stats = gh_coll.collect_pr_info(pr_number=pr_num)
 
+        if code_gh != EXIT_OK:
+            # Propagate exact exit code for EXIT_PARTIAL; map everything else to EXIT_EXTERNAL_CMD_ERROR.
+            if code_gh == EXIT_PARTIAL:
+                print("GitHub PR info unavailable (gh not found or not authenticated).",
+                      file=sys.stderr)
+                return EXIT_PARTIAL
+            else:
+                print("GitHub query failed with an external command error.", file=sys.stderr)
+                return EXIT_EXTERNAL_CMD_ERROR
+
+        # --- Only write summary when GitHub query succeeded ---
         summary["github"] = gh_stats
         if pr_num:
             summary["pr_number"] = pr_num
@@ -405,7 +427,7 @@ class CLIHandler:
                 print(f"Reconciled run {run_id} with PR #{pr_num}.")
             return EXIT_OK
         except Exception as e:
-            print(f"Error saving summary: {e}", file=sys.stderr)
+            print(f"Error saving reconciled summary: {e}", file=sys.stderr)
             return EXIT_STORAGE_ERROR
 
     def cmd_show(self, run_id: str, json_output: bool = False) -> int:

@@ -16,6 +16,8 @@ from agent_metrics.redaction import sanitize_dict, scan_text_for_secret_types
 from agent_metrics.integrity import compute_payload_sha256, compute_file_sha256, verify_summary_integrity
 from agent_metrics.validators import validate_run_context, validate_sanitized_summary
 
+# Strict run_id pattern: the ENTIRE string must consist only of alphanumerics, hyphens, underscores.
+# No leading/trailing whitespace, no embedded newlines, no quotes, no extra content permitted.
 RE_RUN_ID = re.compile(r"^[a-zA-Z0-9_\-]+$")
 RESERVED_DEVICE_NAMES = {
     "CON", "PRN", "AUX", "NUL",
@@ -41,22 +43,17 @@ class StorageManager:
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
-    def sanitize_run_id(run_id: str) -> str:
-        """Extract the first valid UUID-like token from run_id, stripping embedded newlines
-        and surrounding quotes/whitespace that callers may accidentally capture."""
-        if not run_id or not isinstance(run_id, str):
-            return ""
-        # Take only the first line (handles split("RUN_ID=")[1].strip() capturing extra lines)
-        if "\n" in run_id:
-            run_id = run_id.split("\n", 1)[0]
-        return run_id.strip('"\' \n\r\t')
-
-    @staticmethod
     def validate_run_id(run_id: str) -> None:
+        """Strictly validate run_id as a complete, unmodified string.
+
+        The ENTIRE input string must match the run_id pattern.
+        Any embedded whitespace, newlines, quotes, or extra content cause rejection.
+        No truncation, stripping, or extraction is performed.
+        """
         if not run_id or not isinstance(run_id, str):
             raise ValueError("run_id must be a non-empty string")
-        run_id = run_id.strip('"\' \n\r\t')
-        if not RE_RUN_ID.match(run_id):
+        # re.fullmatch requires the ENTIRE string to match — no truncation permitted.
+        if not re.fullmatch(r"[a-zA-Z0-9_\-]+", run_id):
             raise ValueError(f"Invalid or unsafe run_id: {run_id!r}")
         if run_id.upper() in RESERVED_DEVICE_NAMES:
             raise ValueError(f"run_id matches reserved device name: {run_id!r}")
@@ -75,14 +72,21 @@ class StorageManager:
             raise ValueError(f"work_package contains secret-like values: {secrets}")
 
     def get_run_dir(self, run_id: str) -> Path:
-        # Sanitize: extract first UUID-like token, stripping embedded newlines or extra text
-        # that callers may accidentally capture (e.g. split("RUN_ID=")[1].strip()).
-        run_id = self.sanitize_run_id(run_id)
         self.validate_run_id(run_id)
         run_dir = (self.base_dir / run_id).resolve()
         if not str(run_dir).startswith(str(self.base_dir)):
             raise ValueError(f"Path traversal detected for run_id: {run_id!r}")
         return run_dir
+
+    def summary_exists(self, run_id: str) -> bool:
+        """Return True if sanitized-summary.json exists for the given run_id.
+        Does NOT read or validate the file — only checks existence.
+        """
+        try:
+            run_dir = self.get_run_dir(run_id)
+        except (ValueError, Exception):
+            return False
+        return (run_dir / "sanitized-summary.json").exists()
 
     @staticmethod
     def atomic_write(file_path: Path, data: bytes) -> None:
@@ -221,12 +225,16 @@ class StorageManager:
         except Exception as e:
             raise StorageError(f"Error reading summary file for run_id {run_id}: {e}") from e
 
-        expected_file_sha = ""
-        if sha_file.exists():
-            try:
-                expected_file_sha = sha_file.read_text(encoding="utf-8").strip()
-            except Exception:
-                pass
+        # Sidecar MUST be present — its absence is treated as an integrity failure.
+        if not sha_file.exists():
+            raise IntegrityError(
+                f"SHA-256 sidecar missing for run_id {run_id}: "
+                "sanitized-summary.sha256 not found alongside sanitized-summary.json"
+            )
+        try:
+            expected_file_sha = sha_file.read_text(encoding="utf-8").strip()
+        except Exception as e:
+            raise IntegrityError(f"Failed to read SHA-256 sidecar for run_id {run_id}: {e}") from e
 
         is_valid, msg = verify_summary_integrity(summary_dict, summary_bytes, expected_file_sha)
         if not is_valid:
@@ -234,6 +242,7 @@ class StorageManager:
 
         validate_sanitized_summary(summary_dict)
         return summary_dict
+
 
     def read_sanitized_summary_sha256(self, run_id: str) -> Optional[str]:
         run_dir = self.get_run_dir(run_id)
