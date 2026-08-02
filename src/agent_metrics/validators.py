@@ -39,7 +39,7 @@ def validate_usage(data: Dict[str, Any]) -> None:
     validate_non_negative_int(data.get("total_tokens"), "total_tokens")
 
     status = data.get("collection_status")
-    if status not in ("COMPLETE", "PARTIAL", "NOT_AVAILABLE"):
+    if status not in ("COMPLETE", "PARTIAL", "NOT_AVAILABLE", "AMBIGUOUS", "ERROR"):
         raise ValueError(f"Invalid collection_status: {status!r}")
 
     out_tok = data.get("output_tokens")
@@ -53,7 +53,7 @@ def validate_pricing(data: Dict[str, Any]) -> None:
         raise ValueError("Pricing data must be a dictionary")
 
     status = data.get("status")
-    if status not in ("CALCULATED", "UNVERIFIED", "PRICE_NOT_AVAILABLE", "INVALID_USAGE"):
+    if status not in ("CALCULATED", "UNVERIFIED", "PRICE_NOT_AVAILABLE", "INVALID_USAGE", "USAGE_NOT_AVAILABLE"):
         raise ValueError(f"Invalid pricing status: {status!r}")
 
     cost = data.get("api_equivalent_cost_usd")

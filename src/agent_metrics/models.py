@@ -31,8 +31,11 @@ class CockpitConfidence(str, Enum):
 
 
 class CorrelationConfidence(str, Enum):
+    EXACT_SESSION_AND_CURSOR = "EXACT_SESSION_AND_CURSOR"
     EXACT_SESSION = "EXACT_SESSION"
+    EXACT_RUN_ID = "EXACT_RUN_ID"
     EXACT_WORKTREE = "EXACT_WORKTREE"
+    EXACT_PROCESS = "EXACT_PROCESS"
     EXACT_WORK_PACKAGE = "EXACT_WORK_PACKAGE"
     TIME_WINDOW_MATCH = "TIME_WINDOW_MATCH"
     AMBIGUOUS = "AMBIGUOUS"
@@ -44,6 +47,7 @@ class CollectorStatus(str, Enum):
     AVAILABLE = "AVAILABLE"
     CONFIG_REQUIRED = "CONFIG_REQUIRED"
     NOT_AVAILABLE = "NOT_AVAILABLE"
+    AMBIGUOUS = "AMBIGUOUS"
     UNSUPPORTED = "UNSUPPORTED"
     ERROR = "ERROR"
 
@@ -69,6 +73,15 @@ class TimingInfo:
     started_at: str
     finished_at: Optional[str] = None
     wall_clock_seconds: Optional[float] = None
+    agent_process_seconds: Optional[float] = None
+    model_event_started_at: Optional[str] = None
+    model_event_finished_at: Optional[str] = None
+    model_event_span_seconds: Optional[float] = None
+    ci_queued_at: Optional[str] = None
+    ci_started_at: Optional[str] = None
+    ci_completed_at: Optional[str] = None
+    ci_queue_seconds: Optional[float] = None
+    ci_run_seconds: Optional[float] = None
     agent_active_seconds: Optional[float] = None  # Always null unless explicit telemetry
     ci_wait_seconds: Optional[float] = None
 
@@ -96,6 +109,7 @@ class UsageInfo:
 class PricingInfo:
     price_snapshot_date: Optional[str] = None
     price_source: Optional[str] = None
+    price_snapshot_version: Optional[int] = None
     currency: str = "USD"
     api_equivalent_cost_usd: Optional[float] = None
     actual_billed_cost_usd: Optional[float] = None  # Always null unless explicit real bill provided
@@ -162,10 +176,13 @@ class GithubInfo:
     additions: Optional[int] = None
     deletions: Optional[int] = None
     ci_run_id: Optional[str] = None
+    ci_queued_at: Optional[str] = None
     ci_started_at: Optional[str] = None
     ci_completed_at: Optional[str] = None
     workflow_duration_seconds: Optional[float] = None
     ci_wait_seconds: Optional[float] = None
+    ci_queue_seconds: Optional[float] = None
+    ci_run_seconds: Optional[float] = None
     ci_result: Optional[str] = None
 
     def __getitem__(self, item: str) -> Any:

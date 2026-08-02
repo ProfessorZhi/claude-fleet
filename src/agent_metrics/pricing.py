@@ -89,6 +89,7 @@ class PricingEngine:
         if not is_verified:
             return PricingInfo(
                 price_snapshot_date=self.pricing_registry.get("pricing_date") or self.pricing_registry.get("snapshot_date"),
+                price_snapshot_version=self.pricing_registry.get("version"),
                 price_source=model_cfg.get("source_url") or self.pricing_registry.get("source"),
                 currency="USD",
                 api_equivalent_cost_usd=None,
@@ -96,20 +97,16 @@ class PricingEngine:
                 status="UNVERIFIED",
             )
 
-        if input_tokens is None and output_tokens is None:
+        if input_tokens is None or output_tokens is None:
             return PricingInfo(
                 price_snapshot_date=self.pricing_registry.get("pricing_date") or self.pricing_registry.get("snapshot_date"),
+                price_snapshot_version=self.pricing_registry.get("version"),
                 price_source=model_cfg.get("source_url") or self.pricing_registry.get("source"),
                 currency="USD",
                 api_equivalent_cost_usd=None,
                 actual_billed_cost_usd=None,
-                status="CALCULATED",
+                status="USAGE_NOT_AVAILABLE",
             )
-
-        if input_tokens is None:
-            input_tokens = 0
-        if output_tokens is None:
-            output_tokens = 0
 
         # Invalid usage checks (non-integer or negative)
         for tok_val, tok_name in [
@@ -128,14 +125,33 @@ class PricingEngine:
             if not model_cfg.get("reasoning_included_in_output", False):
                 return PricingInfo(status="PRICE_NOT_AVAILABLE")
 
-        input_rate = model_cfg.get("input_price_per_1m") or model_cfg.get("rates", {}).get("input_per_million", 0.0) or 0.0
-        output_rate = model_cfg.get("output_price_per_1m") or model_cfg.get("rates", {}).get("output_per_million", 0.0) or 0.0
-        cache_read_rate = model_cfg.get("cached_input_price_per_1m") or model_cfg.get("rates", {}).get("cache_read_per_million", 0.0) or 0.0
-        cache_write_rate = model_cfg.get("cache_write_price_per_1m") or model_cfg.get("rates", {}).get("cache_write_per_million", 0.0) or 0.0
+        input_rate = model_cfg.get("input_price_per_1m")
+        output_rate = model_cfg.get("output_price_per_1m")
+        cache_read_rate = model_cfg.get("cached_input_price_per_1m")
+        cache_write_rate = model_cfg.get("cache_write_price_per_1m")
+
+        if input_rate is None or output_rate is None:
+            return PricingInfo(
+                price_snapshot_date=self.pricing_registry.get("pricing_date") or self.pricing_registry.get("snapshot_date"),
+                price_snapshot_version=self.pricing_registry.get("version"),
+                price_source=model_cfg.get("source_url") or self.pricing_registry.get("source"),
+                currency="USD",
+                api_equivalent_cost_usd=None,
+                actual_billed_cost_usd=None,
+                status="PRICE_NOT_AVAILABLE",
+            )
+        cache_read_rate = cache_read_rate if cache_read_rate is not None else input_rate
+        cache_write_rate = cache_write_rate if cache_write_rate is not None else input_rate
 
         c_read = cache_read_tokens or 0
         c_write = cache_write_tokens or 0
-        uncached_input = max(0, input_tokens - c_read - c_write)
+        usage_semantics = model_cfg.get("usage_semantics") or {}
+        if usage_semantics.get("input_includes_cache_buckets", True):
+            uncached_input = input_tokens - c_read - c_write
+            if uncached_input < 0:
+                return PricingInfo(status="INVALID_USAGE")
+        else:
+            uncached_input = input_tokens
 
         # Token cost calculation
         cost = (
@@ -147,6 +163,7 @@ class PricingEngine:
 
         return PricingInfo(
             price_snapshot_date=self.pricing_registry.get("pricing_date") or self.pricing_registry.get("snapshot_date"),
+            price_snapshot_version=self.pricing_registry.get("version"),
             price_source=model_cfg.get("source_url") or self.pricing_registry.get("source"),
             currency="USD",
             api_equivalent_cost_usd=round(cost, 6),

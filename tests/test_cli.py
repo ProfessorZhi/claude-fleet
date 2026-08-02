@@ -67,6 +67,77 @@ class TestCLI(unittest.TestCase):
             self.assertIn("github_cli", data)
             self.assertIn("cockpit", data)
 
+    def test_snapshot_codex_json_output(self):
+        fake_snapshot = {
+            "status": "COMPLETE",
+            "source": "cockpit_report_http",
+            "provider": "OpenAI",
+            "primary_window": {"percentage": 99.0},
+        }
+        with patch(
+            "agent_metrics.cli.CodexQuotaCollector.capture_snapshot",
+            return_value=fake_snapshot,
+        ), patch("sys.stdout", new=io.StringIO()) as fake_out:
+            code = self.cli.cmd_snapshot(provider="codex", json_output=True)
+        self.assertEqual(code, EXIT_OK)
+        data = json.loads(fake_out.getvalue())
+        self.assertEqual(data["provider"], "codex")
+        self.assertEqual(data["status"], "COMPLETE")
+        self.assertEqual(data["snapshot"]["primary_window"]["percentage"], 99.0)
+
+    def test_snapshot_invalid_provider(self):
+        with patch("sys.stderr", new=io.StringIO()):
+            code = self.cli.cmd_snapshot(provider="unknown-provider", json_output=True)
+        self.assertEqual(code, EXIT_INVALID_INPUT)
+
+    def test_bind_session_rejects_path_like_session_id(self):
+        with patch("sys.stdout", new=io.StringIO()) as fake_out:
+            self.cli.cmd_start(agent_shell="Codex", provider="OpenAI", json_output=True)
+            run_id = json.loads(fake_out.getvalue())["run_id"]
+
+        with patch("sys.stderr", new=io.StringIO()):
+            code = self.cli.cmd_bind_session(
+                run_id=run_id,
+                agent_session_id="C:\\Users\\PrivateUser\\session",
+                binding_source="manual",
+            )
+        self.assertEqual(code, EXIT_INVALID_INPUT)
+
+    def test_bind_session_updates_private_context(self):
+        with patch("sys.stdout", new=io.StringIO()) as fake_out:
+            self.cli.cmd_start(agent_shell="Codex", provider="OpenAI", json_output=True)
+            run_id = json.loads(fake_out.getvalue())["run_id"]
+
+        with patch("sys.stdout", new=io.StringIO()):
+            code = self.cli.cmd_bind_session(
+                run_id=run_id,
+                agent_session_id="thread-abc123",
+                agent_process_id=1234,
+                binding_source="codex_exec_json_thread",
+                json_output=True,
+            )
+        self.assertEqual(code, EXIT_OK)
+        ctx = self.storage.read_run_context(run_id)
+        self.assertEqual(ctx["agent_session_id"], "thread-abc123")
+        self.assertEqual(ctx["agent_process_id"], 1234)
+        self.assertEqual(ctx["session_binding_status"], "BOUND")
+
+    def test_mark_session_ambiguous_updates_private_context(self):
+        with patch("sys.stdout", new=io.StringIO()) as fake_out:
+            self.cli.cmd_start(agent_shell="Claude-Code", provider="DeepSeek", json_output=True)
+            run_id = json.loads(fake_out.getvalue())["run_id"]
+
+        with patch("sys.stdout", new=io.StringIO()):
+            code = self.cli.cmd_mark_session_ambiguous(
+                run_id=run_id,
+                binding_source="new_jsonl_after_process_start",
+                json_output=True,
+            )
+        self.assertEqual(code, EXIT_OK)
+        ctx = self.storage.read_run_context(run_id)
+        self.assertEqual(ctx["session_binding_status"], "AMBIGUOUS")
+        self.assertIsNone(ctx["agent_session_id"])
+
     # Test 2: start creates Run directory and run-context.json
     def test_start_creates_run(self):
         with patch("sys.stdout", new=io.StringIO()) as fake_out:
@@ -114,6 +185,39 @@ class TestCLI(unittest.TestCase):
             self.assertIsNotNone(summary["timing"]["finished_at"])
             self.assertIsNotNone(summary["timing"]["wall_clock_seconds"])
             self.assertGreaterEqual(summary["timing"]["wall_clock_seconds"], 0.0)
+
+    def test_finish_does_not_promote_quota_attribution_from_exact_session(self):
+        with patch("sys.stdout", new=io.StringIO()) as fake_start_out:
+            self.cli.cmd_start(agent_shell="Claude-Code", provider="Anthropic", session_id="session-abc123")
+            run_id = extract_run_id(fake_start_out.getvalue())
+
+        with patch(
+            "agent_metrics.cli.ClaudeCodeCollector.collect",
+            return_value={
+                "status": "AVAILABLE",
+                "matched_session": {
+                    "session_id": "session-abc123",
+                    "input_tokens": 5,
+                    "output_tokens": 1,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 0,
+                    "total_tokens": 6,
+                    "observed_model": "claude-3-5-sonnet-20241022",
+                    "start_time": None,
+                    "end_time": None,
+                    "session_cursor_after": {},
+                },
+                "correlation_confidence": "EXACT_SESSION_AND_CURSOR",
+            },
+        ), patch("sys.stdout", new=io.StringIO()):
+            code = self.cli.cmd_finish(run_id=run_id)
+
+        self.assertEqual(code, EXIT_OK)
+        summary = self.storage.read_sanitized_summary(run_id)
+        self.assertEqual(summary["usage"]["correlation_confidence"], "EXACT_SESSION_AND_CURSOR")
+        self.assertEqual(summary["quota"]["scope"], "ACCOUNT")
+        self.assertEqual(summary["quota"]["attribution"], "NOT_PROVEN")
 
     # Test 6: export JSON format
     def test_export_json_format(self):
