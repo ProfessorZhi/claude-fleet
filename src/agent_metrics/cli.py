@@ -52,6 +52,7 @@ from agent_metrics.collectors.cockpit_report_http_collector import CockpitReport
 from agent_metrics.collectors.antigravity_collector import AntigravityCollector
 from agent_metrics.redaction import sanitize_dict, scan_text_for_secret_types
 from agent_metrics.validators import validate_sanitized_summary
+from agent_metrics.pr_aggregate import build_pr_aggregate
 
 
 # Agent shell aliases that all map to Codex, with OpenAI as the canonical provider.
@@ -858,18 +859,80 @@ class CLIHandler:
 
         return EXIT_OK
 
+    def cmd_pr_summary(
+        self,
+        pr_number: Optional[int],
+        repository: Optional[str] = None,
+        json_output: bool = False,
+        output_path: Optional[str] = None,
+    ) -> int:
+        if pr_number is None or pr_number <= 0:
+            print("Error: pr_number must be a positive integer.", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+
+        try:
+            aggregate = build_pr_aggregate(
+                self.storage,
+                pr_number=pr_number,
+                repository=repository,
+            )
+        except Exception as e:
+            print(f"Error building PR summary: {e}", file=sys.stderr)
+            return EXIT_STORAGE_ERROR
+
+        if output_path:
+            try:
+                data_bytes = json.dumps(aggregate, indent=2, ensure_ascii=False).encode("utf-8")
+                StorageManager.atomic_write(Path(output_path).resolve(), data_bytes)
+            except Exception as e:
+                print(f"Error writing PR summary: {e}", file=sys.stderr)
+                return EXIT_STORAGE_ERROR
+
+        if json_output:
+            print(json.dumps(aggregate, indent=2))
+        else:
+            print(f"=== PR Summary (#{pr_number}) ===")
+            print(f"Runs        : {aggregate.get('runs_count')}")
+            print(f"Token Runs  : {aggregate.get('coverage', {}).get('token_observed_runs')}")
+            print(f"Total Tokens: {aggregate.get('usage_totals', {}).get('total_tokens')}")
+            print(f"API Cost USD: {aggregate.get('pricing_totals', {}).get('api_equivalent_cost_usd')}")
+            if output_path:
+                print(f"Output      : {Path(output_path).resolve()}")
+
+        return EXIT_OK
+
     def cmd_export(
         self,
-        run_id: str,
+        run_id: Optional[str],
         output_path: str,
         format_name: str = "json",
         format_type: Optional[str] = None,
+        pr_number: Optional[int] = None,
+        repository: Optional[str] = None,
     ) -> int:
+        fmt = format_type or format_name
+        if fmt == "pr-aggregate":
+            if pr_number is None or pr_number <= 0 or not output_path:
+                print("Error: pr-aggregate export requires --pr-number and output_path.", file=sys.stderr)
+                return EXIT_INVALID_INPUT
+            try:
+                export_data = build_pr_aggregate(
+                    self.storage,
+                    pr_number=pr_number,
+                    repository=repository,
+                )
+                data_bytes = json.dumps(export_data, indent=2, ensure_ascii=False).encode("utf-8")
+                StorageManager.atomic_write(Path(output_path).resolve(), data_bytes)
+                print(f"Exported PR #{pr_number} aggregate to {Path(output_path).resolve()} ({fmt})")
+                return EXIT_OK
+            except Exception as e:
+                print(f"Error exporting PR aggregate: {e}", file=sys.stderr)
+                return EXIT_STORAGE_ERROR
+
         if not run_id or not output_path:
             print("Error: run_id and output_path are required.", file=sys.stderr)
             return EXIT_INVALID_INPUT
 
-        fmt = format_type or format_name
         try:
             summary = self.storage.read_sanitized_summary(run_id)
         except IntegrityError as e:
@@ -1089,6 +1152,8 @@ def main(args: Optional[List[str]] = None) -> int:
     exp_p.add_argument("--output", dest="kw_output")
     exp_p.add_argument("--format", dest="format_name", default="json")
     exp_p.add_argument("--format-type", dest="format_type", default=None)
+    exp_p.add_argument("--pr-number", type=int)
+    exp_p.add_argument("--repository")
 
     # reconcile
     rec_p = subparsers.add_parser("reconcile")
@@ -1097,6 +1162,13 @@ def main(args: Optional[List[str]] = None) -> int:
     rec_p.add_argument("--repository")
     rec_p.add_argument("--pr-number", type=int)
     rec_p.add_argument("--json", action="store_true")
+
+    # pr-summary
+    prsum_p = subparsers.add_parser("pr-summary")
+    prsum_p.add_argument("--pr-number", type=int, required=True)
+    prsum_p.add_argument("--repository")
+    prsum_p.add_argument("--json", action="store_true")
+    prsum_p.add_argument("--output-path")
 
     # price
     price_p = subparsers.add_parser("price")
@@ -1168,7 +1240,21 @@ def main(args: Optional[List[str]] = None) -> int:
     elif parsed.command == "export":
         r_id = parsed.kw_run_id or parsed.pos_run_id
         out_p = parsed.kw_output_path or parsed.kw_output or parsed.pos_output_path
-        return cli.cmd_export(run_id=r_id, output_path=out_p, format_name=parsed.format_name, format_type=parsed.format_type)
+        return cli.cmd_export(
+            run_id=r_id,
+            output_path=out_p,
+            format_name=parsed.format_name,
+            format_type=parsed.format_type,
+            pr_number=parsed.pr_number,
+            repository=parsed.repository,
+        )
+    elif parsed.command == "pr-summary":
+        return cli.cmd_pr_summary(
+            pr_number=parsed.pr_number,
+            repository=parsed.repository,
+            json_output=parsed.json,
+            output_path=parsed.output_path,
+        )
     elif parsed.command == "price":
         return cli.cmd_price(
             model=parsed.model,

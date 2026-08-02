@@ -108,6 +108,33 @@ AI Coding Agents often self-report execution metrics (model name, active duratio
   --output "F:\temp\metrics-fragment.json"
 ```
 
+#### PR-Level Aggregate Summary
+
+Use one `start` / `finish` pair per agent execution, including each goal or
+ordinary prompt that should be accountable. Then aggregate the finished runs at
+the PR boundary:
+
+```powershell
+.\agent-metrics.ps1 pr-summary `
+  --pr-number 56 `
+  --repository "ProfessorZhi/Zuno" `
+  --json
+```
+
+To write the aggregate as a file:
+
+```powershell
+.\agent-metrics.ps1 export `
+  --format pr-aggregate `
+  --pr-number 56 `
+  --repository "ProfessorZhi/Zuno" `
+  --output "F:\temp\pr-56-agent-metrics.json"
+```
+
+The aggregate sums observed token buckets and calculated API-equivalent cost
+from all matching run summaries. Runs whose usage is `NOT_AVAILABLE` or
+`AMBIGUOUS` remain listed as unresolved evidence instead of being guessed.
+
 ---
 
 ## 5. Cockpit Tools Integration
@@ -237,6 +264,10 @@ semantics cannot be proven, the snapshot is recorded with `percentage_semantics
 - **Quota Scope is Account.** Quota snapshots are account context. They are
   not allocated to a session unless the run proves an exclusive session window;
   concurrent sessions report `AMBIGUOUS_CONCURRENT_SESSIONS`.
+- **Antigravity Defaults to Quota-Only Unless Native Usage Exists.** When the
+  operator runs Antigravity as a single session, the PR aggregate can mark the
+  quota window as `EXCLUSIVE_SESSION_WINDOW_ASSUMED_BY_OPERATOR`, but token usage
+  remains `NOT_AVAILABLE` unless Antigravity emits structured request usage.
 - **This Round Did Not Validate Real Codex Requests.** End-to-end Codex
   network calls were intentionally skipped — the Runner is exercised with a
   fake Codex process.
