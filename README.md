@@ -62,13 +62,23 @@ session, is the reporting boundary:
 
 ```text
 Codex main thread
-├── split the PR into small worker tasks
-├── run Claude Code / DeepSeek worker for implementation
-├── run Claude Code / MiniMax worker for tests, docs, or alternatives
-├── review and integrate worker output
-├── run local tests and GitHub reconciliation
-└── produce one PR aggregate summary
+├── own architecture, risk, integration, git, PR, CI, and final audit
+├── split bulk work into small worker tasks
+├── run Claude Code / DeepSeek workers for simple implementation chores
+├── run Claude Code / MiniMax workers for tests, docs, variants, or cleanup
+├── review and integrate worker output before commit
+├── reconcile GitHub / CI and request ChatGPT review when useful
+└── produce one PR aggregate summary with all measured runs
 ```
+
+Use Codex for the work where mistakes are expensive: product boundary,
+architecture, complex module design, security review, cross-file integration,
+pricing semantics, schema changes, git history, PR body, CI interpretation, and
+final acceptance. Use Claude Code workers for high-volume but lower-complexity
+tasks: focused tests, small docs updates, fixture generation, mechanical
+cleanup, simple bug fixes, read-only audits, and alternative implementation
+drafts. If a worker task becomes ambiguous, cross-cutting, or security-sensitive,
+stop that worker and bring the decision back to Codex.
 
 Use **one metrics run per worker task**. A worker task may be a goal, a normal
 prompt, a review fix, or a test-writing pass. Each run records its own wall
@@ -87,6 +97,43 @@ being guessed.
 Antigravity can be included in a PR as account-scope quota context, but it is
 not a token-complete worker unless a native structured usage source is found.
 Cockpit quota data cannot be converted into token usage.
+
+#### PR Naming and Reporting Discipline
+
+Every worker run should use a stable, human-readable `WorkPackage` that embeds
+the project, PR number, agent role, and task name:
+
+```text
+ZUNO-PR56-CODEX-ARCHITECTURE
+ZUNO-PR56-DS-WORKER-IMPLEMENT-A
+ZUNO-PR56-MM-WORKER-TESTS-B
+ZUNO-PR56-AG-QUOTA-SNAPSHOT
+```
+
+When a worker opens or updates a GitHub PR, its PR title or body should include
+the worker identity and metrics reference, for example:
+
+```text
+[Claude-DeepSeek][ZUNO-PR56] Implement Task A
+
+Metrics:
+- run_id: <RUN_ID>
+- summary: .local/runs/<RUN_ID>/sanitized-summary.json
+- usage: <COMPLETE | PARTIAL | NOT_AVAILABLE | AMBIGUOUS>
+- token_total: <number or NOT_AVAILABLE>
+- api_equivalent_cost_usd: <number or null>
+- quota_scope: ACCOUNT
+- quota_attribution: <NOT_PROVEN | AMBIGUOUS_CONCURRENT_SESSIONS | EXCLUSIVE_SESSION_WINDOW>
+- wall_clock_seconds: <number>
+- agent_process_seconds: <number>
+```
+
+Do not put prompt text, response text, code bodies, secrets, tokens, keys,
+emails, usernames, or full home paths into PR bodies, worker comments, metrics
+summaries, or ChatGPT review prompts. For ChatGPT or GitHub review, provide the
+PR link, changed-file summary, sanitized metrics summary, test results, and
+open questions. The reviewer should judge quality and cost, not receive private
+local transcripts.
 
 ### PowerShell Launcher Usage
 
@@ -270,7 +317,21 @@ Constraints:
 Definition of done:
 - Implementation or analysis for this task is complete.
 - Focused tests were run, or an exact blocker is reported.
-- Return changed files, commands run, test result, and blockers.
+- Return changed files, commands run, test result, blockers, and the Metrics section below.
+
+Metrics section to return:
+- agent: Claude Code + <DeepSeek | MiniMax>
+- pr_number: #<PR_NUMBER>
+- work_package: <WORK_PACKAGE>
+- run_id: <printed RUN_ID if available>
+- summary_path: <printed SUMMARY_PATH if available>
+- usage_status: <COMPLETE | PARTIAL | NOT_AVAILABLE | AMBIGUOUS | unknown until finish>
+- token_total: <number | NOT_AVAILABLE | unknown until finish>
+- api_equivalent_cost_usd: <number | null | unknown until finish>
+- quota_scope: ACCOUNT
+- quota_attribution: <NOT_PROVEN | AMBIGUOUS_CONCURRENT_SESSIONS | EXCLUSIVE_SESSION_WINDOW | unknown until finish>
+- wall_clock_seconds: <number | unknown until finish>
+- agent_process_seconds: <number | unknown until finish>
 ```
 
 ### Feasibility Matrix
