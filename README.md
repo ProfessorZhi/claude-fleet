@@ -54,6 +54,40 @@ AI Coding Agents often self-report execution metrics (model name, active duratio
 
 ## 4. Quick Start
 
+### Recommended Multi-Agent PR Workflow
+
+The recommended operating model is **Codex as the main orchestrator** and
+Claude Code as one or more measured worker agents. The PR, not a single model
+session, is the reporting boundary:
+
+```text
+Codex main thread
+├── split the PR into small worker tasks
+├── run Claude Code / DeepSeek worker for implementation
+├── run Claude Code / MiniMax worker for tests, docs, or alternatives
+├── review and integrate worker output
+├── run local tests and GitHub reconciliation
+└── produce one PR aggregate summary
+```
+
+Use **one metrics run per worker task**. A worker task may be a goal, a normal
+prompt, a review fix, or a test-writing pass. Each run records its own wall
+clock, process time, native Claude session segment, token buckets, pricing, and
+quota context. At the end of the PR, `pr-summary` aggregates all matching runs.
+
+This is feasible today for Claude Code workers because Claude Code writes local
+structured JSONL transcripts containing native `sessionId` and usage records.
+The runner binds the metrics run to that session and counts only the cursor
+segment created by that worker task. Running multiple Claude Code workers is
+supported, but each worker should use a distinct provider config directory or
+finish with exact session binding; if the runner sees multiple possible
+transcripts and cannot prove ownership, usage becomes `AMBIGUOUS` instead of
+being guessed.
+
+Antigravity can be included in a PR as account-scope quota context, but it is
+not a token-complete worker unless a native structured usage source is found.
+Cockpit quota data cannot be converted into token usage.
+
 ### PowerShell Launcher Usage
 
 #### Claude Code (Default)
@@ -76,6 +110,41 @@ AI Coding Agents often self-report execution metrics (model name, active duratio
   --work-package "DS-PHASE22-RUNTIME-EVIDENCE" `
   --pr-number 60
 ```
+
+For normal work, prefer the wrapper instead of calling `start` and `finish`
+manually. The wrapper launches Claude Code, detects the native Claude session,
+records a cursor, runs `finish` even when Claude fails, and propagates Claude's
+original exit code.
+
+#### Claude Code Worker: DeepSeek
+
+```powershell
+.\scripts\run-claude-with-metrics.ps1 `
+  -Provider DeepSeek `
+  -ConfiguredModel "deepseek-chat" `
+  -WorkPackage "ZUNO-PR56-WORKER-IMPLEMENT-A" `
+  -PRNumber 56 `
+  -Repository "ProfessorZhi/Zuno" `
+  -Worktree "F:\funny_project\Zuno" `
+  -ClaudeArgsJson '["-p","You are a Claude Code worker for PR #56. Implement Task A. Do not merge, rebase, reset, amend, force push, read secrets, or modify external tool configuration. Keep changes scoped. Run focused tests. Return changed files, tests run, result, and blockers.","--output-format","stream-json","--verbose"]'
+```
+
+#### Claude Code Worker: MiniMax
+
+```powershell
+.\scripts\run-claude-with-metrics.ps1 `
+  -Provider MiniMax `
+  -ConfiguredModel "MiniMax-M2.7" `
+  -WorkPackage "ZUNO-PR56-WORKER-TESTS-B" `
+  -PRNumber 56 `
+  -Repository "ProfessorZhi/Zuno" `
+  -Worktree "F:\funny_project\Zuno" `
+  -ClaudeArgsJson '["-p","You are a Claude Code worker for PR #56. Add focused tests for Task B. Do not merge, rebase, reset, amend, force push, read secrets, or modify external tool configuration. Return changed files, tests run, result, and blockers.","--output-format","stream-json","--verbose"]'
+```
+
+`-ClaudeArgsJson` is the most reliable way to pass Claude arguments on Windows.
+Use a JSON array of strings; do not rely on shell-specific `-- <args>` parsing
+for prompts that contain spaces or dashes.
 
 #### Antigravity
 ```powershell
@@ -135,6 +204,31 @@ The aggregate sums observed token buckets and calculated API-equivalent cost
 from all matching run summaries. Runs whose usage is `NOT_AVAILABLE` or
 `AMBIGUOUS` remain listed as unresolved evidence instead of being guessed.
 
+#### Checking Provider Quota / Balance Before Dispatch
+
+Quota and balance checks are optional pre-flight signals. They do not replace
+request-level token usage.
+
+```powershell
+.\agent-metrics.ps1 snapshot --provider deepseek --json
+.\agent-metrics.ps1 snapshot --provider minimax --json
+.\agent-metrics.ps1 snapshot --provider antigravity --json
+.\agent-metrics.ps1 snapshot --provider codex --json
+```
+
+Expected behavior:
+
+| Provider | Requirement | What It Means |
+| :--- | :--- | :--- |
+| `deepseek` | `DEEPSEEK_API_KEY` must be explicitly set | Reads official `/user/balance`; missing key returns `CONFIG_REQUIRED`. |
+| `minimax` | `MINIMAX_TOKEN_PLAN_KEY` must be explicitly set | Reads official `/v1/token_plan/remains`; missing key returns `CONFIG_REQUIRED`. |
+| `codex` | Cockpit local source if available | Reads sanitized account quota context only. |
+| `antigravity` | Cockpit report/local source if available | Reads sanitized Google account/model quota context only. |
+
+No snapshot command scans for API keys, prints secrets, switches accounts,
+refreshes OAuth tokens, or modifies Cockpit / Codex / Claude / Antigravity
+configuration.
+
 ---
 
 ## 5. Cockpit Tools Integration
@@ -144,6 +238,46 @@ from all matching run summaries. Runs whose usage is `NOT_AVAILABLE` or
 > - **CLIProxy Telemetry**: Token breakdowns are only captured if Antigravity / Agent traffic passes through the local Cockpit `CLIProxy`.
 > - **No Routing Modification**: `agent-metrics-collector` does **not** automatically modify system proxies, hosts files, or Antigravity routing configuration.
 > - Run `.\agent-metrics.ps1 doctor` to verify Cockpit detection.
+
+### Worker Prompt Template
+
+Use this prompt shape when Codex dispatches a Claude Code worker:
+
+```text
+You are a Claude Code worker for PR #<PR_NUMBER>.
+
+Task:
+<specific task>
+
+Repository:
+<owner/repo>
+
+Branch:
+<current branch>
+
+Constraints:
+- Work only inside the target repository/worktree.
+- Do not merge, rebase, reset, amend, cherry-pick, or force push.
+- Do not read secrets, tokens, credentials, account files, or browser storage.
+- Do not modify Codex, Claude Code, Cockpit, Antigravity, proxy, or account configuration.
+- Keep changes scoped to this task.
+- Do not include prompt text, response text, code bodies, keys, emails, usernames, or full home paths in metrics output.
+
+Definition of done:
+- Implementation or analysis for this task is complete.
+- Focused tests were run, or an exact blocker is reported.
+- Return changed files, commands run, test result, and blockers.
+```
+
+### Feasibility Matrix
+
+| Mode | Feasible Today | Token Accounting | Quota / Balance Accounting | Notes |
+| :--- | :---: | :--- | :--- | :--- |
+| Codex main thread | Yes | Via `codex exec --json` when using Codex runner | Codex quota via Cockpit when available | Best for orchestration, review, integration, git, PR, CI. |
+| Claude Code + DeepSeek | Yes | Claude JSONL session segment | DeepSeek `/user/balance` if `DEEPSEEK_API_KEY` is set | Good implementation worker. |
+| Claude Code + MiniMax | Yes | Claude JSONL session segment | MiniMax token plan if `MINIMAX_TOKEN_PLAN_KEY` is set | Good test/docs/alternative worker. |
+| Antigravity | Quota-only | `NOT_AVAILABLE` unless native usage logs are found | Cockpit Antigravity quota when available | Can be included in PR aggregate as unresolved quota context. |
+| Cockpit Tools | Read-only only | Never used as token source | Sanitized quota/account metadata only | No account switching, OAuth, token refresh, proxy changes, or gateway behavior. |
 
 ### Codex Quota Quick Start
 
@@ -231,6 +365,31 @@ newest file. It leaves usage attribution `AMBIGUOUS`, while still executing
 Each run is a session segment. For reused Claude sessions, `start` records a
 safe cursor and `finish` only counts JSONL bytes after that cursor, with
 message-id hash deduplication as a second guard against replayed events.
+
+#### What Claude Code Metrics Mean
+
+For Claude Code workers, request usage comes from Claude Code structured JSONL
+events, not from the agent's final prose answer and not from quota deltas.
+
+Per-run summary fields:
+
+| Field | Meaning |
+| :--- | :--- |
+| `usage.input_tokens` | Observed model input tokens for this run's session cursor segment. |
+| `usage.output_tokens` | Observed model output tokens for this run's session cursor segment. |
+| `usage.cache_read_tokens` | Observed cached input tokens read by the model. |
+| `usage.cache_write_tokens` | Observed cache creation/write tokens. |
+| `usage.reasoning_tokens` | Observed reasoning tokens when the provider reports them. |
+| `usage.collection_status` | `COMPLETE`, `PARTIAL`, `AMBIGUOUS`, or `NOT_AVAILABLE`. |
+| `usage.correlation_confidence` | `EXACT_SESSION_AND_CURSOR` is the desired state for worker accounting. |
+| `pricing.api_equivalent_cost_usd` | Versioned list-price API equivalent cost when pricing is available. |
+| `pricing.actual_billed_cost_usd` | Always `null` unless a real bill is explicitly supplied. |
+| `quota` / `provider_quota` | Account-scope quota/balance context; not token usage. |
+
+For PR reporting, `pr-summary` sums the token buckets and calculated API
+equivalent cost from all matching runs. It also reports coverage counts so a PR
+owner can see how many runs were token-complete, partial, quota-only, ambiguous,
+or unavailable.
 
 #### Summary Location
 
