@@ -231,6 +231,14 @@ if (-not $sessionBound -and -not $sessionAmbiguous) {
 $finishExit = 0
 $summaryPath = ""
 try {
+    if ($sessionAmbiguous) {
+        $ambiguousArgs = @(
+            "mark-session-ambiguous",
+            "--run-id", $runId,
+            "--binding-source", "new_jsonl_after_process_start"
+        )
+        Invoke-Am @ambiguousArgs | Out-Null
+    }
     $finishArgs = @(
         "finish",
         "--run-id", $runId,

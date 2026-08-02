@@ -325,6 +325,60 @@ class CLIHandler:
             print(f"Session bound for run {run_id}.")
         return EXIT_OK if binding_status == "BOUND" else EXIT_PARTIAL
 
+    def cmd_mark_session_ambiguous(
+        self,
+        run_id: str,
+        binding_source: str = "runner_ambiguous",
+        json_output: bool = False,
+    ) -> int:
+        if not run_id:
+            print("Error: run_id is required.", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+        try:
+            StorageManager.validate_run_id(run_id)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+        if (
+            not binding_source
+            or len(binding_source) > 80
+            or any(ch in binding_source for ch in ('/', '\\', ':', '\r', '\n', ' '))
+            or scan_text_for_secret_types(binding_source)
+        ):
+            print("Error: invalid or unsafe binding_source.", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+
+        try:
+            updated = self.storage.update_run_context(run_id, {
+                "session_binding_source": binding_source,
+                "session_binding_status": "AMBIGUOUS",
+                "agent_session_id": None,
+                "session_id": None,
+                "session_cursor_before": None,
+            })
+            self.storage.append_event(run_id, {
+                "event_id": str(uuid.uuid4()),
+                "event_type": "SESSION_BINDING_AMBIGUOUS",
+                "observed_at": get_utc_now_iso(),
+                "source": binding_source,
+                "run_id": run_id,
+                "session_binding_status": "AMBIGUOUS",
+            })
+        except Exception as e:
+            print(f"Error marking session ambiguous: {e}", file=sys.stderr)
+            return EXIT_STORAGE_ERROR
+
+        result = {
+            "run_id": run_id,
+            "session_binding_source": binding_source,
+            "session_binding_status": updated.get("session_binding_status"),
+        }
+        if json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"Session binding ambiguous for run {run_id}.")
+        return EXIT_OK
+
     def cmd_finish(
         self,
         run_id: str,
@@ -484,9 +538,15 @@ class CLIHandler:
                 session_record["correlation_confidence"] = CorrelationConfidence.AMBIGUOUS.value
         elif agent_shell.lower() in ("claude-code", "claudecode", "claude"):
             claude_coll = ClaudeCodeCollector()
-            claude_ctx = dict(ctx)
-            claude_ctx["require_exact_session"] = True
-            claude_res = claude_coll.collect(run_context=claude_ctx)
+            if ctx.get("session_binding_status") == "AMBIGUOUS":
+                claude_res = {
+                    "matched_session": None,
+                    "correlation_confidence": CorrelationConfidence.AMBIGUOUS.value,
+                }
+            else:
+                claude_ctx = dict(ctx)
+                claude_ctx["require_exact_session"] = True
+                claude_res = claude_coll.collect(run_context=claude_ctx)
             if claude_res.get("matched_session"):
                 sess = claude_res["matched_session"]
                 observed_model = sess.get("observed_model")
@@ -1008,6 +1068,12 @@ def main(args: Optional[List[str]] = None) -> int:
     bind_p.add_argument("--binding-source", required=True)
     bind_p.add_argument("--json", action="store_true")
 
+    # mark-session-ambiguous
+    amb_p = subparsers.add_parser("mark-session-ambiguous")
+    amb_p.add_argument("--run-id", required=True)
+    amb_p.add_argument("--binding-source", required=True)
+    amb_p.add_argument("--json", action="store_true")
+
     # show
     show_p = subparsers.add_parser("show")
     show_p.add_argument("pos_run_id", nargs="?")
@@ -1084,6 +1150,12 @@ def main(args: Optional[List[str]] = None) -> int:
             run_id=parsed.run_id,
             agent_session_id=parsed.agent_session_id,
             agent_process_id=parsed.agent_process_id,
+            binding_source=parsed.binding_source,
+            json_output=parsed.json,
+        )
+    elif parsed.command == "mark-session-ambiguous":
+        return cli.cmd_mark_session_ambiguous(
+            run_id=parsed.run_id,
             binding_source=parsed.binding_source,
             json_output=parsed.json,
         )

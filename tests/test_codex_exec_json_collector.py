@@ -114,6 +114,23 @@ class TestCodexExecJsonCollector(unittest.TestCase):
             self.assertEqual(res["agent_session_id"], "thread-b")
             self.assertEqual(res["usage"]["input_tokens"], 20)
 
+    def test_windows_powershell_utf16_redirection_stream(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "codex.jsonl"
+            line = json.dumps({
+                "thread_id": "thread-utf16",
+                "turn_ordinal": 1,
+                "model": "gpt-5.3-codex",
+                "usage": {"input_tokens": 50, "output_tokens": 7},
+            }) + "\n"
+            p.write_bytes(line.encode("utf-16"))
+
+            res = CodexExecJsonCollector({"json_log_path": str(p)}).collect()
+
+            self.assertEqual(res["status"], "COMPLETE")
+            self.assertEqual(res["agent_session_id"], "thread-utf16")
+            self.assertEqual(res["usage"]["input_tokens"], 50)
+
 
 if __name__ == "__main__":
     unittest.main()

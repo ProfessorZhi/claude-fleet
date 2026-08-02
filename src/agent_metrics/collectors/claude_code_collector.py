@@ -172,12 +172,22 @@ class ClaudeCodeCollector(BaseCollector):
 
         matched_config_name, jsonl_file = files[0]
         offset = 0
+        found_baseline_entry = False
         for entry in baseline or []:
             if entry.get("session_id") == session_id and entry.get("config_dir_name") == matched_config_name:
                 offset = _safe_int(entry.get("file_size"))
+                found_baseline_entry = True
                 break
 
-        cursor = self._read_cursor_metadata(jsonl_file, offset)
+        cursor = (
+            self._read_cursor_metadata(jsonl_file, offset)
+            if found_baseline_entry and offset > 0
+            else {
+                "jsonl_size_before": 0,
+                "last_event_timestamp_before": None,
+                "known_message_id_hashes_before": [],
+            }
+        )
         cursor["config_dir_name"] = matched_config_name
         cursor["session_id"] = session_id
         return cursor, CollectorStatus.AVAILABLE.value
@@ -232,7 +242,7 @@ class ClaudeCodeCollector(BaseCollector):
                 if offset_before and offset_before <= file_size_after:
                     f.seek(offset_before)
                 for line in f:
-                    line = line.strip()
+                    line = line.strip().lstrip("\ufeff")
                     if not line or not line.startswith("{"):
                         continue
                     try:

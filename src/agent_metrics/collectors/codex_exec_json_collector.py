@@ -147,6 +147,15 @@ def _observed_model(obj: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _read_text_lines(path: Path) -> list[str]:
+    data = path.read_bytes()
+    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+        return data.decode("utf-16", errors="replace").splitlines()
+    if data[:200].count(b"\x00") > 20:
+        return data.decode("utf-16", errors="replace").splitlines()
+    return data.decode("utf-8-sig", errors="replace").splitlines()
+
+
 class CodexExecJsonCollector(BaseCollector):
     name = "codex_exec_json"
 
@@ -189,9 +198,8 @@ class CodexExecJsonCollector(BaseCollector):
         malformed = 0
 
         try:
-            with open(p, "r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    stripped = line.strip()
+            for line in _read_text_lines(p):
+                    stripped = line.strip().lstrip("\ufeff")
                     if not stripped or not stripped.startswith("{"):
                         continue
                     try:

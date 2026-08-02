@@ -192,6 +192,29 @@ class TestClaudeCodeCollectorStream(unittest.TestCase):
         self.assertEqual(res["input_tokens"], 5)
         self.assertEqual(res["output_tokens"], 1)
 
+    def test_new_session_cursor_does_not_mark_existing_new_messages_before(self):
+        sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        jsonl_file = self.projects_dir / f"{sid}.jsonl"
+        jsonl_file.write_text(
+            json.dumps({
+                "type": "assistant",
+                "sessionId": sid,
+                "timestamp": "2026-08-01T10:00:00Z",
+                "message": {"id": "m-1", "usage": {"input_tokens": 7, "output_tokens": 2}},
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        collector = ClaudeCodeCollector(config={"claude_config_dir": str(self.claude_dir)})
+        cursor, status = collector.create_session_cursor(sid, baseline=[])
+
+        self.assertEqual(status, "AVAILABLE")
+        self.assertEqual(cursor["jsonl_size_before"], 0)
+        self.assertEqual(cursor["known_message_id_hashes_before"], [])
+        res = collector.parse_transcript_line_by_line(jsonl_file, cursor_before=cursor)
+        self.assertEqual(res["input_tokens"], 7)
+        self.assertEqual(res["output_tokens"], 2)
+
     def test_prompt_content_not_extracted(self):
         jsonl_file = self.projects_dir / "bbbbbbbb-cccc-dddd-eeee-ffffffffffff.jsonl"
         lines = [

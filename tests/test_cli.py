@@ -122,6 +122,22 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(ctx["agent_process_id"], 1234)
         self.assertEqual(ctx["session_binding_status"], "BOUND")
 
+    def test_mark_session_ambiguous_updates_private_context(self):
+        with patch("sys.stdout", new=io.StringIO()) as fake_out:
+            self.cli.cmd_start(agent_shell="Claude-Code", provider="DeepSeek", json_output=True)
+            run_id = json.loads(fake_out.getvalue())["run_id"]
+
+        with patch("sys.stdout", new=io.StringIO()):
+            code = self.cli.cmd_mark_session_ambiguous(
+                run_id=run_id,
+                binding_source="new_jsonl_after_process_start",
+                json_output=True,
+            )
+        self.assertEqual(code, EXIT_OK)
+        ctx = self.storage.read_run_context(run_id)
+        self.assertEqual(ctx["session_binding_status"], "AMBIGUOUS")
+        self.assertIsNone(ctx["agent_session_id"])
+
     # Test 2: start creates Run directory and run-context.json
     def test_start_creates_run(self):
         with patch("sys.stdout", new=io.StringIO()) as fake_out:
