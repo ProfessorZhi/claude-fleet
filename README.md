@@ -240,6 +240,12 @@ manually. The wrapper launches Claude Code, detects the native Claude session,
 records a cursor, runs `finish` even when Claude fails, and propagates Claude's
 original exit code.
 
+The wrapper is provider-aware. When `-Provider DeepSeek` or `-Provider MiniMax`
+is used, it prefers the matching launcher command (`claude-deepseek` or
+`claude-minimax`) when available, then falls back to the generic Claude
+command. This lets you treat the provider-specific commands as real subagent
+launchers without hand-picking the executable every time.
+
 #### Claude Code Worker: DeepSeek
 
 ```powershell

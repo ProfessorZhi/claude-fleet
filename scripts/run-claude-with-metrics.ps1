@@ -153,6 +153,33 @@ function Invoke-Am {
     return $LASTEXITCODE
 }
 
+function Resolve-ClaudeCommand([string]$ProviderName, [string]$RequestedCommand) {
+    if (-not [string]::IsNullOrWhiteSpace($RequestedCommand) -and $RequestedCommand -ne "claude") {
+        return $RequestedCommand
+    }
+
+    $preferred = @()
+    switch ($ProviderName) {
+        "DeepSeek" { $preferred = @("claude-deepseek.cmd", "claude-deepseek", "claude.cmd", "claude") }
+        "MiniMax" { $preferred = @("claude-minimax.cmd", "claude-minimax", "claude.cmd", "claude") }
+        default { $preferred = @("claude.cmd", "claude") }
+    }
+
+    foreach ($candidate in $preferred) {
+        try {
+            $resolved = Get-Command $candidate -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($resolved) {
+                if ($resolved.Source) { return [string]$resolved.Source }
+                if ($resolved.Definition) { return [string]$resolved.Definition }
+                if ($resolved.Path) { return [string]$resolved.Path }
+                return $candidate
+            }
+        } catch {}
+    }
+
+    return $RequestedCommand
+}
+
 if ([string]::IsNullOrWhiteSpace($ClaudeConfigDir)) {
     if ($Provider -eq "DeepSeek") {
         $ClaudeConfigDir = Join-Path $HOME ".claude-deepseek"
@@ -164,6 +191,7 @@ if ([string]::IsNullOrWhiteSpace($ClaudeConfigDir)) {
 $oldClaudeConfigDir = $env:CLAUDE_CONFIG_DIR
 $env:CLAUDE_CONFIG_DIR = $ClaudeConfigDir
 $sessionInventoryBefore = Get-ClaudeInventory $ClaudeConfigDir
+$resolvedClaudeCommand = Resolve-ClaudeCommand -ProviderName $Provider -RequestedCommand $ClaudeCommand
 
 if (-not [string]::IsNullOrWhiteSpace($ClaudeArgsJson)) {
     try {
@@ -212,7 +240,7 @@ $sessionAmbiguous = $false
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 try {
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $ClaudeCommand
+    $psi.FileName = $resolvedClaudeCommand
     $psi.UseShellExecute = $false
     $psi.Arguments = Join-WindowsProcessArguments $ClaudeArgs
     $proc = [System.Diagnostics.Process]::Start($psi)
