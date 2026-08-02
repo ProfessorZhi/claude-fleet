@@ -79,6 +79,31 @@ function Get-RunIdFromOutput([string]$output) {
     return $null
 }
 
+function Get-UniqueCodexThreadIdFromJsonl([string]$Path) {
+    $threads = @{}
+    if (-not (Test-Path -LiteralPath $Path -ErrorAction SilentlyContinue)) { return $null }
+    try {
+        foreach ($rawLine in (Get-Content -LiteralPath $Path -Encoding UTF8 -ErrorAction Stop)) {
+            $line = $rawLine.Trim()
+            if (-not $line.StartsWith("{")) { continue }
+            try {
+                $obj = $line | ConvertFrom-Json -ErrorAction Stop
+                $tid = $null
+                if ($obj.thread_id) { $tid = [string]$obj.thread_id }
+                elseif ($obj.threadId) { $tid = [string]$obj.threadId }
+                elseif ($obj.thread -and $obj.thread.id) { $tid = [string]$obj.thread.id }
+                if ($tid -and $tid -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+                    $threads[$tid] = $true
+                }
+            } catch {}
+        }
+    } catch {}
+    if ($threads.Count -eq 1) {
+        foreach ($key in $threads.Keys) { return [string]$key }
+    }
+    return $null
+}
+
 # --- 1. Pre-flight validation ------------------------------------------------
 
 if ([string]::IsNullOrWhiteSpace($WorkPackage)) {
@@ -200,6 +225,16 @@ $finishFailed = $false
 
 try {
     $processSeconds = if ($sw) { [Math]::Round($sw.Elapsed.TotalSeconds, 3) } else { $null }
+    $codexThreadId = Get-UniqueCodexThreadIdFromJsonl $codexJsonLog
+    if ($codexThreadId) {
+        $bindArgs = @(
+            "bind-session",
+            "--run-id", $runId,
+            "--agent-session-id", $codexThreadId,
+            "--binding-source", "codex_exec_json_thread"
+        )
+        Invoke-Am @bindArgs | Out-Null
+    }
     $finishArgs = @("finish", "--run-id", $runId, "--codex-json-log", $codexJsonLog)
     if ($null -ne $processSeconds) {
         $finishArgs += @("--agent-process-seconds", ([string]::Format([Globalization.CultureInfo]::InvariantCulture, "{0}", $processSeconds)))

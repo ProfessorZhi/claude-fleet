@@ -156,6 +156,22 @@ class StorageManager:
         except Exception as e:
             raise StorageError(f"Error reading run context for ID {run_id!r}: {e}") from e
 
+    def update_run_context(self, run_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Atomically merge sanitized private metadata into run-context.json."""
+        if not isinstance(updates, dict):
+            raise StorageError("Run context updates must be a dictionary")
+
+        ctx = self.read_run_context(run_id)
+        merged = dict(ctx)
+        merged.update(sanitize_dict(updates))
+        merged["run_id"] = run_id
+        validate_run_context(merged)
+
+        ctx_file = self.get_run_dir(run_id) / "run-context.json"
+        data_bytes = json.dumps(merged, indent=2, ensure_ascii=False).encode("utf-8")
+        self.atomic_write(ctx_file, data_bytes)
+        return merged
+
     def append_event(self, run_id: str, event: Dict[str, Any]) -> None:
         run_dir = self.get_run_dir(run_id)
         events_file = run_dir / "events.jsonl"

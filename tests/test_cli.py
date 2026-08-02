@@ -90,6 +90,38 @@ class TestCLI(unittest.TestCase):
             code = self.cli.cmd_snapshot(provider="unknown-provider", json_output=True)
         self.assertEqual(code, EXIT_INVALID_INPUT)
 
+    def test_bind_session_rejects_path_like_session_id(self):
+        with patch("sys.stdout", new=io.StringIO()) as fake_out:
+            self.cli.cmd_start(agent_shell="Codex", provider="OpenAI", json_output=True)
+            run_id = json.loads(fake_out.getvalue())["run_id"]
+
+        with patch("sys.stderr", new=io.StringIO()):
+            code = self.cli.cmd_bind_session(
+                run_id=run_id,
+                agent_session_id="C:\\Users\\PrivateUser\\session",
+                binding_source="manual",
+            )
+        self.assertEqual(code, EXIT_INVALID_INPUT)
+
+    def test_bind_session_updates_private_context(self):
+        with patch("sys.stdout", new=io.StringIO()) as fake_out:
+            self.cli.cmd_start(agent_shell="Codex", provider="OpenAI", json_output=True)
+            run_id = json.loads(fake_out.getvalue())["run_id"]
+
+        with patch("sys.stdout", new=io.StringIO()):
+            code = self.cli.cmd_bind_session(
+                run_id=run_id,
+                agent_session_id="thread-abc123",
+                agent_process_id=1234,
+                binding_source="codex_exec_json_thread",
+                json_output=True,
+            )
+        self.assertEqual(code, EXIT_OK)
+        ctx = self.storage.read_run_context(run_id)
+        self.assertEqual(ctx["agent_session_id"], "thread-abc123")
+        self.assertEqual(ctx["agent_process_id"], 1234)
+        self.assertEqual(ctx["session_binding_status"], "BOUND")
+
     # Test 2: start creates Run directory and run-context.json
     def test_start_creates_run(self):
         with patch("sys.stdout", new=io.StringIO()) as fake_out:

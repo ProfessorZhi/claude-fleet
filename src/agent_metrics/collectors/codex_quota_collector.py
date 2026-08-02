@@ -384,6 +384,30 @@ def _candidate_app_data_roots() -> List[Tuple[str, Optional[pathlib.Path]]]:
     return out
 
 
+def has_cockpit_app_data_candidate_file() -> bool:
+    """Fast status probe for known Cockpit/Codex quota cache filenames."""
+    for _label, base in _candidate_app_data_roots():
+        if base is None or not base.exists():
+            continue
+        for filename in COCKPIT_CODEX_FILENAMES:
+            try:
+                if (base / filename).is_file():
+                    return True
+            except OSError:
+                continue
+        try:
+            for child in base.iterdir():
+                if child.is_file() and child.name in COCKPIT_CODEX_FILENAMES:
+                    return True
+                if child.is_dir():
+                    for filename in COCKPIT_CODEX_FILENAMES:
+                        if (child / filename).is_file():
+                            return True
+        except OSError:
+            continue
+    return False
+
+
 def _try_load_json(path: pathlib.Path) -> Optional[Dict[str, Any]]:
     """Best-effort load a JSON object from ``path`` without raising."""
     try:
@@ -595,10 +619,7 @@ class CodexQuotaCollector(BaseCollector):
                 return CollectorStatus.AVAILABLE.value
         except Exception:
             pass
-        snap, source, _reason = load_cockpit_app_data_snapshot()
-        if source == CREDENTIAL_EXPORT_REJECTED:
-            return CollectorStatus.ERROR.value
-        if source == SOURCE_COCKPIT_APP_DATA and isinstance(snap, dict):
+        if has_cockpit_app_data_candidate_file():
             return CollectorStatus.AVAILABLE.value
         # Even if no Cockpit source is reachable on this host, the
         # collector is a real module that can still report status. From

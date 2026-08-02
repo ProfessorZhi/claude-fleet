@@ -151,6 +151,9 @@ The runner wraps `agent-metrics start` → `codex exec --json` → `finish`.
 It stores the raw JSONL stream in a run-private temporary directory, parses
 usage buckets, then removes the raw stream after `finish`. It propagates the
 original Codex exit code and always invokes `finish`, even when Codex fails.
+The collector binds the observed `thread_id` as the run's native agent session
+and deduplicates usage by `thread_id + turn identity`; if one private stream
+contains multiple threads without an explicit binding, usage is `AMBIGUOUS`.
 
 Stable stdout lines:
 
@@ -182,6 +185,26 @@ defaults to `.claude-minimax`. The full config path is not written to summary
 output; only logical names such as `deepseek`, `minimax`, or `custom` may be
 reported.
 
+The Claude runner records a session baseline, starts Claude Code as a child
+process, watches for exactly one new or growing JSONL transcript, reads the
+native `sessionId`, and calls:
+
+```powershell
+agent-metrics bind-session `
+  --run-id "<RUN_ID>" `
+  --agent-session-id "<CLAUDE_SESSION_ID>" `
+  --agent-process-id <PID> `
+  --binding-source new_jsonl_after_process_start
+```
+
+When multiple candidate transcripts change, the runner does not choose the
+newest file. It leaves usage attribution `AMBIGUOUS`, while still executing
+`finish` and preserving the original Claude exit code.
+
+Each run is a session segment. For reused Claude sessions, `start` records a
+safe cursor and `finish` only counts JSONL bytes after that cursor, with
+message-id hash deduplication as a second guard against replayed events.
+
 #### Summary Location
 
 Each run writes `.local/runs/<RUN_ID>/sanitized-summary.json` plus a
@@ -211,6 +234,9 @@ semantics cannot be proven, the snapshot is recorded with `percentage_semantics
 - **Delta $\neq$ Actual Billing Cost.** No pricing data is consulted.
 - **Balance / Quota $\neq$ Request Usage.** DeepSeek balance, MiniMax token
   plan remains, and Cockpit quota snapshots are separate metadata sources.
+- **Quota Scope is Account.** Quota snapshots are account context. They are
+  not allocated to a session unless the run proves an exclusive session window;
+  concurrent sessions report `AMBIGUOUS_CONCURRENT_SESSIONS`.
 - **This Round Did Not Validate Real Codex Requests.** End-to-end Codex
   network calls were intentionally skipped — the Runner is exercised with a
   fake Codex process.
@@ -239,6 +265,7 @@ semantics cannot be proven, the snapshot is recorded with `percentage_semantics
 | `CONFIGURED` | Model name retrieved from local configuration files. |
 | `INFERRED` | Model inferred based on provider defaults or heuristics. |
 | `QUOTA_ONLY` | Only quota balance delta was available; tokens remain `null`. |
+| `EXACT_SESSION_AND_CURSOR` | Native session ID and segment cursor matched; request usage may be `COMPLETE`. |
 | `EXACT_SESSION` | Session matched strictly by explicit session UUID. |
 | `EXACT_WORKTREE` | Session matched strictly by worktree directory path. |
 | `EXACT_WORK_PACKAGE` | Session matched strictly by work package identifier. |

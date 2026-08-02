@@ -121,6 +121,14 @@ def _timestamp(obj: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _event_type(obj: Dict[str, Any]) -> Optional[str]:
+    for key in ("type", "event", "event_type"):
+        value = obj.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def _parse_iso(value: str) -> Optional[datetime.datetime]:
     try:
         return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -172,6 +180,8 @@ class CodexExecJsonCollector(BaseCollector):
 
         turns: Dict[str, Dict[str, int]] = {}
         seen_events = set()
+        observed_threads = set()
+        usage_threads = set()
         synthetic_idx = 0
         observed_model = None
         first_ts = None
@@ -196,6 +206,10 @@ class CodexExecJsonCollector(BaseCollector):
                     if model:
                         observed_model = model
 
+                    tid = _thread_id(obj)
+                    if tid != "unknown-thread":
+                        observed_threads.add(tid)
+
                     ts = _timestamp(obj)
                     if ts:
                         parsed = _parse_iso(ts)
@@ -212,11 +226,13 @@ class CodexExecJsonCollector(BaseCollector):
                     usage = _extract_usage(obj)
                     if not usage:
                         continue
+                    if tid != "unknown-thread":
+                        usage_threads.add(tid)
                     ordinal = _turn_ordinal(obj)
                     if ordinal is None:
                         synthetic_idx += 1
                         ordinal = f"event-{synthetic_idx}"
-                    turns[f"{_thread_id(obj)}:{ordinal}"] = usage
+                    turns[f"{tid}:{ordinal}"] = usage
         except OSError:
             return {
                 "status": CollectorStatus.NOT_AVAILABLE.value,
@@ -236,6 +252,49 @@ class CodexExecJsonCollector(BaseCollector):
 
         total_tokens = totals["input_tokens"] + totals["output_tokens"]
         has_usage = any(totals.values())
+        requested_thread = (run_context or {}).get("agent_session_id") or (run_context or {}).get("thread_id")
+        candidate_threads = usage_threads or observed_threads
+        if requested_thread:
+            if requested_thread not in candidate_threads:
+                return {
+                    "status": "NOT_AVAILABLE",
+                    "usage": UsageInfo(collection_status="NOT_AVAILABLE").to_dict(),
+                    "agent_session_id": requested_thread,
+                    "correlation_confidence": CorrelationConfidence.NOT_AVAILABLE.value,
+                    "thread_count": len(candidate_threads),
+                    "turn_count": 0,
+                }
+            turns = {k: v for k, v in turns.items() if k.startswith(f"{requested_thread}:")}
+            totals = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "reasoning_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+            }
+            for usage in turns.values():
+                for key in totals:
+                    totals[key] += usage.get(key, 0)
+            total_tokens = totals["input_tokens"] + totals["output_tokens"]
+            has_usage = any(totals.values())
+            agent_session_id = requested_thread
+            confidence = CorrelationConfidence.EXACT_SESSION_AND_CURSOR.value if has_usage else CorrelationConfidence.NOT_AVAILABLE.value
+        elif len(candidate_threads) == 1:
+            agent_session_id = next(iter(candidate_threads))
+            confidence = CorrelationConfidence.EXACT_SESSION_AND_CURSOR.value if has_usage else CorrelationConfidence.NOT_AVAILABLE.value
+        elif len(candidate_threads) > 1:
+            return {
+                "status": "AMBIGUOUS",
+                "usage": UsageInfo(collection_status="AMBIGUOUS", correlation_confidence=CorrelationConfidence.AMBIGUOUS.value).to_dict(),
+                "agent_session_id": None,
+                "correlation_confidence": CorrelationConfidence.AMBIGUOUS.value,
+                "thread_count": len(candidate_threads),
+                "turn_count": 0,
+            }
+        else:
+            agent_session_id = None
+            confidence = CorrelationConfidence.NOT_AVAILABLE.value
+
         status = "COMPLETE" if has_usage and malformed == 0 else ("PARTIAL" if has_usage else "NOT_AVAILABLE")
         span = None
         if first_ts and last_ts:
@@ -252,11 +311,14 @@ class CodexExecJsonCollector(BaseCollector):
                 total_tokens=total_tokens if has_usage else None,
                 collection_status=status,
                 source="codex_exec_json",
-                correlation_confidence=CorrelationConfidence.EXACT_SESSION.value if has_usage else CorrelationConfidence.NOT_AVAILABLE.value,
+                correlation_confidence=confidence,
             ).to_dict(),
+            "agent_session_id": agent_session_id,
+            "correlation_confidence": confidence,
             "observed_model": observed_model,
             "model_event_started_at": first_ts.isoformat() if first_ts else None,
             "model_event_finished_at": last_ts.isoformat() if last_ts else None,
             "model_event_span_seconds": span,
+            "thread_count": len(candidate_threads),
             "turn_count": len(turns),
         }

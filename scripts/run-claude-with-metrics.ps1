@@ -48,6 +48,63 @@ function Get-RunIdFromOutput([string]$output) {
     return $null
 }
 
+function Get-ClaudeInventory([string]$ConfigDir) {
+    $items = @{}
+    $projects = Join-Path $ConfigDir "projects"
+    if (-not (Test-Path -LiteralPath $projects -ErrorAction SilentlyContinue)) { return $items }
+    Get-ChildItem -LiteralPath $projects -Recurse -Filter "*.jsonl" -File -ErrorAction SilentlyContinue | ForEach-Object {
+        $sid = [IO.Path]::GetFileNameWithoutExtension($_.Name)
+        if ($sid -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+            $items[$_.FullName] = @{
+                session_id = $sid
+                length = [int64]$_.Length
+                updated_utc = $_.LastWriteTimeUtc.ToString("o")
+            }
+        }
+    }
+    return $items
+}
+
+function Get-NativeSessionIdFromJsonl([string]$Path) {
+    try {
+        foreach ($rawLine in (Get-Content -LiteralPath $Path -Encoding UTF8 -ErrorAction Stop)) {
+            $line = $rawLine.Trim()
+            if (-not $line.StartsWith("{")) { continue }
+            try {
+                $obj = $line | ConvertFrom-Json -ErrorAction Stop
+                if ($obj.sessionId -and ([string]$obj.sessionId) -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+                    return [string]$obj.sessionId
+                }
+            } catch {}
+        }
+    } catch {}
+    return $null
+}
+
+function Get-ChangedClaudeSessionPaths([hashtable]$Before, [hashtable]$After) {
+    $changed = @()
+    foreach ($path in $After.Keys) {
+        $afterItem = $After[$path]
+        if (-not $Before.ContainsKey($path)) {
+            $changed += @($path)
+            continue
+        }
+        $beforeItem = $Before[$path]
+        if ([int64]$afterItem.length -gt [int64]$beforeItem.length) {
+            $changed += @($path)
+        }
+    }
+    return $changed
+}
+
+function Find-UniqueChangedClaudeSession([hashtable]$Before, [hashtable]$After) {
+    $changed = @(Get-ChangedClaudeSessionPaths $Before $After)
+    if ($changed.Count -ne 1) { return $null }
+    $native = Get-NativeSessionIdFromJsonl $changed[0]
+    if ($native) { return $native }
+    return $null
+}
+
 if ([string]::IsNullOrWhiteSpace($WorkPackage)) {
     Write-StderrLine "ERROR: -WorkPackage is required."
     exit 4
@@ -83,6 +140,7 @@ if ([string]::IsNullOrWhiteSpace($ClaudeConfigDir)) {
 
 $oldClaudeConfigDir = $env:CLAUDE_CONFIG_DIR
 $env:CLAUDE_CONFIG_DIR = $ClaudeConfigDir
+$sessionInventoryBefore = Get-ClaudeInventory $ClaudeConfigDir
 
 $startArgs = @(
     "start",
@@ -111,15 +169,63 @@ if (-not $runId) {
 Write-Output ("RUN_ID=$runId")
 
 $claudeExit = 0
+$agentPid = $null
+$sessionBound = $false
+$sessionAmbiguous = $false
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 try {
-    & $ClaudeCommand @ClaudeArgs
-    $claudeExit = $LASTEXITCODE
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $ClaudeCommand
+    $psi.UseShellExecute = $false
+    foreach ($arg in $ClaudeArgs) {
+        [void]$psi.ArgumentList.Add($arg)
+    }
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $agentPid = $proc.Id
+    while (-not $proc.HasExited) {
+        Start-Sleep -Milliseconds 750
+        if (-not $sessionBound -and -not $sessionAmbiguous) {
+            $nowInventory = Get-ClaudeInventory $ClaudeConfigDir
+            $candidateSessionId = Find-UniqueChangedClaudeSession $sessionInventoryBefore $nowInventory
+            if ($candidateSessionId) {
+                $bindArgs = @(
+                    "bind-session",
+                    "--run-id", $runId,
+                    "--agent-session-id", $candidateSessionId,
+                    "--agent-process-id", ([string]$agentPid),
+                    "--binding-source", "new_jsonl_after_process_start"
+                )
+                Invoke-Am @bindArgs | Out-Null
+                if ($LASTEXITCODE -eq 0) { $sessionBound = $true }
+            } elseif (@(Get-ChangedClaudeSessionPaths $sessionInventoryBefore $nowInventory).Count -gt 1) {
+                $sessionAmbiguous = $true
+            }
+        }
+    }
+    $claudeExit = $proc.ExitCode
 } catch {
     Write-StderrLine "ERROR: Claude invocation threw an exception: $($_.Exception.Message)"
     $claudeExit = 1
 } finally {
     $sw.Stop()
+}
+
+if (-not $sessionBound -and -not $sessionAmbiguous) {
+    $afterInventory = Get-ClaudeInventory $ClaudeConfigDir
+    $candidateSessionId = Find-UniqueChangedClaudeSession $sessionInventoryBefore $afterInventory
+    if ($candidateSessionId) {
+        $bindArgs = @(
+            "bind-session",
+            "--run-id", $runId,
+            "--agent-session-id", $candidateSessionId,
+            "--binding-source", "new_jsonl_after_process_start"
+        )
+        if ($null -ne $agentPid) { $bindArgs += @("--agent-process-id", ([string]$agentPid)) }
+        Invoke-Am @bindArgs | Out-Null
+        if ($LASTEXITCODE -eq 0) { $sessionBound = $true }
+    } elseif (@(Get-ChangedClaudeSessionPaths $sessionInventoryBefore $afterInventory).Count -gt 1) {
+        $sessionAmbiguous = $true
+    }
 }
 
 $finishExit = 0
@@ -141,6 +247,7 @@ try {
 
 if ($summaryPath) { Write-Output ("SUMMARY_PATH=$summaryPath") }
 Write-Output ("AGENT_EXIT_CODE=$claudeExit")
+if ($sessionAmbiguous) { Write-StderrLine "WARNING: Claude session binding is AMBIGUOUS; finish will fail closed for usage attribution." }
 
 $env:CLAUDE_CONFIG_DIR = $oldClaudeConfigDir
 

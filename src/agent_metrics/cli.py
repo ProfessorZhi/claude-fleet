@@ -28,12 +28,13 @@ from agent_metrics.models import (
     IntegrityInfo,
     ModelConfidence,
     CollectorStatus,
+    CorrelationConfidence,
 )
 from agent_metrics.storage import StorageManager, StorageError, IntegrityError
 from agent_metrics.pricing import PricingEngine
 from agent_metrics.collectors.git_collector import GitCollector
 from agent_metrics.collectors.github_collector import GithubCollector
-from agent_metrics.collectors.claude_code_collector import ClaudeCodeCollector
+from agent_metrics.collectors.claude_code_collector import ClaudeCodeCollector, is_valid_session_id
 from agent_metrics.collectors.cockpit_collector import CockpitCollector
 from agent_metrics.collectors.codex_quota_collector import (
     CodexQuotaCollector,
@@ -193,6 +194,12 @@ class CLIHandler:
             "repository": repository,
             "worktree": target_worktree,
             "session_id": session_id,
+            "agent_session_id": session_id,
+            "agent_process_id": None,
+            "session_binding_source": "start_parameter" if session_id else None,
+            "session_binding_status": "BOUND" if session_id else "NOT_AVAILABLE",
+            "session_cursor_before": None,
+            "session_cursor_after": None,
             "started_at": started_at,
             "agent": agent_info.to_dict(),
             "git_initial": git_snapshot,
@@ -221,6 +228,102 @@ class CLIHandler:
             print(f'$env:ZUNO_AGENT_RUN_ID = "{run_id}"')
 
         return EXIT_OK
+
+    def cmd_bind_session(
+        self,
+        run_id: str,
+        agent_session_id: str,
+        agent_process_id: Optional[int] = None,
+        binding_source: str = "manual",
+        json_output: bool = False,
+    ) -> int:
+        if not run_id or not agent_session_id:
+            print("Error: run_id and agent_session_id are required.", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+        try:
+            StorageManager.validate_run_id(run_id)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+        if not is_valid_session_id(agent_session_id):
+            print("Error: invalid or unsafe agent_session_id.", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+        if agent_process_id is not None and agent_process_id < 0:
+            print("Error: agent_process_id must be non-negative.", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+        if (
+            not binding_source
+            or len(binding_source) > 80
+            or any(ch in binding_source for ch in ('/', '\\', ':', '\r', '\n', ' '))
+            or scan_text_for_secret_types(binding_source)
+        ):
+            print("Error: invalid or unsafe binding_source.", file=sys.stderr)
+            return EXIT_INVALID_INPUT
+
+        try:
+            ctx = self.storage.read_run_context(run_id)
+        except StorageError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return EXIT_STORAGE_ERROR
+
+        cursor_before = None
+        cursor_status = CollectorStatus.NOT_AVAILABLE.value
+        agent_shell = str(ctx.get("agent", {}).get("shell", "")).lower()
+        if agent_shell in ("claude-code", "claudecode", "claude"):
+            claude_coll = ClaudeCodeCollector()
+            cursor_before, cursor_status = claude_coll.create_session_cursor(
+                agent_session_id,
+                baseline=ctx.get("claude_session_baseline") if isinstance(ctx, dict) else None,
+            )
+            if cursor_status == CorrelationConfidence.AMBIGUOUS.value:
+                print("Error: multiple Claude JSONL candidates match this session.", file=sys.stderr)
+                return EXIT_PARTIAL
+        elif agent_shell == "codex":
+            cursor_before = {
+                "session_id": agent_session_id,
+                "source": "codex_exec_json_private_log",
+            }
+            cursor_status = CollectorStatus.AVAILABLE.value
+
+        binding_status = "BOUND" if cursor_status == CollectorStatus.AVAILABLE.value else "PARTIAL"
+        updates = {
+            "agent_session_id": agent_session_id,
+            "session_id": agent_session_id,
+            "agent_process_id": agent_process_id,
+            "session_binding_source": binding_source,
+            "session_binding_status": binding_status,
+            "session_cursor_before": cursor_before,
+        }
+
+        try:
+            updated = self.storage.update_run_context(run_id, updates)
+            self.storage.append_event(run_id, {
+                "event_id": str(uuid.uuid4()),
+                "event_type": "SESSION_BOUND",
+                "observed_at": get_utc_now_iso(),
+                "source": binding_source,
+                "run_id": run_id,
+                "agent_session_id": agent_session_id,
+                "agent_process_id": agent_process_id,
+                "session_binding_status": binding_status,
+            })
+        except Exception as e:
+            print(f"Error binding session: {e}", file=sys.stderr)
+            return EXIT_STORAGE_ERROR
+
+        result = {
+            "run_id": run_id,
+            "agent_session_id": agent_session_id,
+            "agent_process_id": agent_process_id,
+            "session_binding_source": binding_source,
+            "session_binding_status": updated.get("session_binding_status"),
+            "session_cursor_before": updated.get("session_cursor_before"),
+        }
+        if json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"Session bound for run {run_id}.")
+        return EXIT_OK if binding_status == "BOUND" else EXIT_PARTIAL
 
     def cmd_finish(
         self,
@@ -297,6 +400,16 @@ class CLIHandler:
         model_event_started_at = None
         model_event_finished_at = None
         model_event_span_seconds = None
+        session_record = {
+            "agent_session_id": ctx.get("agent_session_id") or ctx.get("session_id"),
+            "session_segment_id": f"{run_id}:segment-1",
+            "binding_source": ctx.get("session_binding_source"),
+            "binding_status": ctx.get("session_binding_status", "NOT_AVAILABLE"),
+            "correlation_confidence": CorrelationConfidence.NOT_AVAILABLE.value,
+            "session_cursor_before": ctx.get("session_cursor_before"),
+            "session_cursor_after": None,
+            "agent_process_id": ctx.get("agent_process_id"),
+        }
 
         # Codex quota: capture After snapshot and compute delta.
         codex_quota_snapshot_before = None
@@ -346,16 +459,34 @@ class CLIHandler:
                     codex_quota_status = "ERROR"
 
         if agent_shell.strip().lower() == "codex":
-            codex_res = CodexExecJsonCollector().collect(run_context={"codex_json_log": codex_json_log})
+            codex_run_context = {
+                "codex_json_log": codex_json_log,
+                "agent_session_id": ctx.get("agent_session_id") or ctx.get("session_id"),
+            }
+            codex_res = CodexExecJsonCollector().collect(run_context=codex_run_context)
             if isinstance(codex_res.get("usage"), dict) and codex_res.get("status") in ("COMPLETE", "PARTIAL"):
                 usage = UsageInfo(**codex_res["usage"])
                 observed_model = codex_res.get("observed_model")
                 model_event_started_at = codex_res.get("model_event_started_at")
                 model_event_finished_at = codex_res.get("model_event_finished_at")
                 model_event_span_seconds = codex_res.get("model_event_span_seconds")
+                session_record["agent_session_id"] = codex_res.get("agent_session_id")
+                session_record["binding_source"] = session_record.get("binding_source") or "codex_exec_json_thread"
+                session_record["binding_status"] = "BOUND" if codex_res.get("agent_session_id") else "NOT_AVAILABLE"
+                session_record["correlation_confidence"] = codex_res.get("correlation_confidence")
+                session_record["session_cursor_after"] = {
+                    "source": "codex_exec_json_private_log",
+                    "thread_id": codex_res.get("agent_session_id"),
+                    "turn_count": codex_res.get("turn_count"),
+                }
+            elif isinstance(codex_res.get("usage"), dict) and codex_res.get("status") == "AMBIGUOUS":
+                usage = UsageInfo(**codex_res["usage"])
+                session_record["correlation_confidence"] = CorrelationConfidence.AMBIGUOUS.value
         elif agent_shell.lower() in ("claude-code", "claudecode", "claude"):
             claude_coll = ClaudeCodeCollector()
-            claude_res = claude_coll.collect(run_context=ctx)
+            claude_ctx = dict(ctx)
+            claude_ctx["require_exact_session"] = True
+            claude_res = claude_coll.collect(run_context=claude_ctx)
             if claude_res.get("matched_session"):
                 sess = claude_res["matched_session"]
                 observed_model = sess.get("observed_model")
@@ -368,6 +499,12 @@ class CLIHandler:
                         model_event_span_seconds = max(0.0, (t2 - t1).total_seconds())
                     except Exception:
                         model_event_span_seconds = None
+                confidence = claude_res.get("correlation_confidence", "NOT_AVAILABLE")
+                collection_status = (
+                    "COMPLETE"
+                    if sess.get("total_tokens") and confidence == CorrelationConfidence.EXACT_SESSION_AND_CURSOR.value
+                    else ("PARTIAL" if sess.get("total_tokens") else "NOT_AVAILABLE")
+                )
                 usage = UsageInfo(
                     input_tokens=sess.get("input_tokens"),
                     output_tokens=sess.get("output_tokens"),
@@ -375,10 +512,22 @@ class CLIHandler:
                     cache_read_tokens=sess.get("cache_read_tokens"),
                     cache_write_tokens=sess.get("cache_write_tokens"),
                     total_tokens=sess.get("total_tokens"),
-                    collection_status="COMPLETE" if sess.get("total_tokens") else "NOT_AVAILABLE",
+                    collection_status=collection_status,
+                    source="claude_code_jsonl_session_segment" if confidence == CorrelationConfidence.EXACT_SESSION_AND_CURSOR.value else "claude_code_jsonl",
+                    correlation_confidence=confidence,
+                )
+                session_record["agent_session_id"] = sess.get("session_id")
+                session_record["binding_source"] = session_record.get("binding_source") or "claude_jsonl_session_id"
+                session_record["binding_status"] = "BOUND"
+                session_record["correlation_confidence"] = confidence
+                session_record["session_cursor_after"] = sess.get("session_cursor_after")
+            else:
+                usage = UsageInfo(
+                    collection_status="AMBIGUOUS" if claude_res.get("correlation_confidence") == CorrelationConfidence.AMBIGUOUS.value else "NOT_AVAILABLE",
                     source="claude_code_jsonl",
                     correlation_confidence=claude_res.get("correlation_confidence", "NOT_AVAILABLE"),
                 )
+                session_record["correlation_confidence"] = claude_res.get("correlation_confidence", "NOT_AVAILABLE")
         elif agent_shell.lower() in ("antigravity", "agy"):
             antigravity_coll = AntigravityCollector()
             antigravity_res = antigravity_coll.collect(run_context=ctx)
@@ -392,15 +541,18 @@ class CLIHandler:
             agent_dict["model_detection_confidence"] = ModelConfidence.OBSERVED.value
 
         # Calculate pricing
-        pricing = self.pricing_engine.calculate_cost(
-            model_name=agent_dict.get("observed_model") or agent_dict.get("configured_model"),
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-            reasoning_tokens=usage.reasoning_tokens,
-            cache_read_tokens=usage.cache_read_tokens,
-            cache_write_tokens=usage.cache_write_tokens,
-            provider=agent_dict.get("provider"),
-        )
+        if usage.correlation_confidence == CorrelationConfidence.EXACT_SESSION_AND_CURSOR.value:
+            pricing = self.pricing_engine.calculate_cost(
+                model_name=agent_dict.get("observed_model") or agent_dict.get("configured_model"),
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                reasoning_tokens=usage.reasoning_tokens,
+                cache_read_tokens=usage.cache_read_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
+                provider=agent_dict.get("provider"),
+            )
+        else:
+            pricing = PricingInfo(status="USAGE_NOT_AVAILABLE")
 
         timing = TimingInfo(
             started_at=started_at,
@@ -460,6 +612,27 @@ class CLIHandler:
         summary_dict["repository"] = target_repo
         summary_dict["worktree"] = target_worktree
         summary_dict["session_id"] = ctx.get("session_id")
+        summary_dict["session"] = session_record
+        if isinstance(summary_dict.get("quota"), dict):
+            summary_dict["quota"]["scope"] = "ACCOUNT"
+            confidence = session_record.get("correlation_confidence")
+            summary_dict["quota"]["attribution"] = (
+                "EXCLUSIVE_SESSION_WINDOW"
+                if confidence == CorrelationConfidence.EXACT_SESSION_AND_CURSOR.value
+                else "AMBIGUOUS_CONCURRENT_SESSIONS"
+            )
+
+        if session_record.get("session_cursor_after") or session_record.get("agent_session_id"):
+            try:
+                self.storage.update_run_context(run_id, {
+                    "agent_session_id": session_record.get("agent_session_id"),
+                    "session_id": session_record.get("agent_session_id"),
+                    "session_binding_source": session_record.get("binding_source"),
+                    "session_binding_status": session_record.get("binding_status"),
+                    "session_cursor_after": session_record.get("session_cursor_after"),
+                })
+            except Exception:
+                pass
 
         provider_quota = {}
         if agent_shell.lower() in ("antigravity", "agy"):
@@ -827,6 +1000,14 @@ def main(args: Optional[List[str]] = None) -> int:
     fin_p.add_argument("--codex-json-log")
     fin_p.add_argument("--agent-process-seconds", type=float)
 
+    # bind-session
+    bind_p = subparsers.add_parser("bind-session")
+    bind_p.add_argument("--run-id", required=True)
+    bind_p.add_argument("--agent-session-id", required=True)
+    bind_p.add_argument("--agent-process-id", type=int)
+    bind_p.add_argument("--binding-source", required=True)
+    bind_p.add_argument("--json", action="store_true")
+
     # show
     show_p = subparsers.add_parser("show")
     show_p.add_argument("pos_run_id", nargs="?")
@@ -897,6 +1078,14 @@ def main(args: Optional[List[str]] = None) -> int:
             json_output=parsed.json,
             codex_json_log=parsed.codex_json_log,
             agent_process_seconds=parsed.agent_process_seconds,
+        )
+    elif parsed.command == "bind-session":
+        return cli.cmd_bind_session(
+            run_id=parsed.run_id,
+            agent_session_id=parsed.agent_session_id,
+            agent_process_id=parsed.agent_process_id,
+            binding_source=parsed.binding_source,
+            json_output=parsed.json,
         )
     elif parsed.command == "reconcile":
         r_id = parsed.kw_run_id or parsed.pos_run_id

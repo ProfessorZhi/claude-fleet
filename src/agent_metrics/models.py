@@ -31,6 +31,7 @@ class CockpitConfidence(str, Enum):
 
 
 class CorrelationConfidence(str, Enum):
+    EXACT_SESSION_AND_CURSOR = "EXACT_SESSION_AND_CURSOR"
     EXACT_SESSION = "EXACT_SESSION"
     EXACT_RUN_ID = "EXACT_RUN_ID"
     EXACT_WORKTREE = "EXACT_WORKTREE"

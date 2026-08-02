@@ -36,6 +36,8 @@ class TestCodexExecJsonCollector(unittest.TestCase):
             self.assertEqual(res["usage"]["cache_write_tokens"], 20)
             self.assertEqual(res["usage"]["output_tokens"], 40)
             self.assertEqual(res["usage"]["reasoning_tokens"], 10)
+            self.assertEqual(res["agent_session_id"], "thread-a")
+            self.assertEqual(res["usage"]["correlation_confidence"], "EXACT_SESSION_AND_CURSOR")
             self.assertNotIn("prompt", json.dumps(res))
 
     def test_failure_stream_keeps_observed_usage(self):
@@ -57,6 +59,60 @@ class TestCodexExecJsonCollector(unittest.TestCase):
             self.assertEqual(res["status"], "PARTIAL")
             self.assertEqual(res["usage"]["collection_status"], "PARTIAL")
             self.assertEqual(res["usage"]["total_tokens"], 3)
+
+    def test_two_threads_without_binding_is_ambiguous(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "codex.jsonl"
+            p.write_text(
+                json.dumps({
+                    "type": "turn.completed",
+                    "thread_id": "thread-a",
+                    "turn_ordinal": 1,
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                })
+                + "\n"
+                + json.dumps({
+                    "type": "turn.completed",
+                    "thread_id": "thread-b",
+                    "turn_ordinal": 1,
+                    "usage": {"input_tokens": 20, "output_tokens": 3},
+                })
+                + "\n",
+                encoding="utf-8",
+            )
+
+            res = CodexExecJsonCollector({"json_log_path": str(p)}).collect()
+
+            self.assertEqual(res["status"], "AMBIGUOUS")
+            self.assertEqual(res["usage"]["collection_status"], "AMBIGUOUS")
+            self.assertEqual(res["correlation_confidence"], "AMBIGUOUS")
+
+    def test_two_threads_with_binding_counts_only_requested_thread(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "codex.jsonl"
+            p.write_text(
+                json.dumps({
+                    "thread_id": "thread-a",
+                    "turn_ordinal": 1,
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                })
+                + "\n"
+                + json.dumps({
+                    "thread_id": "thread-b",
+                    "turn_ordinal": 1,
+                    "usage": {"input_tokens": 20, "output_tokens": 3},
+                })
+                + "\n",
+                encoding="utf-8",
+            )
+
+            res = CodexExecJsonCollector({"json_log_path": str(p)}).collect(
+                run_context={"agent_session_id": "thread-b"}
+            )
+
+            self.assertEqual(res["status"], "COMPLETE")
+            self.assertEqual(res["agent_session_id"], "thread-b")
+            self.assertEqual(res["usage"]["input_tokens"], 20)
 
 
 if __name__ == "__main__":

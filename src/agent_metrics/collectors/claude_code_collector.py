@@ -6,6 +6,7 @@ Extracts usage, model, and timing without reading prompts or message text.
 """
 
 import json
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -35,6 +36,18 @@ def is_valid_session_id(session_id: str) -> bool:
     if user and len(user) > 2 and user.lower() in session_id.lower():
         return False
     return True
+
+
+def _message_id_hash(message_id: str) -> str:
+    return hashlib.sha256(message_id.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _safe_int(value: Any) -> int:
+    if isinstance(value, bool) or value is None:
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    return 0
 
 
 class ClaudeCodeCollector(BaseCollector):
@@ -93,23 +106,131 @@ class ClaudeCodeCollector(BaseCollector):
                         pass
         return baseline
 
+    def find_session_files(
+        self,
+        session_id: str,
+        config_dir_name: Optional[str] = None,
+    ) -> List[Tuple[str, Path]]:
+        if not is_valid_session_id(session_id):
+            return []
+
+        matches = []
+        for name, dir_path in self.discover_config_dirs():
+            if config_dir_name and name != config_dir_name:
+                continue
+            projects_dir = dir_path / "projects"
+            if not projects_dir.exists():
+                continue
+            for jsonl_file in projects_dir.rglob(f"{session_id}.jsonl"):
+                if jsonl_file.stem == session_id:
+                    matches.append((name, jsonl_file))
+        return matches
+
+    def _read_cursor_metadata(self, jsonl_file: Path, offset: int) -> Dict[str, Any]:
+        message_hashes: Set[str] = set()
+        last_ts = None
+        safe_offset = max(0, offset)
+        try:
+            with open(jsonl_file, "rb") as f:
+                raw = f.read(safe_offset)
+            for line in raw.decode("utf-8", errors="ignore").splitlines():
+                stripped = line.strip()
+                if not stripped.startswith("{"):
+                    continue
+                try:
+                    data = json.loads(stripped)
+                except Exception:
+                    continue
+                ts = data.get("timestamp") or data.get("created_at")
+                if ts and (not last_ts or ts > last_ts):
+                    last_ts = ts
+                msg = data.get("message")
+                if isinstance(msg, dict):
+                    msg_id = msg.get("id")
+                    if isinstance(msg_id, str) and msg_id:
+                        message_hashes.add(_message_id_hash(msg_id))
+        except Exception:
+            pass
+        return {
+            "jsonl_size_before": safe_offset,
+            "last_event_timestamp_before": last_ts,
+            "known_message_id_hashes_before": sorted(message_hashes),
+        }
+
+    def create_session_cursor(
+        self,
+        session_id: str,
+        baseline: Optional[List[Dict[str, Any]]] = None,
+        config_dir_name: Optional[str] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        if not is_valid_session_id(session_id):
+            return None, CollectorStatus.NOT_AVAILABLE.value
+
+        files = self.find_session_files(session_id, config_dir_name=config_dir_name)
+        if len(files) != 1:
+            return None, CorrelationConfidence.AMBIGUOUS.value if len(files) > 1 else CollectorStatus.NOT_AVAILABLE.value
+
+        matched_config_name, jsonl_file = files[0]
+        offset = 0
+        for entry in baseline or []:
+            if entry.get("session_id") == session_id and entry.get("config_dir_name") == matched_config_name:
+                offset = _safe_int(entry.get("file_size"))
+                break
+
+        cursor = self._read_cursor_metadata(jsonl_file, offset)
+        cursor["config_dir_name"] = matched_config_name
+        cursor["session_id"] = session_id
+        return cursor, CollectorStatus.AVAILABLE.value
+
     def parse_transcript_line_by_line(
         self,
         jsonl_file: Path,
         started_at: Optional[str] = None,
         finished_at: Optional[str] = None,
+        cursor_before: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         session_id = None
         message_usages: Dict[str, Dict[str, Any]] = {}
+        segment_message_hashes: Set[str] = set()
         observed_model = None
         start_time = None
         end_time = None
         turn_count = 0
         worktree_in_file = None
         work_package_in_file = None
+        offset_before = _safe_int((cursor_before or {}).get("jsonl_size_before"))
+        known_before = set((cursor_before or {}).get("known_message_id_hashes_before") or [])
+        file_size_after = 0
 
         try:
+            file_size_after = jsonl_file.stat().st_size
+            if offset_before > file_size_after:
+                return {
+                    "session_id": jsonl_file.stem,
+                    "observed_model": None,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "total_tokens": 0,
+                    "start_time": None,
+                    "end_time": None,
+                    "turn_count": 0,
+                    "file_path": str(jsonl_file),
+                    "worktree": None,
+                    "work_package": None,
+                    "session_cursor_after": {
+                        "config_dir_name": (cursor_before or {}).get("config_dir_name"),
+                        "session_id": jsonl_file.stem,
+                        "jsonl_size_after": file_size_after,
+                        "last_event_timestamp_after": None,
+                        "known_message_id_hashes_after": sorted(known_before),
+                    },
+                }
             with open(jsonl_file, "r", encoding="utf-8", errors="ignore") as f:
+                if offset_before and offset_before <= file_size_after:
+                    f.seek(offset_before)
                 for line in f:
                     line = line.strip()
                     if not line or not line.startswith("{"):
@@ -154,6 +275,10 @@ class ClaudeCodeCollector(BaseCollector):
 
                             usage = msg.get("usage")
                             if isinstance(usage, dict) and msg_id:
+                                msg_hash = _message_id_hash(str(msg_id))
+                                if msg_hash in known_before:
+                                    continue
+                                segment_message_hashes.add(msg_hash)
                                 message_usages[msg_id] = usage
                     elif evt_type == "user":
                         turn_count += 1
@@ -193,6 +318,13 @@ class ClaudeCodeCollector(BaseCollector):
             "file_path": str(jsonl_file),
             "worktree": worktree_in_file,
             "work_package": work_package_in_file,
+            "session_cursor_after": {
+                "config_dir_name": (cursor_before or {}).get("config_dir_name"),
+                "session_id": session_id or jsonl_file.stem,
+                "jsonl_size_after": file_size_after,
+                "last_event_timestamp_after": end_time,
+                "known_message_id_hashes_after": sorted(known_before | segment_message_hashes),
+            },
         }
 
     def collect(self, run_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -207,15 +339,28 @@ class ClaudeCodeCollector(BaseCollector):
         started_at = run_context.get("started_at") if run_context else None
         finished_at = run_context.get("finished_at") if run_context else None
         req_session_id = run_context.get("session_id") if run_context else None
+        req_session_id = (run_context.get("agent_session_id") if run_context else None) or req_session_id
         req_worktree = run_context.get("worktree") if run_context else None
         req_wp = run_context.get("work_package") if run_context else None
+        req_cursor = run_context.get("session_cursor_before") if run_context else None
+        req_config_dir_name = req_cursor.get("config_dir_name") if isinstance(req_cursor, dict) else None
+        require_exact_session = bool(run_context.get("require_exact_session")) if run_context else False
 
         sessions = []
         for name, dir_path in config_dirs:
+            if req_config_dir_name and name != req_config_dir_name:
+                continue
             projects_dir = dir_path / "projects"
             if projects_dir.exists():
                 for jsonl_file in projects_dir.rglob("*.jsonl"):
-                    res = self.parse_transcript_line_by_line(jsonl_file, started_at=started_at, finished_at=finished_at)
+                    if req_session_id and jsonl_file.stem != req_session_id:
+                        continue
+                    res = self.parse_transcript_line_by_line(
+                        jsonl_file,
+                        started_at=started_at,
+                        finished_at=finished_at,
+                        cursor_before=req_cursor if jsonl_file.stem == req_session_id else None,
+                    )
                     if res:
                         res["config_dir_name"] = name
                         sessions.append(res)
@@ -236,9 +381,24 @@ class ClaudeCodeCollector(BaseCollector):
             sid_matches = [s for s in sessions if s.get("session_id") == req_session_id]
             if len(sid_matches) == 1:
                 matched_session = sid_matches[0]
-                confidence = CorrelationConfidence.EXACT_SESSION.value
+                confidence = (
+                    CorrelationConfidence.EXACT_SESSION_AND_CURSOR.value
+                    if isinstance(req_cursor, dict)
+                    else CorrelationConfidence.EXACT_SESSION.value
+                )
             elif len(sid_matches) > 1:
                 confidence = CorrelationConfidence.AMBIGUOUS.value
+            else:
+                confidence = CorrelationConfidence.NOT_AVAILABLE.value
+
+        if require_exact_session and not matched_session:
+            return {
+                "status": CollectorStatus.AVAILABLE.value,
+                "config_dirs": [d[0] for d in config_dirs],
+                "sessions": sessions,
+                "matched_session": None,
+                "correlation_confidence": confidence,
+            }
 
         # Priority 2: Worktree match
         if not matched_session and confidence != CorrelationConfidence.AMBIGUOUS.value and req_worktree:
