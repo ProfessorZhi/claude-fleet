@@ -80,10 +80,62 @@ cleanup, simple bug fixes, read-only audits, and alternative implementation
 drafts. If a worker task becomes ambiguous, cross-cutting, or security-sensitive,
 stop that worker and bring the decision back to Codex.
 
-Use **one metrics run per worker task**. A worker task may be a goal, a normal
-prompt, a review fix, or a test-writing pass. Each run records its own wall
-clock, process time, native Claude session segment, token buckets, pricing, and
-quota context. At the end of the PR, `pr-summary` aggregates all matching runs.
+Use **one metrics run per worker task segment**. A worker task segment is a
+normal prompt, a resumed follow-up prompt, a review fix, a test-writing pass, or
+a read-only audit. Do **not** use Claude Code `/goal` as the default automated
+worker mode: it can run long, consume a large context, and is harder to bound
+without a human watching the session. Prefer `claude -p` for the first segment
+and `claude -p --resume <agent_session_id>` for later segments in the same
+worker session. Each run records its own wall clock, process time, native
+Claude session segment, token buckets, pricing, and quota context. At the end
+of the PR, `pr-summary` aggregates all matching runs.
+
+The practical identity model is:
+
+```text
+GitHub PR
+└── Worker session, usually one provider-backed Claude Code session
+    ├── Segment 1: initial prompt
+    ├── Segment 2: resumed follow-up
+    └── Segment 3: test or review fix
+```
+
+One worker session may handle one PR-sized worker assignment across multiple
+prompts, but each prompt still gets a separate metrics run and cursor. This is
+how PR cost is measured without re-counting the whole Claude transcript.
+
+Decision ownership:
+
+```text
+Human operator + ChatGPT
+└── high-level product direction, acceptance criteria, merge decision
+
+Codex main thread
+└── concrete design, task splitting, worker dispatch, integration, code review,
+    test strategy, GitHub PR hygiene, CI interpretation, and cost/quality audit
+
+Claude Code workers
+└── scoped implementation, tests, docs, fixture generation, read-only checks,
+    and other high-volume tasks that can be reviewed before integration
+```
+
+Quota-aware scheduling should preserve the most valuable reasoning budget:
+
+```text
+MiniMax workers first, when configured
+└── cheapest and highest-volume lane for simple parallel work
+
+DeepSeek workers second
+└── medium-cost lane for implementation, local audits, and follow-up fixes
+
+Codex last
+└── expensive lane reserved for architecture, security, integration, debugging,
+    final review, GitHub/CI decisions, and work that requires cross-task memory
+```
+
+If MiniMax is not authenticated, mark that worker lane `CONFIG_REQUIRED` and
+use DeepSeek for measured work. Do not spend Codex budget on bulk tasks that a
+worker can complete and Codex can review cheaply.
 
 This is feasible today for Claude Code workers because Claude Code writes local
 structured JSONL transcripts containing native `sessionId` and usage records.
@@ -308,9 +360,11 @@ Branch:
 
 Constraints:
 - Work only inside the target repository/worktree.
+- Treat this prompt as one measured session segment; expect follow-up prompts to resume the same native Claude session when needed.
 - Do not merge, rebase, reset, amend, cherry-pick, or force push.
 - Do not read secrets, tokens, credentials, account files, or browser storage.
 - Do not modify Codex, Claude Code, Cockpit, Antigravity, proxy, or account configuration.
+- Do not switch into `/goal` or long-running autonomous mode unless Codex explicitly asks for it.
 - Keep changes scoped to this task.
 - Do not include prompt text, response text, code bodies, keys, emails, usernames, or full home paths in metrics output.
 
