@@ -137,6 +137,31 @@ If MiniMax is not authenticated, mark that worker lane `CONFIG_REQUIRED` and
 use DeepSeek for measured work. Do not spend Codex budget on bulk tasks that a
 worker can complete and Codex can review cheaply.
 
+Codex must keep ownership of work that Claude Code is likely to struggle with:
+complex core logic, unclear product semantics, schema and storage contracts,
+security boundaries, pricing and quota interpretation, cross-module integration,
+subtle test failures, and final PR acceptance. Claude Code workers are useful
+because they can run in multiple sessions at the same time, not because they
+replace design ownership.
+
+When a worker repeatedly fails, burns too much quota, or produces output that
+cannot be trusted, do not keep prompting it blindly. Codex should:
+
+```text
+1. Stop or finish the worker run so the metrics boundary is closed.
+2. Classify the failure: unclear prompt, missing documentation, auth/config,
+   task too complex, tool mode mismatch, or real implementation blocker.
+3. Pull the task back to Codex when the root cause is complexity or risk.
+4. Rewrite the task or worker prompt when the root cause is unclear instruction.
+5. Update README / worker workflow docs when the failure reveals a reusable rule.
+6. Record the failed run in PR metrics instead of hiding the cost.
+```
+
+The success criterion is not "all agents were used." The success criterion is
+that the PR finishes faster, spends less Codex reasoning budget, and still
+passes Codex review, ChatGPT / human review, tests, CI, and sanitized metrics
+validation.
+
 This is feasible today for Claude Code workers because Claude Code writes local
 structured JSONL transcripts containing native `sessionId` and usage records.
 The runner binds the metrics run to that session and counts only the cursor
