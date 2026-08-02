@@ -76,7 +76,19 @@ class ClaudeCodeCollector(BaseCollector):
             if dir_path.exists():
                 config_dirs.append((name, dir_path))
 
-        return config_dirs
+        deduped: List[Tuple[str, Path]] = []
+        seen_paths: Set[str] = set()
+        for name, dir_path in config_dirs:
+            try:
+                key = str(dir_path.expanduser().resolve()).casefold()
+            except Exception:
+                key = str(dir_path.expanduser().absolute()).casefold()
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            deduped.append((name, dir_path))
+
+        return deduped
 
     def get_status(self) -> str:
         dirs = self.discover_config_dirs()

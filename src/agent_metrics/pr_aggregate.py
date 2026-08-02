@@ -1,7 +1,7 @@
 """PR-level aggregation for sanitized run summaries."""
 
 import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from agent_metrics.storage import IntegrityError, StorageError, StorageManager
 
@@ -37,35 +37,69 @@ def _num(value: Any) -> Optional[float]:
 
 def iter_sanitized_summaries(storage: StorageManager) -> List[Dict[str, Any]]:
     """Return all readable sanitized summaries under the storage base dir."""
-    summaries: List[Dict[str, Any]] = []
-    for run_dir in sorted(storage.base_dir.iterdir()):
-        if not run_dir.is_dir():
-            continue
-        try:
-            summaries.append(storage.read_sanitized_summary(run_dir.name))
-        except (IntegrityError, StorageError, ValueError):
-            continue
+    summaries, _skipped = load_sanitized_summaries_with_audit(storage)
     return summaries
 
 
-def _matches_pr(summary: Dict[str, Any], pr_number: int, repository: Optional[str]) -> bool:
+def load_sanitized_summaries_with_audit(
+    storage: StorageManager,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Return readable summaries and sanitized audit entries for unreadable runs."""
+    summaries: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    for run_dir in sorted(storage.base_dir.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        if not (run_dir / "sanitized-summary.json").exists():
+            continue
+        try:
+            summaries.append(storage.read_sanitized_summary(run_dir.name))
+        except IntegrityError as e:
+            skipped.append({
+                "run_id": run_dir.name,
+                "reason": "integrity_or_schema_error",
+                "error_type": type(e).__name__,
+            })
+        except (StorageError, ValueError) as e:
+            skipped.append({
+                "run_id": run_dir.name,
+                "reason": "unreadable_summary",
+                "error_type": type(e).__name__,
+            })
+    return summaries, skipped
+
+
+def _repository_identities(summary: Dict[str, Any]) -> List[str]:
+    github = summary.get("github") if isinstance(summary.get("github"), dict) else {}
+    values = []
+    for value in (summary.get("repository"), github.get("repository")):
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+    return values
+
+
+def _matches_pr(
+    summary: Dict[str, Any],
+    pr_number: int,
+    repository: Optional[str],
+) -> Tuple[bool, Optional[str]]:
     direct_pr = summary.get("pr_number")
     github = summary.get("github") if isinstance(summary.get("github"), dict) else {}
     github_pr = github.get("pr_number") or github.get("number")
     if direct_pr != pr_number and github_pr != pr_number:
-        return False
+        return False, "pr_number_mismatch"
 
     if repository:
-        summary_repo = summary.get("repository")
-        github_repo = github.get("repository")
-        if summary_repo and summary_repo != repository and github_repo and github_repo != repository:
-            return False
-        if summary_repo and summary_repo != repository and not github_repo:
-            return False
-        if github_repo and github_repo != repository and not summary_repo:
-            return False
+        identities = _repository_identities(summary)
+        if not identities:
+            return False, "repository_identity_missing"
+        unique = set(identities)
+        if len(unique) > 1:
+            return False, "repository_identity_conflict"
+        if next(iter(unique)) != repository:
+            return False, "repository_identity_mismatch"
 
-    return True
+    return True, None
 
 
 def _antigravity_quota_complete(summary: Dict[str, Any]) -> bool:
@@ -84,10 +118,18 @@ def build_pr_aggregate(
     if pr_number is None or not isinstance(pr_number, int) or pr_number <= 0:
         raise ValueError("pr_number must be a positive integer")
 
-    matching = [
-        s for s in iter_sanitized_summaries(storage)
-        if _matches_pr(s, pr_number=pr_number, repository=repository)
-    ]
+    summaries, skipped_unreadable_runs = load_sanitized_summaries_with_audit(storage)
+    matching = []
+    excluded_runs: List[Dict[str, Any]] = []
+    for summary in summaries:
+        matched, reason = _matches_pr(summary, pr_number=pr_number, repository=repository)
+        if matched:
+            matching.append(summary)
+        elif reason != "pr_number_mismatch":
+            excluded_runs.append({
+                "run_id": summary.get("run_id"),
+                "reason": reason,
+            })
 
     usage_totals = {field: 0 for field in TOKEN_FIELDS}
     pricing_total = 0.0
@@ -155,7 +197,7 @@ def build_pr_aggregate(
             if shell.lower() == "antigravity" and _antigravity_quota_complete(summary):
                 quota_only_runs += 1
                 unresolved["quota_status"] = "COMPLETE"
-                unresolved["quota_attribution"] = "EXCLUSIVE_SESSION_WINDOW_ASSUMED_BY_OPERATOR"
+                unresolved["quota_attribution"] = "NOT_PROVEN"
                 unresolved["note"] = "Quota is account-scope metadata and is not converted to tokens."
             unresolved_runs.append(unresolved)
 
@@ -180,12 +222,27 @@ def build_pr_aggregate(
     if started_values and finished_values:
         pr_wall = max(0.0, (max(finished_values) - min(started_values)).total_seconds())
 
+    integrity_failed_count = len(skipped_unreadable_runs)
+    aggregate_status = "PARTIAL" if skipped_unreadable_runs else "COMPLETE"
+    warnings = [
+        "Quota percentages and balance changes are not converted to token usage.",
+        "Antigravity quota-only runs are included as account-scope context only.",
+    ]
+    if skipped_unreadable_runs:
+        warnings.append("One or more unreadable run summaries were excluded from this aggregate.")
+
     return {
         "schema_version": "agent-metrics-pr-aggregate-v1",
         "scope": "PR",
+        "aggregate_status": aggregate_status,
         "pr_number": pr_number,
         "repository": repository,
         "runs_count": len(matching),
+        "excluded_run_count": len(excluded_runs),
+        "excluded_runs": excluded_runs,
+        "skipped_unreadable_run_count": len(skipped_unreadable_runs),
+        "integrity_failed_run_count": integrity_failed_count,
+        "skipped_unreadable_runs": skipped_unreadable_runs,
         "run_refs": run_refs,
         "usage_totals": usage_totals,
         "pricing_totals": {
@@ -210,8 +267,5 @@ def build_pr_aggregate(
             "quota_only_runs": quota_only_runs,
         },
         "unresolved_runs": unresolved_runs,
-        "warnings": [
-            "Quota percentages and balance changes are not converted to token usage.",
-            "Antigravity quota-only runs are included as account-scope context only.",
-        ],
+        "warnings": warnings,
     }

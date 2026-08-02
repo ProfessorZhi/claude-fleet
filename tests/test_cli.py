@@ -186,6 +186,39 @@ class TestCLI(unittest.TestCase):
             self.assertIsNotNone(summary["timing"]["wall_clock_seconds"])
             self.assertGreaterEqual(summary["timing"]["wall_clock_seconds"], 0.0)
 
+    def test_finish_does_not_promote_quota_attribution_from_exact_session(self):
+        with patch("sys.stdout", new=io.StringIO()) as fake_start_out:
+            self.cli.cmd_start(agent_shell="Claude-Code", provider="Anthropic", session_id="session-abc123")
+            run_id = extract_run_id(fake_start_out.getvalue())
+
+        with patch(
+            "agent_metrics.cli.ClaudeCodeCollector.collect",
+            return_value={
+                "status": "AVAILABLE",
+                "matched_session": {
+                    "session_id": "session-abc123",
+                    "input_tokens": 5,
+                    "output_tokens": 1,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 0,
+                    "total_tokens": 6,
+                    "observed_model": "claude-3-5-sonnet-20241022",
+                    "start_time": None,
+                    "end_time": None,
+                    "session_cursor_after": {},
+                },
+                "correlation_confidence": "EXACT_SESSION_AND_CURSOR",
+            },
+        ), patch("sys.stdout", new=io.StringIO()):
+            code = self.cli.cmd_finish(run_id=run_id)
+
+        self.assertEqual(code, EXIT_OK)
+        summary = self.storage.read_sanitized_summary(run_id)
+        self.assertEqual(summary["usage"]["correlation_confidence"], "EXACT_SESSION_AND_CURSOR")
+        self.assertEqual(summary["quota"]["scope"], "ACCOUNT")
+        self.assertEqual(summary["quota"]["attribution"], "NOT_PROVEN")
+
     # Test 6: export JSON format
     def test_export_json_format(self):
         with patch("sys.stdout", new=io.StringIO()) as fake_start_out:

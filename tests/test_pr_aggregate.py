@@ -17,14 +17,14 @@ from agent_metrics.pr_aggregate import build_pr_aggregate
 from agent_metrics.storage import StorageManager
 
 
-def _summary(run_id, pr_number, shell, provider, usage, pricing=None, timing=None, provider_quota=None):
+def _summary(run_id, pr_number, shell, provider, usage, pricing=None, timing=None, provider_quota=None, repository="ProfessorZhi/agent-metrics-collector"):
     data = {
         "schema_version": 1,
         "collector_version": "0.1.0",
         "run_id": run_id,
         "work_package": "PR-AGG",
         "pr_number": pr_number,
-        "repository": "ProfessorZhi/agent-metrics-collector",
+        "repository": repository,
         "agent": {"shell": shell, "provider": provider},
         "timing": {
             "started_at": "2026-08-02T00:00:00+00:00",
@@ -163,10 +163,109 @@ class TestPrAggregate(unittest.TestCase):
         self.assertEqual(aggregate["timing"]["agent_process_seconds_sum"], 15.0)
         self.assertEqual(aggregate["timing"]["model_event_span_seconds_sum"], 12.0)
         self.assertEqual(aggregate["unresolved_runs"][0]["run_id"], "run-ag-1")
-        self.assertEqual(
-            aggregate["unresolved_runs"][0]["quota_attribution"],
-            "EXCLUSIVE_SESSION_WINDOW_ASSUMED_BY_OPERATOR",
+        self.assertEqual(aggregate["unresolved_runs"][0]["quota_attribution"], "NOT_PROVEN")
+
+    def test_repository_filter_requires_present_matching_identity(self):
+        matching = _summary(
+            "run-zuno-match",
+            4,
+            "Codex",
+            "OpenAI",
+            {
+                "input_tokens": 10,
+                "output_tokens": 1,
+                "reasoning_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "total_tokens": 11,
+                "collection_status": "COMPLETE",
+                "source": "codex_exec_json",
+                "correlation_confidence": "EXACT_SESSION_AND_CURSOR",
+            },
+            repository="ProfessorZhi/Zuno",
         )
+        missing_repo = _summary(
+            "run-missing-repo",
+            4,
+            "Codex",
+            "OpenAI",
+            {
+                "input_tokens": 999,
+                "output_tokens": 1,
+                "reasoning_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "total_tokens": 1000,
+                "collection_status": "COMPLETE",
+                "source": "codex_exec_json",
+                "correlation_confidence": "EXACT_SESSION_AND_CURSOR",
+            },
+            repository=None,
+        )
+        conflicting_repo = _summary(
+            "run-conflicting-repo",
+            4,
+            "Codex",
+            "OpenAI",
+            {
+                "input_tokens": 777,
+                "output_tokens": 1,
+                "reasoning_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "total_tokens": 778,
+                "collection_status": "COMPLETE",
+                "source": "codex_exec_json",
+                "correlation_confidence": "EXACT_SESSION_AND_CURSOR",
+            },
+            repository="ProfessorZhi/Other",
+        )
+        missing_repo["github"] = {}
+        conflicting_repo["github"] = {"repository": "ProfessorZhi/Zuno"}
+
+        for item in (matching, missing_repo, conflicting_repo):
+            self._write_summary(item)
+
+        aggregate = build_pr_aggregate(self.storage, pr_number=4, repository="ProfessorZhi/Zuno")
+
+        self.assertEqual(aggregate["runs_count"], 1)
+        self.assertEqual(aggregate["usage_totals"]["input_tokens"], 10)
+        self.assertEqual(aggregate["excluded_run_count"], 2)
+        self.assertEqual(
+            {item["reason"] for item in aggregate["excluded_runs"]},
+            {"repository_identity_missing", "repository_identity_conflict"},
+        )
+
+    def test_unreadable_summaries_make_aggregate_partial_with_audit_counts(self):
+        self._write_summary(_summary(
+            "run-readable",
+            4,
+            "Codex",
+            "OpenAI",
+            {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "reasoning_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "total_tokens": 2,
+                "collection_status": "COMPLETE",
+                "source": "codex_exec_json",
+                "correlation_confidence": "EXACT_SESSION_AND_CURSOR",
+            },
+        ))
+        bad_dir = Path(self.temp_dir, "run-bad-summary")
+        bad_dir.mkdir(parents=True, exist_ok=True)
+        (bad_dir / "sanitized-summary.json").write_text("{ bad json", encoding="utf-8")
+        (bad_dir / "sanitized-summary.sha256").write_text("0" * 64, encoding="utf-8")
+
+        aggregate = build_pr_aggregate(self.storage, pr_number=4)
+
+        self.assertEqual(aggregate["aggregate_status"], "PARTIAL")
+        self.assertEqual(aggregate["skipped_unreadable_run_count"], 1)
+        self.assertEqual(aggregate["integrity_failed_run_count"], 1)
+        self.assertEqual(aggregate["skipped_unreadable_runs"][0]["run_id"], "run-bad-summary")
+        self.assertIn("unreadable", aggregate["warnings"][-1])
 
     def test_pr_summary_cli_outputs_aggregate_json(self):
         self._write_summary(_summary(

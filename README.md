@@ -203,6 +203,10 @@ To write the aggregate as a file:
 The aggregate sums observed token buckets and calculated API-equivalent cost
 from all matching run summaries. Runs whose usage is `NOT_AVAILABLE` or
 `AMBIGUOUS` remain listed as unresolved evidence instead of being guessed.
+When `--repository` is supplied, summaries without a matching repository
+identity are excluded and counted in `excluded_runs`. Unreadable or
+integrity-failed summaries are not included in totals; the aggregate becomes
+`PARTIAL` and reports `skipped_unreadable_runs`.
 
 #### Checking Provider Quota / Balance Before Dispatch
 
@@ -421,12 +425,14 @@ semantics cannot be proven, the snapshot is recorded with `percentage_semantics
 - **Balance / Quota $\neq$ Request Usage.** DeepSeek balance, MiniMax token
   plan remains, and Cockpit quota snapshots are separate metadata sources.
 - **Quota Scope is Account.** Quota snapshots are account context. They are
-  not allocated to a session unless the run proves an exclusive session window;
-  concurrent sessions report `AMBIGUOUS_CONCURRENT_SESSIONS`.
+  not allocated to a session by token correlation alone. Even
+  `EXACT_SESSION_AND_CURSOR` proves request usage only; quota attribution stays
+  `NOT_PROVEN` unless a separate account-window exclusivity proof exists.
 - **Antigravity Defaults to Quota-Only Unless Native Usage Exists.** When the
-  operator runs Antigravity as a single session, the PR aggregate can mark the
-  quota window as `EXCLUSIVE_SESSION_WINDOW_ASSUMED_BY_OPERATOR`, but token usage
-  remains `NOT_AVAILABLE` unless Antigravity emits structured request usage.
+  operator runs Antigravity as a single session, the PR aggregate can include
+  sanitized quota context, but quota attribution remains `NOT_PROVEN` and token
+  usage remains `NOT_AVAILABLE` unless Antigravity emits structured request
+  usage.
 - **This Round Did Not Validate Real Codex Requests.** End-to-end Codex
   network calls were intentionally skipped — the Runner is exercised with a
   fake Codex process.

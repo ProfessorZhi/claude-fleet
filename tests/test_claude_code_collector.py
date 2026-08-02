@@ -215,6 +215,35 @@ class TestClaudeCodeCollectorStream(unittest.TestCase):
         self.assertEqual(res["input_tokens"], 7)
         self.assertEqual(res["output_tokens"], 2)
 
+    def test_custom_config_dir_dedupes_same_physical_default_provider_path(self):
+        sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        default_provider_path = Path(self.temp_dir) / ".claude-deepseek"
+        projects_dir = default_provider_path / "projects" / "F--repo"
+        projects_dir.mkdir(parents=True, exist_ok=True)
+        jsonl_file = projects_dir / f"{sid}.jsonl"
+        jsonl_file.write_text(
+            json.dumps({
+                "type": "assistant",
+                "sessionId": sid,
+                "timestamp": "2026-08-01T10:00:00Z",
+                "message": {"id": "m-1", "usage": {"input_tokens": 11, "output_tokens": 4}},
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.claude_dir)}), \
+                patch("pathlib.Path.home", return_value=Path(self.temp_dir)):
+            os.environ["CLAUDE_CONFIG_DIR"] = str(default_provider_path)
+            collector = ClaudeCodeCollector()
+
+            dirs = collector.discover_config_dirs()
+            res = collector.collect(run_context={"agent_session_id": sid, "require_exact_session": True})
+
+        self.assertEqual(len(dirs), 1)
+        self.assertEqual(dirs[0][0], "custom")
+        self.assertEqual(res["correlation_confidence"], "EXACT_SESSION")
+        self.assertEqual(res["matched_session"]["input_tokens"], 11)
+
     def test_prompt_content_not_extracted(self):
         jsonl_file = self.projects_dir / "bbbbbbbb-cccc-dddd-eeee-ffffffffffff.jsonl"
         lines = [

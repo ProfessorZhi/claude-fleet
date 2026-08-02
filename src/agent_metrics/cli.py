@@ -676,12 +676,7 @@ class CLIHandler:
         summary_dict["session"] = session_record
         if isinstance(summary_dict.get("quota"), dict):
             summary_dict["quota"]["scope"] = "ACCOUNT"
-            confidence = session_record.get("correlation_confidence")
-            summary_dict["quota"]["attribution"] = (
-                "EXCLUSIVE_SESSION_WINDOW"
-                if confidence == CorrelationConfidence.EXACT_SESSION_AND_CURSOR.value
-                else "AMBIGUOUS_CONCURRENT_SESSIONS"
-            )
+            summary_dict["quota"]["attribution"] = "NOT_PROVEN"
 
         if session_record.get("session_cursor_after") or session_record.get("agent_session_id"):
             try:
