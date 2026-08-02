@@ -12,6 +12,8 @@ param(
 
     [string]$ConfiguredModel = "",
 
+    [string]$CodexArgsJson = "",
+
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$CodexArgs
 )
@@ -114,6 +116,20 @@ if ([string]::IsNullOrWhiteSpace($WorkPackage)) {
 if (-not (Test-Path -LiteralPath $Worktree -ErrorAction SilentlyContinue)) {
     Write-StderrLine "ERROR: -Worktree '$Worktree' does not exist."
     exit 4
+}
+
+if (-not [string]::IsNullOrWhiteSpace($CodexArgsJson)) {
+    try {
+        $parsedCodexArgs = $CodexArgsJson | ConvertFrom-Json -ErrorAction Stop
+        if ($parsedCodexArgs -isnot [array]) {
+            Write-StderrLine "ERROR: -CodexArgsJson must be a JSON array of strings."
+            exit 4
+        }
+        $CodexArgs = @($parsedCodexArgs | ForEach-Object { [string]$_ })
+    } catch {
+        Write-StderrLine "ERROR: -CodexArgsJson must be valid JSON."
+        exit 4
+    }
 }
 
 # --- 2. Locate agent-metrics CLI --------------------------------------------

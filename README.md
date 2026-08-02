@@ -144,7 +144,7 @@ Inspect the `codex_quota` field. Possible states:
   -WorkPackage "ZUNO-WP-001" `
   -Repository "ProfessorZhi/Zuno" `
   -Worktree "F:\funny_project\zuno-worktrees\wp-001" `
-  -- "只回复 OK，不修改任何文件。"
+  -CodexArgsJson '["只回复 OK，不修改任何文件。"]'
 ```
 
 The runner wraps `agent-metrics start` → `codex exec --json` → `finish`.
@@ -177,7 +177,7 @@ never converted into tokens or cost.
   -WorkPackage "ZUNO-WP-002" `
   -Repository "ProfessorZhi/Zuno" `
   -Worktree "F:\funny_project\zuno-worktrees\wp-002" `
-  -- <Claude Code args>
+  -ClaudeArgsJson '["-p","只回复 OK","--output-format","stream-json","--verbose"]'
 ```
 
 `-Provider DeepSeek` defaults to `.claude-deepseek`; `-Provider MiniMax`

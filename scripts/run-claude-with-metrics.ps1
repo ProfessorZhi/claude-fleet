@@ -20,6 +20,8 @@ param(
 
     [string]$ClaudeCommand = "claude",
 
+    [string]$ClaudeArgsJson = "",
+
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ClaudeArgs
 )
@@ -47,6 +49,27 @@ function Get-RunIdFromOutput([string]$output) {
     }
     return $null
 }
+
+function Join-WindowsProcessArguments([string[]]$ArgsToQuote) {
+    $parts = @()
+    foreach ($arg in @($ArgsToQuote)) {
+        if ($null -eq $arg) {
+            $parts += '""'
+            continue
+        }
+        $s = [string]$arg
+        if ($s -notmatch '[\s"]') {
+            $parts += $s
+            continue
+        }
+        $escaped = $s -replace '\\(?=\\*")', '$0$0'
+        $escaped = $escaped -replace '"', '\"'
+        $escaped = $escaped -replace '\\+$', '$0$0'
+        $parts += '"' + $escaped + '"'
+    }
+    return ($parts -join " ")
+}
+
 
 function Get-ClaudeInventory([string]$ConfigDir) {
     $items = @{}
@@ -142,6 +165,20 @@ $oldClaudeConfigDir = $env:CLAUDE_CONFIG_DIR
 $env:CLAUDE_CONFIG_DIR = $ClaudeConfigDir
 $sessionInventoryBefore = Get-ClaudeInventory $ClaudeConfigDir
 
+if (-not [string]::IsNullOrWhiteSpace($ClaudeArgsJson)) {
+    try {
+        $parsedClaudeArgs = $ClaudeArgsJson | ConvertFrom-Json -ErrorAction Stop
+        if ($parsedClaudeArgs -isnot [array]) {
+            Write-StderrLine "ERROR: -ClaudeArgsJson must be a JSON array of strings."
+            exit 4
+        }
+        $ClaudeArgs = @($parsedClaudeArgs | ForEach-Object { [string]$_ })
+    } catch {
+        Write-StderrLine "ERROR: -ClaudeArgsJson must be valid JSON."
+        exit 4
+    }
+}
+
 $startArgs = @(
     "start",
     "--agent-shell", "Claude-Code",
@@ -177,9 +214,7 @@ try {
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $ClaudeCommand
     $psi.UseShellExecute = $false
-    foreach ($arg in $ClaudeArgs) {
-        [void]$psi.ArgumentList.Add($arg)
-    }
+    $psi.Arguments = Join-WindowsProcessArguments $ClaudeArgs
     $proc = [System.Diagnostics.Process]::Start($psi)
     $agentPid = $proc.Id
     while (-not $proc.HasExited) {
