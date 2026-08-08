@@ -178,7 +178,7 @@ export function startFileWatching(
           // Found a /clear file (has last-prompt) → claim it
           deps.knownJsonlFiles.add(file);
           console.log(
-            `[Pixel Agents] Watcher: Agent ${agentId} - /clear detected, reassigning to ${path.basename(file)}`,
+            `[Claude Fleet] Watcher: Agent ${agentId} - /clear detected, reassigning to ${path.basename(file)}`,
           );
           reassignAgentToFile(
             agentId,
@@ -247,7 +247,7 @@ export function readNewLines(
   } catch (e) {
     // ENOENT is expected for hook-detected agents where the JSONL file hasn't been created yet
     if (e instanceof Error && 'code' in e && (e as NodeJS.ErrnoException).code === 'ENOENT') return;
-    console.log(`[Pixel Agents] Watcher: Agent ${agentId} - read error: ${e}`);
+    console.log(`[Claude Fleet] Watcher: Agent ${agentId} - read error: ${e}`);
   }
 }
 
@@ -474,7 +474,7 @@ export function scanForNewJsonlFiles(
   for (const [id, agent] of agents) {
     if (agent.isExternal) continue;
     if (agent.terminalRef && agent.terminalRef.exitStatus !== undefined) {
-      console.log(`[Pixel Agents] Watcher: Agent ${id} - terminal closed, cleaning up orphan`);
+      console.log(`[Claude Fleet] Watcher: Agent ${id} - terminal closed, cleaning up orphan`);
       agentRemovalCallback?.(id);
     }
   }
@@ -538,7 +538,7 @@ function adoptTerminalForFile(
   onAgentCreated?.(agent);
 
   console.log(
-    `[Pixel Agents] Watcher: Agent ${id} - adopted terminal "${terminal.name}" for ${path.basename(jsonlFile)}`,
+    `[Claude Fleet] Watcher: Agent ${id} - adopted terminal "${terminal.name}" for ${path.basename(jsonlFile)}`,
   );
 
   startFileWatching(
@@ -683,7 +683,7 @@ export function scanForTeammateFiles(
     if (existingTeammate) {
       if (debug)
         console.log(
-          `[Pixel Agents] Teammate "${teammateName}" already exists (Agent ${existingTeammate.id}), reassigning to ${path.basename(file)}`,
+          `[Claude Fleet] Teammate "${teammateName}" already exists (Agent ${existingTeammate.id}), reassigning to ${path.basename(file)}`,
         );
       // Reassign to new JSONL file -- stop old polling, start new
       const oldTimer = pollingTimers.get(existingTeammate.id);
@@ -760,7 +760,7 @@ export function scanForTeammateFiles(
     persistAgents();
 
     console.log(
-      `[Pixel Agents] Teammate detected: "${teammateName}" (Agent ${id}) for parent Agent ${parentAgentId} (${path.basename(file)})`,
+      `[Claude Fleet] Teammate detected: "${teammateName}" (Agent ${id}) for parent Agent ${parentAgentId} (${path.basename(file)})`,
     );
 
     // Own-session teammates get registered so their hook events route directly
@@ -931,7 +931,7 @@ export function scanForBackgroundAgentFiles(
     persistAgents();
 
     console.log(
-      `[Pixel Agents] Background teammate detected: "${agent.agentName}" (Agent ${id}) for lead Agent ${leadId} (${path.basename(entry.jsonlPath)})`,
+      `[Claude Fleet] Background teammate detected: "${agent.agentName}" (Agent ${id}) for lead Agent ${leadId} (${path.basename(entry.jsonlPath)})`,
     );
 
     // The transient Subtask sub-character is superseded by this real character.
@@ -1104,7 +1104,7 @@ export function adoptExternalSessionFromHook(
     const adoptedAgent = [...agents.values()].find((a) => pathsMatch(a.jsonlFile, transcriptPath));
     if (adoptedAgent && debug) {
       console.log(
-        `[Pixel Agents] Hook: Agent ${adoptedAgent.id} - detected external session ${path.basename(transcriptPath)}${adoptedAgent.folderName ? ` (${adoptedAgent.folderName})` : ''}`,
+        `[Claude Fleet] Hook: Agent ${adoptedAgent.id} - detected external session ${path.basename(transcriptPath)}${adoptedAgent.folderName ? ` (${adoptedAgent.folderName})` : ''}`,
       );
     }
     if (adoptedAgent) {
@@ -1148,7 +1148,7 @@ export function adoptExternalSessionFromHook(
     persistAgents();
     if (debug) {
       console.log(
-        `[Pixel Agents] Hook: Agent ${id} - detected hooks-only external session${folderName ? ` (${folderName})` : ''}`,
+        `[Claude Fleet] Hook: Agent ${id} - detected hooks-only external session${folderName ? ` (${folderName})` : ''}`,
       );
     }
     onAgentCreated?.(agent);
@@ -1450,7 +1450,7 @@ export function scanExternalDir(
     }
 
     knownJsonlFiles.add(file);
-    console.log(`[Pixel Agents] Watcher: detected external session ${path.basename(file)}`);
+    console.log(`[Claude Fleet] Watcher: detected external session ${path.basename(file)}`);
     adoptExternalSession(
       file,
       projectDir,
@@ -1538,7 +1538,7 @@ function scanGlobalProjectDirs(
         folderNameFromProjectDir(path.basename(dirPath));
       knownJsonlFiles.add(file);
       console.log(
-        `[Pixel Agents] Watcher: detected global session ${path.basename(file)} (${folderName})`,
+        `[Claude Fleet] Watcher: detected global session ${path.basename(file)} (${folderName})`,
       );
       adoptExternalSession(
         file,
@@ -1591,7 +1591,7 @@ export function startStaleExternalAgentCheck(
         // Remove from knownJsonlFiles so the file can be re-adopted if it becomes active again
         knownJsonlFiles.delete(agent.jsonlFile);
       }
-      console.log(`[Pixel Agents] Watcher: Agent ${id} - removing stale external agent`);
+      console.log(`[Claude Fleet] Watcher: Agent ${id} - removing stale external agent`);
       agentRemovalCallback?.(id);
     }
   }, EXTERNAL_STALE_CHECK_INTERVAL_MS);

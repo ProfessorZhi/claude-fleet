@@ -464,14 +464,14 @@ function App() {
         zIndex={52}
       >
         <div className="text-base text-text px-10" style={{ lineHeight: 1.4 }}>
-          <p className="mb-8">Your Pixel Agents office now reacts in real-time:</p>
+          <p className="mb-8">Your Claude Fleet office now reacts in real-time:</p>
           <ul className="mb-8 pl-18 list-disc m-0">
             <li className="text-sm mb-2">Permission prompts appear instantly</li>
             <li className="text-sm mb-2">Turn completions detected the moment they happen</li>
             <li className="text-sm mb-2">Sound notifications play immediately</li>
           </ul>
           <p className="mb-12 text-text-muted">
-            This works through Claude Code Hooks, small event listeners that notify Pixel Agents
+            This works through Claude Code Hooks, small event listeners that notify Claude Fleet
             whenever something happens in your Claude sessions.
           </p>
           <div className="text-center">

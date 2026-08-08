@@ -13,7 +13,7 @@ import { PixelAgentsViewProvider } from './PixelAgentsViewProvider.js';
 let providerInstance: PixelAgentsViewProvider | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
-  console.log(`[Pixel Agents] PIXEL_AGENTS_DEBUG=${process.env.PIXEL_AGENTS_DEBUG ?? 'not set'}`);
+  console.log(`[Claude Fleet] PIXEL_AGENTS_DEBUG=${process.env.PIXEL_AGENTS_DEBUG ?? 'not set'}`);
 
   // Shared file-backed state adapter (VS Code namespace in ~/.pixel-agents/config.json).
   const adapter = new FileStateAdapter({ namespace: 'vscode' });
@@ -39,8 +39,8 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  // Auto-show panel: focus the Pixel Agents panel on startup if the user has
-  // opted in via the pixel-agents.autoShowPanel setting.
+  // Auto-show panel: focus the Claude Fleet panel on startup if the user has
+  // opted in via the claudeFleet.autoShowPanel setting.
   const config = vscode.workspace.getConfiguration();
   if (config.get<boolean>(CONFIG_KEY_AUTO_SHOW_PANEL, false)) {
     vscode.commands.executeCommand(`${VIEW_ID}.focus`);

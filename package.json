@@ -1,12 +1,12 @@
 {
-  "name": "pixel-agents",
-  "displayName": "Pixel Agents",
-  "description": "Pixel art office where your Claude Code agents come to life as animated characters",
-  "version": "1.4.0",
-  "publisher": "pablodelucca",
+  "name": "claude-fleet",
+  "displayName": "Claude Fleet",
+  "description": "Claude Fleet — multi-instance Claude Code manager for VS Code. Based on Pixel Agents (MIT).",
+  "version": "0.1.0",
+  "publisher": "TBD",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pixel-agents-hq/pixel-agents"
+    "url": "https://github.com/ProfessorZhi/claude-fleet"
   },
   "workspaces": ["server", "webview-ui"],
   "icon": "icon.png",
@@ -24,7 +24,7 @@
   ],
   "main": "./dist/extension.js",
   "bin": {
-    "pixel-agents": "./dist/cli.js"
+    "claude-fleet": "./dist/cli.js"
   },
   "files": [
     "CHANGELOG.md",
@@ -39,41 +39,41 @@
   "contributes": {
     "commands": [
       {
-        "command": "pixel-agents.showPanel",
-        "title": "Pixel Agents: Show Panel"
+        "command": "claude-fleet.showPanel",
+        "title": "Claude Fleet: Show Panel"
       },
       {
-        "command": "pixel-agents.exportDefaultLayout",
-        "title": "Pixel Agents: Export Layout as Default"
+        "command": "claude-fleet.exportDefaultLayout",
+        "title": "Claude Fleet: Export Layout as Default"
       }
     ],
     "viewsContainers": {
       "panel": [
         {
-          "id": "pixel-agents-panel",
-          "title": "Pixel Agents",
+          "id": "claude-fleet-panel",
+          "title": "Claude Fleet",
           "icon": "$(window)"
         }
       ]
     },
     "views": {
-      "pixel-agents-panel": [
+      "claude-fleet-panel": [
         {
           "type": "webview",
-          "id": "pixel-agents.panelView",
-          "name": "Pixel Agents"
+          "id": "claude-fleet.panelView",
+          "name": "Claude Fleet"
         }
       ]
     },
     "configuration": {
-      "title": "Pixel Agents",
+      "title": "Claude Fleet",
       "properties": {
-        "pixel-agents.autoShowPanel": {
+        "claudeFleet.autoShowPanel": {
           "type": "boolean",
           "default": false,
-          "description": "Automatically open and focus the Pixel Agents panel when VS Code starts."
+          "description": "Automatically open and focus the Claude Fleet panel when VS Code starts."
         },
-        "pixel-agents.autoSpawnAgent": {
+        "claudeFleet.autoSpawnAgent": {
           "type": "boolean",
           "default": false,
           "description": "Automatically spawn a Claude Code agent when VS Code starts, if no agents are currently running."

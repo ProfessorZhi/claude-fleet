@@ -24,7 +24,7 @@ export function MigrationNotice({ onDismiss }: MigrationNoticeProps) {
           The good news? This was a one-time thing, and it paves the way for some genuinely exciting
           updates ahead.
         </p>
-        <p className="text-xl m-0 mb-20">Stay tuned, and thanks for using Pixel Agents!</p>
+        <p className="text-xl m-0 mb-20">Stay tuned, and thanks for using Claude Fleet!</p>
         <Button variant="accent" size="xl" onClick={onDismiss}>
           Got it
         </Button>

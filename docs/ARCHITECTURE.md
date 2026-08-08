@@ -20,33 +20,79 @@
 
 ---
 
-## 当前理解（Phase 0）
+## 当前理解（Phase 0 → Phase 2）
 
-我们仍然在非常早期。宿主是 VS Code Extension。每个 Agent 实例在概念上长这样：
+经过对上游 [Pixel Agents](https://github.com/pixel-agents-hq/pixel-agents) 的调研
+（见 [`.agent/references/pixel-agents.md`](../.agent/references/pixel-agents.md)
+与 ADR-001），Claude Fleet 第一阶段**直接基于** Pixel Agents 上游代码进行二次开发，
+作为 VS Code Runtime 与可视化基线。
+
+### 高层形态（基于上游实际结构）
 
 ```
-┌──────────────── Claude Fleet 实例 ────────────────┐
-│  Repo binding  │  Provider  │  Model  │  环境变量  │
-│  Agent Runtime (当前是 Claude Code, 未来可插拔)   │
-│  Status / Progress Stream                        │
-└──────────────────────────────────────────────────┘
+┌──────────────── Claude Fleet Extension (VS Code Host) ────────────────────────┐
+│                                                                              │
+│   adapters/vscode/                                                           │
+│   ├── extension.ts                — activate / deactivate                   │
+│   ├── agentManager.ts             — launchNewTerminal (Multi-Instance)        │
+│   ├── PixelAgentsViewProvider.ts  — Webview Panel 宿主                       │
+│   ├── vscodeTerminalAdapter.ts    — vscode.window.createTerminal             │
+│   ├── migrateVsCodeState.ts       — 旧状态迁移                                │
+│   └── constants.ts                — 命名空间常量                              │
+│                                                                              │
+│   server/                                                                    │
+│   ├── src/agentStateStore.ts      — AgentState / AgentStateStore             │
+│   ├── src/agentRuntime.ts         — Runtime 生命周期                          │
+│   ├── src/hookEventHandler.ts     — Hook 事件分发                              │
+│   ├── src/fileWatcher.ts          — JSONL / transcript 监听                  │
+│   ├── src/httpServer.ts           — Fastify + WebSocket                       │
+│   ├── src/{layoutPersistence,configPersistence}.ts — 持久化                  │
+│   └── src/providers/hook/claude/  — Claude Code Provider 实现               │
+│                                                                              │
+│   core/                                                                      │
+│   ├── src/provider.ts             — Provider 接口                            │
+│   ├── src/adapter.ts              — State Adapter 接口                       │
+│   ├── src/transport.ts            — 消息传输接口                              │
+│   ├── src/messages.ts             — 协议消息模型                              │
+│   └── src/schemas.ts              — Zod schema                               │
+│                                                                              │
+│   webview-ui/                                                                │
+│   ├── src/App.tsx                 — Canvas 主应用                            │
+│   ├── src/components/             — 弹窗 / 列表 / 控件                        │
+│   ├── src/office/                 — Pixel Office 渲染                        │
+│   └── src/transport/              — WebSocket / postMessage                  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-具体的运行时模型（子进程 vs workspace 连接 vs SDK 嵌入）、状态如何持久化、UI 如何映射
-到这些状态，目前都是 **TBD**，将由 MVP Spec Set 阶段确认。
+每个 Agent 实例在概念上：
+
+```
+┌──────────────── Claude Fleet Instance ────────────────┐
+│  Repo binding  │  Provider  │  Model  │  环境变量    │
+│  Agent Runtime (Claude Code via claudeProvider)      │
+│  Status / Progress Stream                            │
+└──────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## 核心模块候选
 
-| 模块 | 职责 | 状态 |
-|---|---|---|
-| VS Code Extension Host | 拥有 UI、命令、生命周期 | TBD |
-| Instance Manager | 启动 / 跟踪 / 终止 Agent 实例 | TBD |
-| Provider 抽象 | 可插拔的 Provider + Model 配置 | TBD |
-| Repo Binder | 把每个实例绑定到一个 Repo，并保证隔离 | TBD |
-| Status / Event Stream | 把实时状态推送到 UI | TBD |
-| Pixel-style 可视化 | 对实时状态的一种渲染 | TBD |
+> 表中**当前选择**列基于 ADR-001，已经从 TBD 推进为"复用上游"。
+
+| 模块                     | 职责                                                                         | 状态                                           |
+| ------------------------ | ---------------------------------------------------------------------------- | ---------------------------------------------- |
+| VS Code Extension Host   | `adapters/vscode/extension.ts`                                               | **当前选择**：复用上游                         |
+| Instance Manager         | `adapters/vscode/agentManager.ts` 的 `launchNewTerminal` + `AgentStateStore` | **当前选择**：复用上游；按需扩展字段           |
+| Provider 抽象            | `core/src/provider.ts`、`server/src/providers/index.ts`                      | **当前选择**：复用上游；Claude 是首个 Provider |
+| Claude Provider          | `server/src/providers/hook/claude/`                                          | **当前选择**：复用上游；默认 Claude Code       |
+| Repo Binder              | `getProjectDirPath` + Claude session dir 映射                                | **当前选择**：复用上游                         |
+| Status / Event Stream    | `AgentStateStore` + `hookEventHandler` + Webview transport                   | **当前选择**：复用上游                         |
+| Pixel-style 可视化       | `webview-ui/src/office/`                                                     | **当前选择**：复用上游；不在 001 重做 UI       |
+| Provider / Model 隔离    | 独立的 `CLAUDE_CONFIG_DIR` / env 注入                                        | TBD（Phase 3 / Spec 002）                      |
+| 持久化策略（State 放哪） | 上游默认走 `~/.pixel-agents/`                                                | TBD（决定是否迁移到 Claude Fleet 命名空间）    |
+| 跨 Coding Agent 接入     | Provider subdirectory 抽象                                                   | TBD（Phase 5）                                 |
 
 ---
 
@@ -82,6 +128,8 @@
 
 ADRs 集中记录在 [`.agent/knowledge/decisions.md`](../.agent/knowledge/decisions.md)。
 
-本文只保留一句摘要。Phase 0 当前尚未生成 ADR。
+| ADR     | 标题                                                                    | 状态     |
+| ------- | ----------------------------------------------------------------------- | -------- |
+| ADR-001 | 以 Pixel Agents 作为 Claude Fleet 第一阶段 VS Code Runtime 与可视化基础 | Accepted |
 
-- *(none yet)* — ADRs 将在 MVP Spec Set 阶段产出。
+- ADR-001 已记录：Claude Fleet 第一阶段直接复用 Pixel Agents 上游代码作为基线。

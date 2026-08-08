@@ -42,7 +42,7 @@ function readClaudeSettings(): ClaudeSettings {
       return JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as ClaudeSettings;
     }
   } catch (e) {
-    console.error(`[Pixel Agents] Failed to read Claude settings: ${e}`);
+    console.error(`[Claude Fleet] Failed to read Claude settings: ${e}`);
   }
   return {};
 }
@@ -60,7 +60,7 @@ function writeClaudeSettings(settings: ClaudeSettings): void {
     fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2), 'utf-8');
     fs.renameSync(tmpPath, settingsPath);
   } catch (e) {
-    console.error(`[Pixel Agents] Failed to write Claude settings: ${e}`);
+    console.error(`[Claude Fleet] Failed to write Claude settings: ${e}`);
   }
 }
 
@@ -135,7 +135,7 @@ export function installHooks(): void {
 
   if (changed) {
     writeClaudeSettings(settings);
-    console.log('[Pixel Agents] Hooks installed in ~/.claude/settings.json');
+    console.log('[Claude Fleet] Hooks installed in ~/.claude/settings.json');
   }
 }
 
@@ -163,7 +163,7 @@ export function uninstallHooks(): void {
 
   if (changed) {
     writeClaudeSettings(settings);
-    console.log('[Pixel Agents] Hooks removed from ~/.claude/settings.json');
+    console.log('[Claude Fleet] Hooks removed from ~/.claude/settings.json');
   }
 }
 
@@ -181,15 +181,15 @@ export function copyHookScript(extensionPath: string): boolean {
       fs.mkdirSync(dstDir, { recursive: true, mode: 0o700 });
     }
     if (!fs.existsSync(src)) {
-      console.warn(`[Pixel Agents] Hook script not found at ${src}`);
+      console.warn(`[Claude Fleet] Hook script not found at ${src}`);
       return false;
     }
     fs.copyFileSync(src, dst);
     fs.chmodSync(dst, 0o700);
-    console.log(`[Pixel Agents] Hook script installed at ${dst}`);
+    console.log(`[Claude Fleet] Hook script installed at ${dst}`);
     return true;
   } catch (e) {
-    console.error(`[Pixel Agents] Failed to copy hook script: ${e}`);
+    console.error(`[Claude Fleet] Failed to copy hook script: ${e}`);
     return false;
   }
 }

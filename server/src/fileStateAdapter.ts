@@ -112,7 +112,7 @@ export class FileStateAdapter implements StateAdapter {
             : {},
       };
     } catch (err) {
-      console.error('[Pixel Agents] Failed to read adapter state:', err);
+      console.error('[Claude Fleet] Failed to read adapter state:', err);
       return { ...EMPTY_STATE };
     }
   }
@@ -128,7 +128,7 @@ export class FileStateAdapter implements StateAdapter {
       fs.writeFileSync(tmpPath, json, 'utf-8');
       fs.renameSync(tmpPath, this.stateFilePath);
     } catch (err) {
-      console.error('[Pixel Agents] Failed to write adapter state:', err);
+      console.error('[Claude Fleet] Failed to write adapter state:', err);
     }
   }
 }

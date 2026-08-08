@@ -5,6 +5,10 @@
 // the rest travel with it because they describe the same ~/.pixel-agents
 // file layout, and splitting the set would leave the next caller guessing which
 // half to import from where.
+//
+// NOTE: persistence namespace ("pixel-agents") is intentionally preserved on
+// disk to keep compatibility with the upstream baseline. Branding at the
+// adapter layer (commands, view id, config keys) uses "claude-fleet".
 /** @public */
 export {
   CONFIG_FILE_NAME,
@@ -15,6 +19,9 @@ export {
 } from '../../server/src/constants.js';
 
 // ── Settings Persistence (VS Code globalState keys) ─────────
+// NOTE: persistence keys intentionally kept as upstream "pixel-agents.*" so
+// Claude Fleet shares the same on-disk state shape with the upstream baseline.
+// (See 001 design "命名空间策略" — Persistence namespace 保留上游值。)
 export const GLOBAL_KEY_SOUND_ENABLED = 'pixel-agents.soundEnabled';
 export const GLOBAL_KEY_LAST_SEEN_VERSION = 'pixel-agents.lastSeenVersion';
 export const GLOBAL_KEY_ALWAYS_SHOW_LABELS = 'pixel-agents.alwaysShowLabels';
@@ -34,10 +41,15 @@ export const GLOBAL_KEY_SHOW_AREAS = 'pixel-agents.showAreas';
 export const SETTING_KEY_AREA_MAPPINGS = 'pixel-agents.areaMappings';
 
 // ── VS Code Settings (contributes.configuration keys) ───────
-export const CONFIG_KEY_AUTO_SHOW_PANEL = 'pixel-agents.autoShowPanel';
-export const CONFIG_KEY_AUTO_SPAWN_AGENT = 'pixel-agents.autoSpawnAgent';
+// User-facing config keys are renamed to the Claude Fleet namespace.
+export const CONFIG_KEY_AUTO_SHOW_PANEL = 'claudeFleet.autoShowPanel';
+export const CONFIG_KEY_AUTO_SPAWN_AGENT = 'claudeFleet.autoSpawnAgent';
 
 // ── VS Code Identifiers ─────────────────────────────────────
-export const VIEW_ID = 'pixel-agents.panelView';
-export const COMMAND_SHOW_PANEL = 'pixel-agents.showPanel';
-export const COMMAND_EXPORT_DEFAULT_LAYOUT = 'pixel-agents.exportDefaultLayout';
+// User-facing command / view ids are renamed to the Claude Fleet namespace.
+// Internal persistence keys (above) and provider-side namespaces (in server/)
+// keep the upstream values for compatibility — see the design decision in
+// docs/specs/001-multi-instance-runtime/design.md.
+export const VIEW_ID = 'claude-fleet.panelView';
+export const COMMAND_SHOW_PANEL = 'claude-fleet.showPanel';
+export const COMMAND_EXPORT_DEFAULT_LAYOUT = 'claude-fleet.exportDefaultLayout';

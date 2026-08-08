@@ -80,7 +80,7 @@ async function main(): Promise<void> {
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (err) {
-    console.error(`[Pixel Agents] ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[Claude Fleet] ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 
@@ -93,7 +93,7 @@ async function main(): Promise<void> {
   // External asset directories are merged at startup too, so directories added
   // in a previous session survive a restart. buildAssetCache is the shared
   // loader used by both the standalone server and the VS Code adapter.
-  console.log('[Pixel Agents] Loading assets...');
+  console.log('[Claude Fleet] Loading assets...');
   const assetCache: AssetCache = await buildAssetCache(
     distRoot,
     readConfig().externalAssetDirectories,
@@ -102,7 +102,7 @@ async function main(): Promise<void> {
   const petCount = assetCache.pets?.pets.length ?? 0;
   const furnitureCount = assetCache.furniture?.catalog.length ?? 0;
   console.log(
-    `[Pixel Agents] Assets loaded: ${charCount} characters, ${petCount} pets, ${furnitureCount} furniture items`,
+    `[Claude Fleet] Assets loaded: ${charCount} characters, ${petCount} pets, ${furnitureCount} furniture items`,
   );
 
   // ── Store + adapter (shared settings + standalone-scoped agents/seats) ──
@@ -135,12 +135,12 @@ async function main(): Promise<void> {
         const copied = copyHookScript(packageRoot);
         console.log(
           copied
-            ? '[Pixel Agents] Hooks installed (user toggle)'
-            : '[Pixel Agents] Hooks NOT installed (user toggle), hook script missing',
+            ? '[Claude Fleet] Hooks installed (user toggle)'
+            : '[Claude Fleet] Hooks NOT installed (user toggle), hook script missing',
         );
       } else {
         await claudeProvider.uninstallHooks();
-        console.log('[Pixel Agents] Hooks uninstalled (user toggle)');
+        console.log('[Claude Fleet] Hooks uninstalled (user toggle)');
       }
     };
 
@@ -178,7 +178,7 @@ async function main(): Promise<void> {
           sprites: Object.fromEntries(furniture.sprites),
         });
       }
-      console.log('[Pixel Agents] Assets reloaded (external directory change)');
+      console.log('[Claude Fleet] Assets reloaded (external directory change)');
     };
 
     const config = await server.start({
@@ -205,11 +205,11 @@ async function main(): Promise<void> {
         const copied = copyHookScript(packageRoot);
         console.log(
           copied
-            ? '[Pixel Agents] Hooks installed'
-            : '[Pixel Agents] Hooks NOT installed, hook script missing',
+            ? '[Claude Fleet] Hooks installed'
+            : '[Claude Fleet] Hooks NOT installed, hook script missing',
         );
       } catch (err) {
-        console.error('[Pixel Agents] Failed to install hooks:', err);
+        console.error('[Claude Fleet] Failed to install hooks:', err);
       }
     }
 
@@ -218,13 +218,13 @@ async function main(): Promise<void> {
     const dirs = claudeProvider.getSessionDirs?.(cwd);
     if (dirs && dirs[0]) {
       const projectDir = dirs[0];
-      console.log(`[Pixel Agents] Scanning project dir: ${projectDir}`);
+      console.log(`[Claude Fleet] Scanning project dir: ${projectDir}`);
       runtime.startProjectScan(projectDir);
       runtime.startExternalScanning(projectDir);
       runtime.startStaleCheck();
     }
 
-    console.log(`\n  Pixel Agents server running at http://${args.host}:${config.port}\n`);
+    console.log(`\n  Claude Fleet server running at http://${args.host}:${config.port}\n`);
 
     // ── Graceful shutdown ──
     function shutdown(): void {

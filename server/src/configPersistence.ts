@@ -138,7 +138,7 @@ export function readConfig(): PixelAgentsConfig {
         : [],
     };
   } catch (err) {
-    console.error('[Pixel Agents] Failed to read config file:', err);
+    console.error('[Claude Fleet] Failed to read config file:', err);
     return {
       vscode: { ...DEFAULT_ADAPTER_SETTINGS },
       standalone: { ...DEFAULT_ADAPTER_SETTINGS },
@@ -159,6 +159,6 @@ export function writeConfig(config: PixelAgentsConfig): void {
     fs.writeFileSync(tmpPath, json, 'utf-8');
     fs.renameSync(tmpPath, filePath);
   } catch (err) {
-    console.error('[Pixel Agents] Failed to write config file:', err);
+    console.error('[Claude Fleet] Failed to write config file:', err);
   }
 }
