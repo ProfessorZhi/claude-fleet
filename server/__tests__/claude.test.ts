@@ -259,3 +259,35 @@ describe('claudeProvider', () => {
     });
   });
 });
+
+describe('claudeProvider.buildLaunchCommand — Spec 005 session modes', () => {
+  it('new session (default) uses --session-id', () => {
+    const launch = claudeProvider.buildLaunchCommand!('sess-1', '/repo', {
+      modelId: 'deepseek-v4-pro[1m]',
+    });
+    expect(launch.args).toEqual(['--session-id', 'sess-1', '--model', 'deepseek-v4-pro[1m]']);
+  });
+
+  it('resume uses --resume <sessionId> (Claude Code native resume)', () => {
+    const launch = claudeProvider.buildLaunchCommand!('sess-1', '/repo', {
+      sessionMode: 'resume',
+      modelId: 'deepseek-v4-pro[1m]',
+    });
+    expect(launch.args).toEqual(['--resume', 'sess-1', '--model', 'deepseek-v4-pro[1m]']);
+  });
+
+  it('resume without model omits --model', () => {
+    const launch = claudeProvider.buildLaunchCommand!('sess-1', '/repo', {
+      sessionMode: 'resume',
+    });
+    expect(launch.args).toEqual(['--resume', 'sess-1']);
+  });
+
+  it('bypassPermissions still appends the flag in both modes', () => {
+    const launch = claudeProvider.buildLaunchCommand!('sess-1', '/repo', {
+      sessionMode: 'resume',
+      bypassPermissions: true,
+    });
+    expect(launch.args).toEqual(['--resume', 'sess-1', '--dangerously-skip-permissions']);
+  });
+});

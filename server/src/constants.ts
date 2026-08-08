@@ -83,7 +83,7 @@ export const SESSION_END_GRACE_MS = 2000;
 export const MAX_HOOK_BODY_SIZE = 65_536; // 64KB
 
 // ── Layout/Config Persistence ──────────────────────────────
-export const LAYOUT_FILE_DIR = '.pixel-agents';
+export const LAYOUT_FILE_DIR = '.claude-fleet';
 export const LAYOUT_FILE_NAME = 'layout.json';
 export const LAYOUT_FILE_POLL_INTERVAL_MS = 2000;
 export const LAYOUT_REVISION_KEY = 'layoutRevision';

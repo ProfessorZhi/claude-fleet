@@ -101,9 +101,13 @@ function getSessionDirs(workspacePath: string): string[] {
 function buildLaunchCommand(
   sessionId: string,
   cwd: string,
-  opts?: { bypassPermissions?: boolean; modelId?: string },
+  opts?: { bypassPermissions?: boolean; modelId?: string; sessionMode?: 'new' | 'resume' },
 ): { command: string; args: string[]; env?: Record<string, string> } {
-  const args = ['--session-id', sessionId];
+  // Spec 005 Session Continuity（claude 2.1.220 实测，`claude --help`）：
+  //   new（默认）    → `--session-id <uuid>` 新会话
+  //   resume（Restart / Switch Provider）→ `--resume <sessionId>` 恢复同一原生 Session
+  const args =
+    opts?.sessionMode === 'resume' ? ['--resume', sessionId] : ['--session-id', sessionId];
   // Per-instance model — `--model` overrides both ANTHROPIC_MODEL env and the
   // `model` setting in ~/.claude/settings.json (see Claude Code docs / ADR-002).
   if (opts?.modelId && opts.modelId.trim() !== '') {
