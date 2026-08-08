@@ -57,3 +57,8 @@ export const COMMAND_EXPORT_DEFAULT_LAYOUT = 'claude-fleet.exportDefaultLayout';
 // Spec 002 — commands introduced with Provider / Model isolation.
 export const COMMAND_NEW_AGENT = 'claude-fleet.newAgent';
 export const COMMAND_MANAGE_PROVIDERS = 'claude-fleet.manageProviders';
+
+// Spec 004 — instance control commands.
+export const COMMAND_FOCUS_AGENT = 'claude-fleet.focusAgent';
+export const COMMAND_STOP_AGENT = 'claude-fleet.stopAgent';
+export const COMMAND_RESTART_AGENT = 'claude-fleet.restartAgent';

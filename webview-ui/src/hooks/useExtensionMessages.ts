@@ -458,16 +458,12 @@ export function useExtensionMessages(
       } else if (msg.type === 'agentStatus') {
         const id = msg.id as number;
         const status = msg.status as string;
-        setAgentStatuses((prev) => {
-          if (status === 'active') {
-            if (!(id in prev)) return prev;
-            const next = { ...prev };
-            delete next[id];
-            return next;
-          }
-          return { ...prev, [id]: status };
-        });
-        os.setAgentActive(id, status === 'active');
+        // Spec 003 — agentStatuses now records the *current user-facing status*
+        // (starting/working/waiting/idle/error/stopped) instead of "waiting
+        // only". 'active' is tolerated as a legacy alias of 'working' and is
+        // ALSO kept in the dict so the Debug View can label it.
+        setAgentStatuses((prev) => ({ ...prev, [id]: status }));
+        os.setAgentActive(id, status === 'working' || status === 'active');
         if (status === 'waiting') {
           os.showWaitingBubble(id, msg.awaitingInput === true);
           playDoneSound();

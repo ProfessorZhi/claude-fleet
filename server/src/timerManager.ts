@@ -55,7 +55,7 @@ export function clearAgentActivity(
       });
     }
   }
-  agents.broadcast({ type: 'agentStatus', id: agentId, status: 'active' });
+  agents.broadcast({ type: 'agentStatus', id: agentId, status: 'working' });
 }
 
 export function cancelWaitingTimer(

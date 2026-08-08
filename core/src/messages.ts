@@ -59,7 +59,10 @@ export type ClientMessage =
   | RemoveExternalAssetDirectory
   | SaveAreaMappings
   | SetShowAreas
-  | RequestDiagnostics;
+  | RequestDiagnostics
+  | NewAgent
+  | StopAgent
+  | RestartAgent;
 
 export interface ProviderCapabilities {
   type: 'providerCapabilities';
@@ -107,7 +110,8 @@ export interface AgentStatus {
   awaitingInput?: boolean;
 }
 
-export type AgentActivityStatus = 'active' | 'waiting';
+export type AgentActivityStatus =
+  'active' | 'working' | 'starting' | 'waiting' | 'idle' | 'error' | 'stopped';
 
 export interface AgentToolStart {
   type: 'agentToolStart';
@@ -403,4 +407,18 @@ export interface SetShowAreas {
 
 export interface RequestDiagnostics {
   type: 'requestDiagnostics';
+}
+
+export interface NewAgent {
+  type: 'newAgent';
+}
+
+export interface StopAgent {
+  type: 'stopAgent';
+  id: number;
+}
+
+export interface RestartAgent {
+  type: 'restartAgent';
+  id: number;
 }

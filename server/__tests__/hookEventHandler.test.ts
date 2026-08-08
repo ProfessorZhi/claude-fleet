@@ -498,8 +498,9 @@ describe('HookEventHandler', () => {
 
     expect(agent.isWaiting).toBe(false);
     expect(agent.hadToolsInTurn).toBe(true);
+    // Spec 003 — PreToolUse broadcasts the user-facing 'working' status.
     const activeMsg = mockWebview.messages.find(
-      (m) => m.type === 'agentStatus' && m.status === 'active',
+      (m) => m.type === 'agentStatus' && m.status === 'working',
     );
     expect(activeMsg).toBeTruthy();
   });

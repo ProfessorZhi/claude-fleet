@@ -7,6 +7,7 @@ import type { StateAdapter } from '../../core/src/adapter.js';
 import type { InstanceLaunchConfig } from '../../core/src/providerProfiles.js';
 import { INHERIT_PROVIDER_PROFILE_ID } from '../../core/src/providerProfiles.js';
 import { AgentStateStore } from '../../server/src/agentStateStore.js';
+import { agentStateToUserStatus } from '../../server/src/agentStatus.js';
 import { DEFAULT_MAX_CONTEXT_TOKENS, JSONL_POLL_INTERVAL_MS } from '../../server/src/constants.js';
 import {
   ensureProjectScan,
@@ -243,6 +244,9 @@ export async function launchNewTerminal(
     providerProfileId: resolved.safeMetadata.providerProfileId,
     providerDisplayName: resolved.safeMetadata.providerDisplayName,
     modelId: resolved.safeMetadata.modelId,
+    // Spec 003 — launch timestamp (transient; drives the "transcript never
+    // appeared" error heuristic in agentStatus.ts).
+    createdAt: Date.now(),
   };
 
   assignPaletteIfNeeded(agent, agents);
@@ -418,6 +422,11 @@ export function persistAgents(agents: AgentStateStore, adapter: StateAdapter): v
       teamUsesTmux: agent.teamUsesTmux,
       backgroundAgentToolIds:
         agent.backgroundAgentToolIds.size > 0 ? [...agent.backgroundAgentToolIds] : undefined,
+      // Spec 002 — Provider / Model. NOT secrets, safe to persist (mirrors
+      // AgentStateStore.persist, which is the runtime path).
+      providerProfileId: agent.providerProfileId,
+      providerDisplayName: agent.providerDisplayName,
+      modelId: agent.modelId,
     });
   }
   adapter.saveAgents(persisted);
@@ -708,14 +717,14 @@ export function sendCurrentAgentStatuses(
         toolName,
       });
     }
-    // Re-send waiting status
-    if (agent.isWaiting) {
-      webview.postMessage({
-        type: 'agentStatus',
-        id: agentId,
-        status: 'waiting',
-      });
-    }
+    // Re-send current user-facing status (Spec 003). The webview re-requests
+    // state after remounts, so push the derived status as an upsert; the
+    // webview treats agentStatus as "record current user status".
+    webview.postMessage({
+      type: 'agentStatus',
+      id: agentId,
+      status: agentStateToUserStatus(agent),
+    });
     // Re-send team metadata. Derived teams (named background spawns) have a
     // name and a lead link but NO teamName, so gate on any team field.
     if (agent.teamName || agent.agentName || agent.isTeamLead) {

@@ -1,26 +1,28 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Mock os.homedir() for cross-platform temp-home isolation. Overriding
+// process.env.HOME is not portable: os.homedir() reads USERPROFILE on
+// Windows (see migrateVsCodeState.test.ts for the same pattern).
+let homeOverride: string;
+vi.mock('os', async () => {
+  const actual = await vi.importActual<typeof import('os')>('os');
+  return { ...actual, homedir: () => homeOverride };
+});
 
 import { parseAreaMappings, readConfig, writeConfig } from '../src/configPersistence.js';
 
 describe('configPersistence: areas', () => {
   let tempHome: string;
-  let originalHome: string | undefined;
 
   beforeEach(() => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-config-test-'));
-    originalHome = process.env.HOME;
-    process.env.HOME = tempHome;
+    homeOverride = tempHome;
   });
 
   afterEach(() => {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 

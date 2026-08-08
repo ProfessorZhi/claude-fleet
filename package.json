@@ -8,14 +8,19 @@
     "type": "git",
     "url": "https://github.com/ProfessorZhi/claude-fleet"
   },
-  "workspaces": ["server", "webview-ui"],
+  "workspaces": [
+    "server",
+    "webview-ui"
+  ],
   "icon": "icon.png",
   "license": "MIT",
   "engines": {
     "node": ">=20",
     "vscode": "^1.105.0"
   },
-  "extensionKind": ["workspace"],
+  "extensionKind": [
+    "workspace"
+  ],
   "categories": [
     "Other"
   ],
@@ -53,6 +58,18 @@
       {
         "command": "claude-fleet.manageProviders",
         "title": "Claude Fleet: Manage Providers…"
+      },
+      {
+        "command": "claude-fleet.focusAgent",
+        "title": "Claude Fleet: Focus Agent"
+      },
+      {
+        "command": "claude-fleet.stopAgent",
+        "title": "Claude Fleet: Stop Agent"
+      },
+      {
+        "command": "claude-fleet.restartAgent",
+        "title": "Claude Fleet: Restart Agent"
       }
     ],
     "viewsContainers": {
@@ -131,6 +148,7 @@
     "@types/pngjs": "^6.0.5",
     "@types/vscode": "^1.105.0",
     "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.9.2",
     "allure-commandline": "^2.38.1",
     "allure-playwright": "^3.7.1",
     "esbuild": "^0.28.0",

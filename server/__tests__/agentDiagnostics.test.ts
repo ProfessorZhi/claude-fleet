@@ -52,7 +52,7 @@ describe('buildAgentDiagnostics', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('emits the exact 9-field shape for an agent with an existing jsonl file', () => {
+  it('emits the exact 12-field shape for an agent with an existing jsonl file', () => {
     const store = new AgentStateStore();
     store.set(
       7,
@@ -68,6 +68,8 @@ describe('buildAgentDiagnostics', () => {
 
     const [entry] = buildAgentDiagnostics(store);
 
+    // 9 upstream fields + 3 Spec 002 Provider / Model fields (002 T016
+    // extended the payload; this assertion was updated to match).
     expect(Object.keys(entry).sort()).toEqual(
       [
         'fileOffset',
@@ -77,8 +79,11 @@ describe('buildAgentDiagnostics', () => {
         'jsonlFile',
         'lastDataAt',
         'linesProcessed',
+        'modelId',
         'projectDir',
         'projectDirExists',
+        'providerDisplayName',
+        'providerProfileId',
       ].sort(),
     );
     expect(entry.id).toBe(7);

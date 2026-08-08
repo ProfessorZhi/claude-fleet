@@ -141,6 +141,9 @@ components:
         - $ref: '#/components/schemas/SaveAreaMappings'
         - $ref: '#/components/schemas/SetShowAreas'
         - $ref: '#/components/schemas/RequestDiagnostics'
+        - $ref: '#/components/schemas/NewAgent'
+        - $ref: '#/components/schemas/StopAgent'
+        - $ref: '#/components/schemas/RestartAgent'
       discriminator: type
 
     # ── Server message variants ────────────────────────────────────
@@ -260,9 +263,11 @@ components:
             absent/false means the agent finished its turn ("Done").
 
     AgentActivityStatus:
-      description: Activity state of an agent.
+      description: >-
+        User-facing status of an agent (Spec 003). 'active' is the legacy
+        broadcast for 'working' and is still tolerated by the webview.
       type: string
-      enum: [active, waiting]
+      enum: [active, working, starting, waiting, idle, error, stopped]
 
     AgentToolStart:
       description: Agent began executing a tool.
@@ -956,6 +961,37 @@ components:
       properties:
         type:
           const: requestDiagnostics
+
+    NewAgent:
+      description: Spec 004 — empty-state [+ New Agent] button.
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type:
+          const: newAgent
+
+    StopAgent:
+      description: Spec 004 — Debug View Stop button (closes terminal + cleans runtime state).
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties:
+        type:
+          const: stopAgent
+        id:
+          type: integer
+
+    RestartAgent:
+      description: Spec 004 — Debug View Restart button (preserves Repo / Provider / Model).
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties:
+        type:
+          const: restartAgent
+        id:
+          type: integer
 
     # ── Supporting schemas ─────────────────────────────────────────
 

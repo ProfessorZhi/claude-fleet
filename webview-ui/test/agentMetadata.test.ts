@@ -68,6 +68,10 @@ describe('agentMetadata.statusLabel', () => {
     assert.equal(statusLabel('waiting', false), 'Waiting');
   });
 
+  test('"working" → "Working" (Spec 003)', () => {
+    assert.equal(statusLabel('working', false), 'Working');
+  });
+
   test('"waiting for input" overrides any status', () => {
     // waitingForInput=true wins even when status is "running".
     assert.equal(statusLabel('running', true), 'Waiting for input');

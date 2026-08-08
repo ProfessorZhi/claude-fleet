@@ -152,7 +152,7 @@ export function processTranscriptLine(
         cancelWaitingTimer(agentId, waitingTimers);
         agent.isWaiting = false;
         agent.hadToolsInTurn = true;
-        agents.broadcast({ type: 'agentStatus', id: agentId, status: 'active' });
+        agents.broadcast({ type: 'agentStatus', id: agentId, status: 'working' });
         let hasNonExemptTool = false;
         for (const block of blocks) {
           if (block.type === 'tool_use' && block.id) {

@@ -2,13 +2,23 @@ import * as vscode from 'vscode';
 
 import { FileStateAdapter } from '../../server/src/fileStateAdapter.js';
 import {
+  runFocusAgentCommand,
+  runRestartAgentCommand,
+  runStopAgentCommand,
+} from './agentControl.js';
+import {
   COMMAND_EXPORT_DEFAULT_LAYOUT,
+  COMMAND_FOCUS_AGENT,
+  COMMAND_MANAGE_PROVIDERS,
   COMMAND_NEW_AGENT,
+  COMMAND_RESTART_AGENT,
   COMMAND_SHOW_PANEL,
+  COMMAND_STOP_AGENT,
   CONFIG_KEY_AUTO_SHOW_PANEL,
   VIEW_ID,
 } from './constants.js';
 import { runLaunchAgentFlowWithLauncher } from './launchAgentFlow.js';
+import { runManageProvidersFlow } from './manageProvidersFlow.js';
 import { migrateVsCodeState } from './migrateVsCodeState.js';
 import { PixelAgentsViewProvider } from './PixelAgentsViewProvider.js';
 
@@ -58,6 +68,51 @@ export function activate(context: vscode.ExtensionContext) {
           await provider.launchFromFlow(options);
         },
       );
+    }),
+  );
+
+  // Spec 004 — Manage Providers (List / Create / Delete).
+  context.subscriptions.push(
+    vscode.commands.registerCommand(COMMAND_MANAGE_PROVIDERS, async () => {
+      await runManageProvidersFlow({
+        providerProfileStore: provider.providerProfileStore,
+        secretStorageProvider: provider.secretStorageProvider,
+        baseLaunchOptions: {
+          providerProfileStore: provider.providerProfileStore,
+          secretStorageProvider: provider.secretStorageProvider,
+        },
+      });
+    }),
+  );
+
+  // Spec 004 — Focus the terminal of a chosen agent.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(COMMAND_FOCUS_AGENT, async () => {
+      await runFocusAgentCommand(provider.store);
+    }),
+  );
+
+  // Spec 004 — Stop a chosen agent for real (terminal + runtime state).
+  context.subscriptions.push(
+    vscode.commands.registerCommand(COMMAND_STOP_AGENT, async () => {
+      await runStopAgentCommand(provider.runtime);
+    }),
+  );
+
+  // Spec 004 — Restart a chosen agent preserving Repo / Provider / Model.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(COMMAND_RESTART_AGENT, async () => {
+      await runRestartAgentCommand({
+        store: provider.store,
+        runtime: provider.runtime,
+        baseLaunchOptions: {
+          providerProfileStore: provider.providerProfileStore,
+          secretStorageProvider: provider.secretStorageProvider,
+        },
+        launcher: async (options) => {
+          await provider.launchFromFlow(options);
+        },
+      });
     }),
   );
 

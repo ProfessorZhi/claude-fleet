@@ -94,6 +94,13 @@ export interface AgentState {
   providerDisplayName?: string;
   /** Model id passed as `claude --model <id>` at launch. Persisted. */
   modelId?: string;
+
+  // -- Spec 003 status --
+  /** Launch timestamp (ms since epoch). TRANSIENT — never persisted; used by
+   *  the error heuristic ("transcript never appeared within N seconds after
+   *  launch") in server/src/agentStatus.ts. Restored agents keep undefined
+   *  and skip the timeout rule. */
+  createdAt?: number;
 }
 
 export interface PersistedAgent {

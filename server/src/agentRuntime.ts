@@ -86,7 +86,8 @@ export class AgentRuntime {
   private lifecycleCallbacks: RuntimeLifecycleCallbacks = {};
 
   constructor(
-    private readonly store: AgentStateStore,
+    /** Public so control commands (agentControl.ts) can enumerate agents. */
+    readonly store: AgentStateStore,
     provider: HookProvider,
   ) {
     // Wire module-level dependencies
@@ -303,6 +304,45 @@ export class AgentRuntime {
   }
 
   // ── Agent removal (shared cleanup) ──
+
+  /**
+   * Stop an agent for real (Spec 004): dispose its Terminal (killing the
+   * shell process), then clean up all runtime state — JSONL dismissal, hook
+   * unregistration, teammates, watchers, timers, store entry.
+   *
+   * Only touches resources belonging to `id`; other agents are never
+   * affected. Idempotent: calling again (e.g. the onDidCloseTerminal handler
+   * firing after dispose) is a no-op because the store entry is gone.
+   */
+  stopAgent(id: number): void {
+    const agent = this.store.get(id);
+    if (!agent) return;
+
+    // 1. Close the Terminal / process first. VS Code Terminal.dispose closes
+    //    the PTY, which terminates the shell. onDidCloseTerminal then fires
+    //    and finds the agent already removed below — its cleanup is a no-op.
+    if (agent.terminalRef) {
+      try {
+        agent.terminalRef.dispose();
+      } catch (e) {
+        console.error(
+          `[Claude Fleet] stopAgent: terminal dispose failed for agent ${id}: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
+    }
+
+    // 2. Mirror the onDidCloseTerminal cleanup order.
+    if (agent.isTeamLead) {
+      this.removeTeammates(id);
+    }
+    this.dismissalTracker.dismiss(agent.jsonlFile);
+    if (!agent.spawnToolUseId) {
+      this.unregisterAgent(agent.sessionId);
+    }
+    this.removeAgent(id);
+  }
 
   /** Remove an agent: stop watchers, cancel timers, delete from store. */
   removeAgent(id: number): void {

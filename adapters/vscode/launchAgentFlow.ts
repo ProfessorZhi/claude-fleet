@@ -27,6 +27,11 @@ import {
   validateProviderProfile,
 } from '../../core/src/providerProfiles.js';
 import type { LaunchNewTerminalOptions } from './agentManager.js';
+import {
+  CLAUDE_CLI_NOT_FOUND_MESSAGE,
+  type CliCheckResult,
+  ensureClaudeCliAvailable,
+} from './cliCheck.js';
 import type { ProviderProfileStore } from './providerProfileStore.js';
 import {
   createSecretStorageProvider,
@@ -38,6 +43,8 @@ export interface LaunchAgentFlowDeps {
   secretStorageProvider: SecretStorageProvider;
   /** Runtime args for launchNewTerminal, excluding the fields this flow fills. */
   baseLaunchOptions: Omit<LaunchNewTerminalOptions, 'launchConfig' | 'suppressShow'>;
+  /** CLI availability check (Spec 004 FR-014); injectable for tests. */
+  cliCheck?: () => Promise<CliCheckResult>;
 }
 
 /**
@@ -63,7 +70,19 @@ export async function runLaunchAgentFlowWithLauncher(
   const modelId = await pickModel(provider);
   if (modelId === undefined) return;
 
-  // ── Step 4: Launch ────────────────────────────────────────
+  // ── Step 4: CLI availability (Spec 004 FR-014) ────────────
+  // Check ONCE per launch, before any terminal exists. A missing `claude`
+  // would otherwise create a terminal that immediately fails. The check is
+  // injectable (tests) and never runs on a timer.
+  const cliCheck = deps.cliCheck ?? ensureClaudeCliAvailable;
+  const cli = await cliCheck();
+  if (!cli.ok) {
+    console.warn(`[Claude Fleet] Launch aborted: ${cli.reason}`);
+    void vscode.window.showErrorMessage(CLAUDE_CLI_NOT_FOUND_MESSAGE);
+    return;
+  }
+
+  // ── Step 5: Launch ────────────────────────────────────────
   await launcher({
     ...deps.baseLaunchOptions,
     launchConfig: { cwd, providerProfileId: provider.id, modelId },
@@ -131,7 +150,12 @@ function describeProfile(p: ProviderProfile): string {
   }
 }
 
-async function runCreateCustomProviderFlow(
+/**
+ * Create-a-Custom-Provider sub-flow (InputBoxes + SecretStorage write).
+ * Exported so the Manage Providers command (Spec 004) reuses the exact same
+ * creation path instead of duplicating it.
+ */
+export async function runCreateCustomProviderFlow(
   deps: LaunchAgentFlowDeps,
 ): Promise<ProviderProfile | undefined> {
   const name = await vscode.window.showInputBox({

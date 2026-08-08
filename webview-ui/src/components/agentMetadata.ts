@@ -44,6 +44,8 @@ export function statusLabel(status: string | undefined, waitingForInput: boolean
   switch (status) {
     case 'running':
       return 'Running';
+    case 'working':
+      return 'Working';
     case 'waiting':
       return 'Waiting';
     case 'idle':

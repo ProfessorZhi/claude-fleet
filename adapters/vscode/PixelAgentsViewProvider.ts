@@ -7,6 +7,7 @@ import type { StateAdapter } from '../../core/src/adapter.js';
 import { buildAgentDiagnostics } from '../../server/src/agentDiagnostics.js';
 import { AgentRuntime } from '../../server/src/agentRuntime.js';
 import { AgentStateStore } from '../../server/src/agentStateStore.js';
+import { agentStateToUserStatusWithError } from '../../server/src/agentStatus.js';
 import type {
   LoadedAssets,
   LoadedCharacterSprites,
@@ -36,6 +37,7 @@ import {
 import { PathSet } from '../../server/src/pathKey.js';
 import { claudeProvider, copyHookScript } from '../../server/src/providers/index.js';
 import { PixelAgentsServer } from '../../server/src/server.js';
+import { runRestartAgentCommand } from './agentControl.js';
 import type { LaunchNewTerminalOptions } from './agentManager.js';
 import {
   getProjectDirPath,
@@ -46,6 +48,7 @@ import {
   sendLayout,
 } from './agentManager.js';
 import {
+  COMMAND_NEW_AGENT,
   CONFIG_KEY_AUTO_SHOW_PANEL,
   CONFIG_KEY_AUTO_SPAWN_AGENT,
   GLOBAL_KEY_ALWAYS_SHOW_LABELS,
@@ -82,8 +85,9 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   private isWebviewReady = false;
   private pendingBroadcasts: Array<Record<string, unknown>> = [];
 
-  // Shared agent lifecycle core (timer Maps, scanners, hook handler, dismissal tracker)
-  private runtime: AgentRuntime;
+  // Shared agent lifecycle core (timer Maps, scanners, hook handler, dismissal tracker).
+  // Public so the Spec 004 control commands (extension.ts) can stop / focus agents.
+  runtime: AgentRuntime;
 
   // Global session scanning dismissal tracking
   private globalDismissedFiles = new Set<string>();
@@ -339,18 +343,30 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
             }
           }
         }
-      } else if (message.type === 'closeAgent') {
-        const agent = this.store.get(message.id);
-        if (agent) {
-          if (agent.terminalRef) {
-            agent.terminalRef.dispose();
-          } else {
-            // External agent -- remove from tracking and dismiss the file
-            // so the external scanner doesn't re-adopt it
-            this.runtime.dismissalTracker.dismiss(agent.jsonlFile);
-            this.runtime.removeAgent(message.id);
-          }
-        }
+      } else if (message.type === 'closeAgent' || message.type === 'stopAgent') {
+        // Spec 004 — the webview ✕ button and the Stop command share ONE
+        // cleanup path: stopAgent really closes the terminal/process and
+        // clears runtime state (dismissal / unregister / watchers / store).
+        this.runtime.stopAgent(message.id as number);
+      } else if (message.type === 'newAgent') {
+        // Spec 004 — empty-state [+ New Agent] button.
+        await vscode.commands.executeCommand(COMMAND_NEW_AGENT);
+      } else if (message.type === 'restartAgent') {
+        // Spec 004 — Debug View Restart button. Reuses the command flow so
+        // Repo / Provider / Model are preserved; the button targets the
+        // clicked agent directly (no second QuickPick).
+        await runRestartAgentCommand({
+          store: this.store,
+          runtime: this.runtime,
+          baseLaunchOptions: {
+            providerProfileStore: this.providerProfileStore,
+            secretStorageProvider: this.secretStorageProvider,
+          },
+          launcher: async (options) => {
+            await this.launchFromFlow(options);
+          },
+          picker: async () => message.id as number,
+        });
       } else if (message.type === 'saveAgentSeats') {
         // Store seat assignments in a separate key (never touched by persistAgents)
         console.log(`[Claude Fleet] State: saveAgentSeats:`, JSON.stringify(message.seats));
@@ -699,6 +715,30 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           type: 'agentDiagnostics',
           agents: buildAgentDiagnostics(this.store),
         });
+        // Spec 003 — poll-driven status refresh. The webview polls every 2s;
+        // this path is the only one with fs + time access, so it computes the
+        // error-aware user status (transcript vanished / launch timeout) and
+        // broadcasts it over the existing agentStatus channel. Keeps the
+        // webview's single source of truth (agentStatuses dict) fresh for
+        // transitions hooks never emit (starting → idle, → error).
+        const now = Date.now();
+        for (const [id, agent] of this.store) {
+          let jsonlExists = false;
+          try {
+            jsonlExists = fs.existsSync(agent.jsonlFile);
+          } catch {
+            /* treat as missing */
+          }
+          this.webview?.postMessage({
+            type: 'agentStatus',
+            id,
+            status: agentStateToUserStatusWithError(agent, {
+              jsonlExists,
+              createdAt: agent.createdAt,
+              now,
+            }),
+          });
+        }
       } else if (message.type === 'openSessionsFolder') {
         const projectDir = getProjectDirPath();
         if (projectDir && fs.existsSync(projectDir)) {

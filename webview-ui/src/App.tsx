@@ -342,6 +342,26 @@ function App() {
             style={{ background: 'var(--vignette)' }}
           />
 
+          {/* Spec 004 — empty state: no agents running */}
+          {agents.length === 0 && (
+            <div
+              data-testid="empty-state"
+              className="absolute inset-0 z-12 flex flex-col items-center justify-center gap-8 pointer-events-none"
+            >
+              <div className="text-3xl font-bold">No agents running</div>
+              <button
+                data-testid="empty-state-new-agent"
+                onClick={() => transport.send({ type: 'newAgent' })}
+                className="pointer-events-auto py-4 px-12 text-xl bg-accent text-white border-2 border-accent rounded-none cursor-pointer shadow-pixel hover:opacity-90"
+              >
+                + New Agent
+              </button>
+              <p className="text-base opacity-80 max-w-140 text-center">
+                Launch a Claude Code instance with its own repo, provider and model.
+              </p>
+            </div>
+          )}
+
           {editor.isEditMode && editor.isDirty && (
             <EditActionBar editor={editor} editorState={editorState} />
           )}

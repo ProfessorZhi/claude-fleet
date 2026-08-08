@@ -454,7 +454,7 @@ export class HookEventHandler {
     this.agents.broadcast({
       type: 'agentStatus',
       id: agentId,
-      status: 'active',
+      status: 'working',
     });
   }
 

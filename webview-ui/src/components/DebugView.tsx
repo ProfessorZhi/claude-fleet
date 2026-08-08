@@ -121,18 +121,62 @@ export function DebugView({
           >
             Agent #{id}
           </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={(e) => {
-              e.stopPropagation();
-              transport.send({ type: 'closeAgent', id });
-            }}
-            className={`opacity-70 ${isSelected ? 'text-white' : ''}`}
-            title="Close agent"
-          >
-            ✕
-          </Button>
+          <span className="flex items-center gap-4">
+            {/* Spec 004 — per-agent controls. Focus / Restart / Stop go through
+                the same message types the commands use, so the UI and the
+                Command Palette share one code path. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid={`agent-focus-${id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                transport.send({ type: 'focusAgent', id });
+              }}
+              className={`opacity-70 ${isSelected ? 'text-white' : ''}`}
+              title="Focus terminal"
+            >
+              Focus
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid={`agent-restart-${id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                transport.send({ type: 'restartAgent', id });
+              }}
+              className={`opacity-70 ${isSelected ? 'text-white' : ''}`}
+              title="Restart agent (keeps Repo / Provider / Model)"
+            >
+              Restart
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid={`agent-stop-${id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                transport.send({ type: 'stopAgent', id });
+              }}
+              className={`opacity-70 ${isSelected ? 'text-white' : ''}`}
+              title="Stop agent (closes terminal and process)"
+            >
+              Stop
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                transport.send({ type: 'closeAgent', id });
+              }}
+              className={`opacity-70 ${isSelected ? 'text-white' : ''}`}
+              title="Close agent"
+            >
+              ✕
+            </Button>
+          </span>
         </span>
 
         {/* Spec 002 — Agent metadata. Repo / Provider / Model / Session / Status.
