@@ -1,0 +1,682 @@
+# CI workflow for pixel-agents
+
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.github/FUNDING.yml'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.github/FUNDING.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        id: setup_node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Dependencies
+        id: install_dependencies
+        run: npm ci
+
+      # --- Protocol spec checks (blocking) ---
+
+      - name: Validate AsyncAPI spec
+        id: validate_spec
+        if: always() && steps.install_dependencies.outcome == 'success'
+        run: npm run asyncapi:validate
+        continue-on-error: true
+
+      - name: Generated messages drift check
+        id: messages_drift
+        if: always() && steps.install_dependencies.outcome == 'success'
+        run: |
+          npm run asyncapi:generate
+          if ! git diff --exit-code core/src/messages.ts; then
+            echo "::error::core/src/messages.ts is out of sync with core/asyncapi.yaml. Run 'npm run asyncapi:generate' locally and commit the result."
+            exit 1
+          fi
+        continue-on-error: true
+
+      - name: E2E inventory drift check
+        id: e2e_inventory_drift
+        if: always() && steps.install_dependencies.outcome == 'success'
+        run: |
+          npm run e2e:inventory
+          if ! git diff --exit-code e2e/README.md; then
+            echo "::error::e2e/README.md inventory is out of sync with the test suite. Run 'npm run e2e:inventory' locally and commit the result."
+            exit 1
+          fi
+        continue-on-error: true
+
+      # --- Quality Checks (blocking) ---
+
+      - name: Type Check
+        id: type_check
+        if: always() && steps.install_dependencies.outcome == 'success'
+        run: npm run check-types
+        continue-on-error: true
+
+      - name: Lint
+        id: lint
+        if: always() && steps.install_dependencies.outcome == 'success'
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Webview Tests
+        id: webview_test
+        if: always() && steps.install_dependencies.outcome == 'success'
+        run: npm run test -w webview-ui
+        continue-on-error: true
+
+      - name: Upload Linux Webview Allure Results
+        if: always() && steps.install_dependencies.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: allure-results-webview-linux
+          if-no-files-found: warn
+          path: allure-results/webview
+
+      - name: Format Check
+        id: format_check
+        if: always() && steps.install_dependencies.outcome == 'success'
+        run: npm run format:check
+        continue-on-error: true
+
+      - name: Knip (advisory)
+        id: knip
+        if: always() && steps.install_dependencies.outcome == 'success'
+        run: npm run knip
+        continue-on-error: true
+
+      # --- Build (blocking) ---
+
+      - name: Build
+        id: build
+        if: always() && steps.install_dependencies.outcome == 'success'
+        run: |
+          npm run build:extension
+          npm run build:webview
+        continue-on-error: true
+
+      - name: Verify npm Package Artifact
+        id: npm_package
+        if: always() && steps.build.outcome == 'success' && steps.install_dependencies.outcome == 'success'
+        run: npm run test:package-contract && npm run verify:npm-package -- --skip-build
+        continue-on-error: true
+
+      # --- Server Tests (require build for hook script) ---
+
+      - name: Server Tests
+        id: server_test
+        if: always() && steps.build.outcome == 'success' && steps.install_dependencies.outcome == 'success'
+        run: npm run test -w server
+        continue-on-error: true
+
+      - name: Upload Linux Server Allure Results
+        if: always() && steps.build.outcome == 'success' && steps.install_dependencies.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: allure-results-server-linux
+          if-no-files-found: warn
+          path: allure-results/server
+
+      # --- Audit Checks (blocking) ---
+
+      - name: Audit Dependencies
+        id: audit
+        if: always() && steps.install_dependencies.outcome == 'success'
+        run: npm audit --audit-level=moderate --workspaces --include-workspace-root
+        continue-on-error: true
+
+      # --- Summary ---
+
+      - name: Write Step Summary
+        if: always()
+        env:
+          CHECKOUT: ${{ steps.checkout.outcome }}
+          SETUP_NODE: ${{ steps.setup_node.outcome }}
+          INSTALL_DEPENDENCIES: ${{ steps.install_dependencies.outcome }}
+          TYPE_CHECK: ${{ steps.type_check.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          WEBVIEW_TEST: ${{ steps.webview_test.outcome }}
+          FORMAT_CHECK: ${{ steps.format_check.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          NPM_PACKAGE: ${{ steps.npm_package.outcome }}
+          SERVER_TEST: ${{ steps.server_test.outcome }}
+          AUDIT: ${{ steps.audit.outcome }}
+          KNIP: ${{ steps.knip.outcome }}
+        run: |
+          status() {
+            if [ "$1" = "success" ]; then echo "✅ PASS"; else echo "❌ FAIL"; fi
+          }
+          advisory() {
+            if [ "$1" = "success" ]; then echo "✅ PASS"; else echo "⚠️ WARN"; fi
+          }
+          {
+            echo "## CI Results"
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Checkout | $(status "$CHECKOUT") |"
+            echo "| Setup Node | $(status "$SETUP_NODE") |"
+            echo "| Install dependencies | $(status "$INSTALL_DEPENDENCIES") |"
+            echo "| **Type check** | $(status "$TYPE_CHECK") |"
+            echo "| **Lint** | $(status "$LINT") |"
+            echo "| **Webview tests** | $(status "$WEBVIEW_TEST") |"
+            echo "| **Format check** | $(status "$FORMAT_CHECK") |"
+            echo "| **Build** | $(status "$BUILD") |"
+            echo "| **npm package artifact** | $(status "$NPM_PACKAGE") |"
+            echo "| **Server tests** | $(status "$SERVER_TEST") |"
+            echo "| Audit dependencies _(advisory)_ | $(advisory "$AUDIT") |"
+            echo "| Knip _(advisory)_ | $(advisory "$KNIP") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- Final Gate ---
+
+      - name: Fail If Any Blocking Check Failed
+        if: always()
+        env:
+          CHECKOUT: ${{ steps.checkout.outcome }}
+          SETUP_NODE: ${{ steps.setup_node.outcome }}
+          INSTALL_DEPENDENCIES: ${{ steps.install_dependencies.outcome }}
+          TYPE_CHECK: ${{ steps.type_check.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          WEBVIEW_TEST: ${{ steps.webview_test.outcome }}
+          FORMAT_CHECK: ${{ steps.format_check.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          NPM_PACKAGE: ${{ steps.npm_package.outcome }}
+          SERVER_TEST: ${{ steps.server_test.outcome }}
+        run: |
+          failed=0
+          for step in CHECKOUT SETUP_NODE INSTALL_DEPENDENCIES \
+                      TYPE_CHECK LINT \
+                      WEBVIEW_TEST FORMAT_CHECK BUILD NPM_PACKAGE SERVER_TEST; do
+            val=$(printenv "$step" 2>/dev/null || echo "skipped")
+            if [ "$val" != "success" ]; then
+              echo "::error::$step failed"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+  npm-package-node20:
+    name: npm Package Smoke (Node 20)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20.x'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Verify npm Package Contract and Installed Artifact
+        run: npm run test:package-contract && npm run verify:npm-package
+
+  e2e:
+    name: ${{ matrix.target.label }} E2E (shard ${{ matrix.shard }}/3)
+    # One matrix replaces the former linux-e2e / macos-e2e / windows-e2e jobs:
+    # 3 OSes x 3 shards = 9 runs. Shard distribution is test-level (Playwright
+    # `fullyParallel` in playwright.config.ts), so each shard runs ~1/3 of the
+    # suite at --workers=1 (the safe ceiling; CI runners flake with more).
+    # Public repo, so macOS/Windows minutes are free. The Linux-only system-deps
+    # install is gated by `runner.os` inside the install step. Artifact names use
+    # matrix.target.label (linux/macos/windows) so downstream download patterns
+    # stay stable.
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { os: ubuntu-latest, label: linux }
+          - { os: macos-latest, label: macos }
+          - { os: windows-latest, label: windows }
+        shard: [1, 2, 3]
+    runs-on: ${{ matrix.target.os }}
+    timeout-minutes: 60
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: .playwright-browsers
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Restore VS Code Cache
+        id: cache_vscode_restore
+        uses: actions/cache/restore@v5
+        with:
+          path: .vscode-test
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('e2e/global-setup.ts') }}-v3
+          restore-keys: |
+            vscode-test-${{ runner.os }}-
+
+      - name: Restore Playwright Cache
+        id: cache_playwright_restore
+        uses: actions/cache/restore@v5
+        with:
+          path: .playwright-browsers
+          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-v1
+          restore-keys: |
+            playwright-browsers-${{ runner.os }}-
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Extension
+        run: npm run build:extension
+
+      - name: Build Webview
+        run: npm run build:webview
+
+      # Skip the ~250 MB chromium download when the browser cache hit; only run
+      # `install-deps` on Linux (macOS/Windows ship the required system libs, so
+      # the old unconditional `--with-deps` just burned ~30 s for a no-op).
+      - name: Install Playwright Dependencies
+        id: install_playwright_deps
+        shell: bash
+        run: |
+          if [ "${{ steps.cache_playwright_restore.outputs.cache-hit }}" != "true" ]; then
+            echo "::group::Install Chromium browser"
+            npx playwright install chromium
+            echo "::endgroup::"
+          else
+            echo "Browser cache hit — skipping Chromium download"
+          fi
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            echo "::group::Install system deps"
+            npx playwright install-deps chromium
+            echo "::endgroup::"
+          fi
+        continue-on-error: true
+
+      - name: E2E Tests
+        id: e2e_test
+        if: steps.install_playwright_deps.outcome == 'success'
+        # --workers=1: CI runners flake with more. Videos are kept only for
+        # failing tests (Playwright default) to keep the Vercel deploy small.
+        run: npm run e2e -- --run-id ${{ matrix.target.label }}-shard-${{ matrix.shard }} --shard=${{ matrix.shard }}/3 --workers=1
+        continue-on-error: true
+
+      - name: Upload E2E Artifacts
+        if: always() && steps.install_playwright_deps.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-artifacts-${{ matrix.target.label }}-shard-${{ matrix.shard }}
+          if-no-files-found: ignore
+          path: |
+            playwright-report/e2e
+            test-results/e2e
+
+      - name: Upload Allure Results
+        if: always() && steps.install_playwright_deps.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: allure-results-e2e-${{ matrix.target.label }}-shard-${{ matrix.shard }}
+          if-no-files-found: warn
+          path: allure-results/e2e
+
+      # Cache save gated on cache MISS + path existence only (NOT test outcome):
+      # the VS Code + Chromium binaries are external artifacts whose validity is
+      # independent of our tests. Gating on test success created a vicious cycle
+      # (flake -> skip save -> re-download -> slower -> more flake). Only shard 1
+      # writes (single-writer; the cache key is per-OS via runner.os).
+      - name: Save VS Code Cache
+        if: always() && matrix.shard == 1 && steps.cache_vscode_restore.outputs.cache-hit != 'true' && hashFiles('.vscode-test/vscode-executable.txt') != ''
+        uses: actions/cache/save@v5
+        with:
+          path: .vscode-test
+          key: ${{ steps.cache_vscode_restore.outputs.cache-primary-key }}
+
+      - name: Save Playwright Cache
+        if: always() && matrix.shard == 1 && steps.cache_playwright_restore.outputs.cache-hit != 'true' && hashFiles('.playwright-browsers/**') != ''
+        uses: actions/cache/save@v5
+        with:
+          path: .playwright-browsers
+          key: ${{ steps.cache_playwright_restore.outputs.cache-primary-key }}
+
+      - name: Write Step Summary
+        if: always()
+        shell: bash
+        env:
+          LABEL: ${{ matrix.target.label }}
+          SHARD: ${{ matrix.shard }}
+          INSTALL_PLAYWRIGHT_DEPS: ${{ steps.install_playwright_deps.outcome }}
+          E2E_TEST: ${{ steps.e2e_test.outcome }}
+        run: |
+          status() {
+            if [ "$1" = "success" ]; then echo "✅ PASS"; else echo "❌ FAIL"; fi
+          }
+          {
+            echo "## $LABEL E2E Results (shard $SHARD/3)"
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Install Playwright deps | $(status "$INSTALL_PLAYWRIGHT_DEPS") |"
+            echo "| E2E tests | $(status "$E2E_TEST") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # shell: bash is required here — Windows runners default to PowerShell and
+      # this script is bash (for loop, printenv).
+      - name: Fail If E2E Failed
+        if: always()
+        shell: bash
+        env:
+          INSTALL_PLAYWRIGHT_DEPS: ${{ steps.install_playwright_deps.outcome }}
+          E2E_TEST: ${{ steps.e2e_test.outcome }}
+        run: |
+          failed=0
+          for step in INSTALL_PLAYWRIGHT_DEPS E2E_TEST; do
+            val=$(printenv "$step" 2>/dev/null || echo "skipped")
+            if [ "$val" != "success" ]; then
+              echo "::error::$step failed"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+  # Single aggregate status check to require in branch protection, instead of
+  # pinning every job/shard name (which silently breaks when a shard is renamed
+  # or the shard count changes). Green only when ci, npm-package-node20, and the
+  # whole e2e matrix all succeed.
+  required-checks:
+    name: Required Checks
+    if: always()
+    needs:
+      - ci
+      - npm-package-node20
+      - e2e
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all required jobs succeeded
+        run: |
+          echo "ci=${{ needs.ci.result }}"
+          echo "npm-package-node20=${{ needs.npm-package-node20.result }}"
+          echo "e2e=${{ needs.e2e.result }}"
+          if [ "${{ needs.ci.result }}" != "success" ] \
+            || [ "${{ needs.npm-package-node20.result }}" != "success" ] \
+            || [ "${{ needs.e2e.result }}" != "success" ]; then
+            echo "::error::One or more required jobs did not succeed"
+            exit 1
+          fi
+          echo "All required jobs succeeded."
+
+  deploy-preview-precheck:
+    name: Deploy Precheck
+    if: always() && github.event_name == 'pull_request'
+    needs:
+      - ci
+      - e2e
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.deploy_precheck.outputs.ready }}
+      reason: ${{ steps.deploy_precheck.outputs.reason }}
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+    steps:
+      - name: Download Linux E2E Allure Shards
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: allure-results-e2e-linux-shard-*
+          path: allure-results/e2e
+          merge-multiple: true
+
+      - name: Download Windows E2E Allure Shards
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: allure-results-e2e-windows-shard-*
+          path: allure-results/e2e
+          merge-multiple: true
+
+      - name: Download macOS E2E Allure Shards
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: allure-results-e2e-macos-shard-*
+          path: allure-results/e2e
+          merge-multiple: true
+
+      - name: Upload Merged Cross-Platform E2E Allure Results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: allure-results-e2e
+          if-no-files-found: warn
+          path: allure-results/e2e
+
+      - name: Check Deploy Preconditions
+        id: deploy_precheck
+        shell: bash
+        env:
+          CI_RESULT: ${{ needs.ci.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ "$PR_HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "reason=fork-pr" >> "$GITHUB_OUTPUT"
+          elif [ -n "$VERCEL_TOKEN" ] && [ -n "$VERCEL_ORG_ID" ] && [ -n "$VERCEL_PROJECT_ID" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "reason=ready" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "reason=missing-secrets" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write Skip Summary
+        if: steps.deploy_precheck.outputs.ready != 'true'
+        shell: bash
+        env:
+          SKIP_REASON: ${{ steps.deploy_precheck.outputs.reason }}
+          CI_RESULT: ${{ needs.ci.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          case "$SKIP_REASON" in
+            ci-blocked)
+              reason="CI job result was '$CI_RESULT', so preview deployment is blocked."
+              ;;
+            e2e-blocked)
+              reason="E2E matrix result was '$E2E_RESULT', so preview deployment is blocked."
+              ;;
+            fork-pr)
+              reason="pull request comes from a fork, so deployment is skipped."
+              ;;
+            *)
+              reason="missing one or more required Vercel secrets."
+              ;;
+          esac
+          {
+            echo "## Hosted Test Report"
+            echo
+            echo "- Skipped: $reason"
+            echo "- Required secrets: \`VERCEL_TOKEN\`, \`VERCEL_ORG_ID\`, \`VERCEL_PROJECT_ID\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-preview:
+    name: Deploy Preview
+    needs: deploy-preview-precheck
+    if: always() && needs.deploy-preview-precheck.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Download Cross-Platform E2E Allure Results
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: allure-results-e2e
+          path: allure-results/e2e
+
+      - name: Download Linux Server Allure Results
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: allure-results-server-linux
+          path: allure-results/server
+
+      - name: Download Linux Webview Allure Results
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: allure-results-webview-linux
+          path: allure-results/webview
+
+      - name: Prepare Vercel Output
+        run: npm run vercel:prepare
+
+      - name: Deploy to Vercel
+        id: deploy_vercel
+        # The hosted Allure report is a best-effort preview, not a quality gate.
+        # If the deploy fails (Vercel rate limit, transient upload error, missing
+        # secrets on a fork), the run must still go green as long as every test
+        # job passed. The downstream summary/comment steps gate on
+        # `deploy_vercel.outcome == 'success'`, so they skip cleanly on failure.
+        continue-on-error: true
+        shell: bash
+        run: |
+          # --archive=tgz uploads the build output as a single tarball instead
+          # of ~480 individual files (the Allure report is many small JSONs).
+          # Without it, each deploy burns ~480 of Vercel's free-tier 5000/24h
+          # upload-API calls and CI iterations hit "api-upload-free" rate limit.
+          deployment_url="$(npx --yes vercel@50.42.0 deploy --prebuilt --archive=tgz --token "$VERCEL_TOKEN" --yes)"
+          echo "deployment_url=$deployment_url" >> "$GITHUB_OUTPUT"
+
+      - name: Write Deployment Summary
+        if: always() && steps.deploy_vercel.outcome == 'success'
+        shell: bash
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy_vercel.outputs.deployment_url }}
+        run: |
+          base_url="${DEPLOYMENT_URL%/}"
+          {
+            echo "## Hosted Test Report"
+            echo
+            echo "- Deployment type: Preview"
+            echo "- Deployment URL: $base_url"
+            echo "- Allure report (Linux + macOS + Windows): $base_url/reports/allure/"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create or update preview comment on PR
+        if: github.event_name == 'pull_request' && steps.deploy_vercel.outcome == 'success'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DEPLOYMENT_URL: ${{ steps.deploy_vercel.outputs.deployment_url }}
+        run: |
+          base_url="${DEPLOYMENT_URL%/}"
+          comment_body="$(cat <<EOF
+          <!-- pixel-agents-vercel-preview -->
+          🔍 Vercel Preview: $base_url
+
+          Allure report (Linux + macOS + Windows): $base_url/reports/allure/
+          EOF
+          )"
+
+          existing_comment_id="$(
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$GH_REPO/issues/$PR_NUMBER/comments" \
+              --paginate \
+              --jq '.[] | select(.user.login == "github-actions[bot]") | select((.body // "") | contains("<!-- pixel-agents-vercel-preview -->") or contains("🔍 Vercel Preview:")) | .id' \
+              | tail -n 1
+          )"
+
+          if [ -n "$existing_comment_id" ]; then
+            gh api \
+              --method PATCH \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$GH_REPO/issues/comments/$existing_comment_id" \
+              -f body="$comment_body" >/dev/null
+          else
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$GH_REPO/issues/$PR_NUMBER/comments" \
+              -f body="$comment_body" >/dev/null
+          fi

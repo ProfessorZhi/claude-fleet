@@ -1,6 +1,7 @@
 # ===== 环境与密钥（绝不入库） =====
 .env
 .env.*
+!.env.example
 *.env
 *.env.*
 
@@ -16,9 +17,7 @@ dist/
 build/
 out/
 coverage/
-
-# 包管理器锁文件按需保留/忽略 —— Phase 0 还没有 package.json,
-# 等真正引入依赖时再决定哪些锁文件入版本控制。
+*.tsbuildinfo
 
 # ===== 日志 =====
 *.log
@@ -26,11 +25,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+/logs
 
 # ===== 编辑器 / IDE =====
 .vscode/
 !.vscode/settings.json
 !.vscode/extensions.json
+.vscode-test/
 .idea/
 *.swp
 *.swo
@@ -40,9 +41,41 @@ pnpm-debug.log*
 Thumbs.db
 
 # ===== Claude / Agent 本地缓存 =====
+# Claude Fleet 的 .claude/ 顶层目录里：
+#   skills/  rules/   —— 入库（适配层资产）
+#   cache/   state/   sessions/ —— 不入库（本地运行时）
 .claude/cache/
 .claude/state/
 .claude/sessions/
+/.claude/
+
+# 上游 Pixel Agents 也有 .mcp.json 等本地工具配置，不入库
+.mcp.json
+
+# ===== E2E 与测试产物 =====
+test-results/
+playwright-report/
+allure-results/
+allure-report/
+.playwright-mcp/
+
+# ===== 打包产物 =====
+*.vsix
+*.map
+
+# ===== 项目本地工具 / 临时目录 =====
+/sprites-export
+/.vercel/
+/.worktrees
+agent-orchestrator.yaml
+.ao/
+.serena/
+/tasks/
+
+# ===== 本地笔记（不入库） =====
+/notes/
+/docs/e2e-*.md
+!/docs/e2e-claude-mocking.md
 
 # ===== 测试与临时 =====
 *.tmp
@@ -52,7 +85,7 @@ Thumbs.db
 # ===== 注意：以下目录**故意**保留在仓库中 =====
 # AGENTS.md        —— 所有 Agent 的统一入口
 # CLAUDE.md        —— Claude Code 适配层
-# docs/            —— 项目信息
+# docs/            —— 项目信息（与 Pixel Agents 的 docs/ 不冲突；上游 docs/ 在另一目录）
 # .agent/          —— Agent 工作流与知识
 # .claude/         —— Claude Code 适配层（但忽略其内部缓存 / 状态目录）
 
@@ -64,5 +97,5 @@ Thumbs.db
 !.agent/
 !.claude/skills/
 !.claude/rules/
-!.claude/skills/README.md
-!.claude/rules/README.md
+!.claude/skills/**
+!.claude/rules/**

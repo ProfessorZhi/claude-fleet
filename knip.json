@@ -1,0 +1,56 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "tags": ["-internal"],
+  "ignoreDependencies": [
+    "tailwindcss",
+    "pngjs",
+    "@types/pngjs",
+    "fastify",
+    "@fastify/cors",
+    "@fastify/static",
+    "@fastify/websocket"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "ignore": [
+    "core/src/index.ts",
+    "server/src/providers/hook/claude/hooks/claude-hook.ts",
+    "webview-ui/src/office/components/index.ts",
+    "webview-ui/src/office/editor/index.ts",
+    "webview-ui/src/office/engine/index.ts",
+    "webview-ui/src/office/layout/index.ts",
+    "webview-ui/src/office/sprites/index.ts"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "e2e/**/*.ts",
+        "scripts/*.{ts,mjs}"
+      ],
+      "project": [
+        "adapters/vscode/**/*.ts",
+        "core/src/**/*.ts",
+        "e2e/**/*.ts",
+        "scripts/**/*.{ts,mjs}"
+      ]
+    },
+    "server": {
+      "entry": [
+        "src/server.ts",
+        "src/cli.ts",
+        "__tests__/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "__tests__/**/*.ts"
+      ]
+    },
+    "webview-ui": {
+      "entry": [
+        "test/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}"
+      ]
+    }
+  }
+}
