@@ -82,6 +82,9 @@ agent-orchestrator.yaml
 *.bak
 .cache/
 
+# VS Code 隔离测试运行时（--extensions-dir .tmp-vscode-alpha，用完即弃）
+.tmp-vscode-alpha/
+
 # ===== 注意：以下目录**故意**保留在仓库中 =====
 # AGENTS.md        —— 所有 Agent 的统一入口
 # CLAUDE.md        —— Claude Code 适配层
