@@ -61,9 +61,14 @@ Coding Agent**，每个实例独立 Repo、独立 Provider、独立 Model、独�
 
 ## 第一阶段范围（In Scope）
 
+> "第一阶段"指产品愿景层面的整体范围，不是 Roadmap 上的单一 Phase。  
+> 按 [`ROADMAP.md`](./ROADMAP.md)，下面的能力分属不同 Phase：
+> Repo / Session 隔离在 Phase 2，Provider / Model 隔离在 Phase 3。
+
 - VS Code Extension 作为宿主 UI 与控制面。
 - 多实例 Claude Code 管理。
-- 每个实例的 Repo / Provider / Model / Session 隔离。
+- 每个实例独立的 Repo / Session。
+- 每个实例独立的 Provider / Model。
 - 实时状态与进度展示（文字优先）。
 - Pixel-style 可视化骨架。
 
@@ -92,7 +97,7 @@ Coding Agent**，每个实例独立 Repo、独立 Provider、独立 Model、独�
 - **尚未**编写任何业务代码。
 - **尚未**启动任何 Feature Spec。
 
-下一步进入 [`ROADMAP.md`](./ROADMAP.md) 中的 **Phase 1 — MVP Spec**。
+下一步进入 [`ROADMAP.md`](./ROADMAP.md) 中的 **Phase 1 — MVP Spec Set**。
 
 ---
 

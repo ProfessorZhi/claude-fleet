@@ -33,7 +33,7 @@
 ```
 
 具体的运行时模型（子进程 vs workspace 连接 vs SDK 嵌入）、状态如何持久化、UI 如何映射
-到这些状态，目前都是 **TBD**，将由 MVP Spec 阶段确认。
+到这些状态，目前都是 **TBD**，将由 MVP Spec Set 阶段确认。
 
 ---
 
@@ -66,7 +66,7 @@
 
 ## 关键技术问题（Open Questions）
 
-这些是 Phase 1（MVP Spec）阶段必须给出方向的问题：
+这些是 Phase 1（MVP Spec Set）阶段必须给出方向的问题：
 
 - Agent Runtime 进程模型：child process？VS Code workspace 连接？SDK 嵌入？各自的
   隔离 / 可观测性 / 性能 trade-off 是什么？
@@ -84,4 +84,4 @@ ADRs 集中记录在 [`.agent/knowledge/decisions.md`](../.agent/knowledge/decis
 
 本文只保留一句摘要。Phase 0 当前尚未生成 ADR。
 
-- *(none yet)* — ADRs 将在 MVP Spec 阶段产出。
+- *(none yet)* — ADRs 将在 MVP Spec Set 阶段产出。

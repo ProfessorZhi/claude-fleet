@@ -37,7 +37,7 @@ Claude Fleet 是一个面向 VS Code 的多 Coding Agent 管理工具，目标�
 3. `docs/ARCHITECTURE.md` —— 当前架构理解
 4. `docs/ROADMAP.md` —— 当前阶段与下一步
 5. `docs/specs/<feature>/` —— 与当前任务相关的 Spec
-6. `.agent/workflows/` —— 当前任务类型对应的工作流
+6. `.agent/workflows/` —— 当前任务类型对应的工作流（含 `handoff.md`：跨 Agent / 跨 Session 交接）
 7. `.agent/knowledge/` —— 已经沉淀的 lessons / pitfalls / decisions
 
 ---
@@ -83,6 +83,8 @@ Learn
 - **优先解决根因，而不是不断堆 workaround。**
 - **公共文档保持 Agent-neutral。** 不依赖某一家 Coding Agent 的术语或行为。
 - **不依赖某一次聊天上下文作为项目唯一知识来源。** 所有关键结论都要落到仓库里的文件。
+- **跨 Agent / 跨 Session 交接不得依赖聊天上下文。** 必须通过 Spec、`tasks.md`、
+  Git 与仓库文档留下可恢复状态。完整流程见 `.agent/workflows/handoff.md`。
 
 ---
 
@@ -115,3 +117,5 @@ Learn
 5. **知识会复利。** 每一个被解决的问题都是潜在的 lesson —— 主动晋升。
 6. **分层文档，不重复。** `AGENTS.md` 是索引，不是百科全书。
 7. **默认 Agent-neutral。** 工具相关的特性只放在 `.claude/` 或对应 vendor 目录。
+8. **Handoff 走仓库，不走聊天。** Agent 之间交接的事实必须能被下一个 Agent 凭仓库
+   状态复原。具体流程在 `.agent/workflows/handoff.md`，**不要**在这里复制全文。

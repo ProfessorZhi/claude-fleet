@@ -21,45 +21,116 @@
 
 ---
 
-## Phase 1 — MVP Spec
+## Phase 1 — MVP Spec Set
 
-**目标**：锁定第一个可用产品的最小范围。
+**目标**：确定第一版 MVP 由**哪些 Feature Spec** 组成，并为每个 Feature 完成
+`requirements.md` / `design.md` / `tasks.md`。
 
-- 在 `docs/specs/` 下创建 MVP 的 Feature Spec（`requirements.md` / `design.md` / `tasks.md`）。
-- 回答 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 中所有 MVP 范围内的 Open Question。
-- 重要决策以 ADR 形式落到 `.agent/knowledge/decisions.md`。
-- MVP 要"小到能造出来，但真到能验证多实例与隔离"。
+MVP **不是**一个巨型 Spec，而是**多个独立 Feature Spec 的集合（Spec Set）**。
+这样可以：
+
+- 让多个 Agent 并行实现不同 Feature；
+- 避免单个 Spec 里的 Tasks 膨胀；
+- 避免 Design 把多个边界混在一起。
+
+Phase 1 首先要产出 **MVP Spec Index**，列出 MVP 包含哪些 Feature Spec，并明确
+它们之间的依赖关系。
+
+MVP Spec Index 示例（仅示例，最终列表由 Phase 1 决定）：
+
+```text
+MVP
+├── 001-multi-instance-runtime
+├── 002-provider-model-isolation
+├── 003-instance-status
+└── 004-minimal-control-ui
+```
+
+> ⚠️ 上面的列表只是示例。**不要把示例当成已经批准的最终 MVP**。
+> Feature 数量、命名、边界都可能调整。
+
+具体 Feature Spec 的写法遵循 `.agent/workflows/spec-coding.md` 和
+[`docs/specs/README.md`](./specs/README.md)。
 
 **Exit Criteria**：
 
-- `docs/specs/mvp/` 存在并完整；
-- MVP 范围内的架构问题要么已答、要么显式 defer 且注明理由。
+- MVP Feature List 已确定（即 MVP Spec Index）。
+- 每个 Feature 都有独立 Spec（独立的 `docs/specs/<slug>/`）。
+- Feature 之间的依赖关系明确（谁依赖谁、依赖什么）。
+- MVP 范围的关键架构问题要么已答、要么显式 defer 并注明理由。
+- 重要架构决策以 ADR 形式落到 `.agent/knowledge/decisions.md`。
 
 ---
 
-## Phase 2 — Claude Code 多实例
+## Phase 2 — Claude Code 多实例 Runtime
 
-**目标**：在同一 VS Code Extension 内同时运行多个 Claude Code 实例，每个实例独立
-绑定 Repo / Provider / Model / Session。
+**目标**：在同一 VS Code Extension 内建立**可靠的 Claude Code 多实例 Runtime**。
 
-- 启动、监控、停止多个 Claude Code Session。
-- 每个实例独立的配置 UI。
-- 每个实例独立的 Repo 绑定。
-- 实时状态展示（先文字版，可视化下一阶段）。
+主要内容：
 
-**Exit Criteria**：
+- 同时启动多个 Claude Code 实例。
+- 停止 / 重启 / 跟踪实例生命周期。
+- 每个实例绑定独立 Repo。
+- 每个实例拥有独立 Session。
+- Instance Manager。
+- 基础生命周期状态（最少覆盖）：
+  - `starting`
+  - `running`
+  - `waiting`
+  - `idle`
+  - `stopped`
+  - `error`
+- 最基础的文字状态 UI（不要求可视化）。
 
-- 能在 Extension 内并发跑 ≥2 个 Claude Code 实例，且状态、环境、配置互不污染。
+**本阶段重点验证：**
+
+> 多个 Claude Code 实例可以同时稳定运行。
+
+**本阶段**不**要求：**
+
+- 完成完整 Provider / Model 隔离系统（这是 Phase 3 的事）。
+- 所有实例必须配置不同 Provider / Model。MVP Runtime 初期可以全部使用同一种
+  Provider，但必须保证 **Repo / Session 不互相污染**。
+
+**Exit Criteria**（至少）：
+
+- Extension 内可以并行运行 ≥2 个 Claude Code 实例。
+- 两个实例的 Repo / Session 不互相污染。
+- 能分别启动、观察、停止每个实例。
+- 能识别并展示基础生命周期状态（`starting` / `running` / `waiting` / `idle` /
+  `stopped` / `error`）。
 
 ---
 
-## Phase 3 — Provider / Model 隔离
+## Phase 3 — Provider / Model 独立配置与隔离
 
-**目标**：把 Provider 与 Model 提到一等公民，支持按实例切换。
+**目标**：让 Provider / Model 成为 Instance 的一等配置，并保证实例之间互不污染。
 
-- 可插拔 Provider 抽象（当前阶段至少覆盖 Anthropic；其他 Provider 作为扩展点）。
-- 每个实例独立选择 Model。
-- 环境隔离被显式验证、可测试。
+主要内容：
+
+- 每实例独立 Provider。
+- 每实例独立 Model。
+- Provider Profile。
+- Model Profile。
+- 独立配置环境。
+- `CLAUDE_CONFIG_DIR` / 环境变量等隔离策略（具体策略由对应 Spec 决定，本文件不预设）。
+- Provider 切换。
+- Model 切换。
+- 隔离测试。
+- Regression Tests。
+
+**核心 Exit Criteria**（示例）：
+
+```text
+Instance A → MiniMax
+Instance B → Anthropic
+```
+
+- 修改 A 的 Provider / Model **不得**影响 B。
+- A 与 B 的环境（配置目录、env 等）互不污染。
+
+**Phase 3 才正式完成 Provider / Model Isolation**。Phase 2 提供的隔离能力只是
+Runtime / Repo / Session 级别的。
 
 ---
 
