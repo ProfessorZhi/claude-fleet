@@ -17,7 +17,7 @@ import type { AgentStateStore } from '../../server/src/agentStateStore.js';
 import type { AgentState } from '../../server/src/types.js';
 import type { LaunchNewTerminalOptions } from './agentManager.js';
 import {
-  CLAUDE_CLI_NOT_FOUND_MESSAGE,
+  claudeCliNotFoundMessage,
   type CliCheckResult,
   ensureClaudeCliAvailable,
 } from './cliCheck.js';
@@ -171,7 +171,7 @@ export async function runRestartAgentCommand(deps: RestartAgentDeps): Promise<vo
   // Re-check the CLI before launching a fresh terminal.
   const cli = await cliCheck();
   if (!cli.ok) {
-    showError(CLAUDE_CLI_NOT_FOUND_MESSAGE);
+    showError(claudeCliNotFoundMessage(cli.diagnostics));
     return;
   }
 
@@ -203,7 +203,7 @@ export async function runNewSessionCommand(deps: RestartAgentDeps): Promise<void
 
   const cli = await cliCheck();
   if (!cli.ok) {
-    showError(CLAUDE_CLI_NOT_FOUND_MESSAGE);
+    showError(claudeCliNotFoundMessage(cli.diagnostics));
     return;
   }
 
@@ -264,7 +264,7 @@ export async function runSwitchProviderCommand(deps: SwitchProviderDeps): Promis
 
   const cli = await cliCheck();
   if (!cli.ok) {
-    showError(CLAUDE_CLI_NOT_FOUND_MESSAGE);
+    showError(claudeCliNotFoundMessage(cli.diagnostics));
     return;
   }
 

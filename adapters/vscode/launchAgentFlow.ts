@@ -26,7 +26,7 @@ import type { ProviderDefinition } from '../../core/src/providerRegistry.js';
 import { getVerifiedProviderDefinitions } from '../../core/src/providerRegistry.js';
 import type { LaunchNewTerminalOptions } from './agentManager.js';
 import {
-  CLAUDE_CLI_NOT_FOUND_MESSAGE,
+  claudeCliNotFoundMessage,
   type CliCheckResult,
   ensureClaudeCliAvailable,
 } from './cliCheck.js';
@@ -78,7 +78,7 @@ export async function runLaunchAgentFlowWithLauncher(
   const cli = await cliCheck();
   if (!cli.ok) {
     console.warn(`[Claude Fleet] Launch aborted: ${cli.reason}`);
-    void vscode.window.showErrorMessage(CLAUDE_CLI_NOT_FOUND_MESSAGE);
+    void vscode.window.showErrorMessage(claudeCliNotFoundMessage(cli.diagnostics));
     return;
   }
 

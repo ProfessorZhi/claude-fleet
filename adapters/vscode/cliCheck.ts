@@ -1,64 +1,58 @@
 /**
- * cliCheck — Spec 004 Claude CLI availability check.
+ * cliCheck — Spec 004 / Spec 005 Claude CLI availability check.
  *
  * Before we spawn a Claude Code terminal we verify the `claude` CLI is
  * actually invocable. Launching into a broken environment would create a
  * terminal that immediately fails, with no clear reason.
  *
- * The check runs ONCE per New Agent / Restart (never on a timer — the CLI
- * binary doesn't appear/disappear every second). The executor is injectable
- * so the check is unit-testable without spawning real processes.
+ * The check runs ONCE per New Agent / Restart (never on a timer). It goes
+ * through `resolveClaudeCli` (server/src/cliResolver.ts): PATH + npm global
+ * bin probing, Windows claude.cmd/claude.exe support, no env mutation, and
+ * a diagnostics block (PATH / searched paths / install hint) when missing.
+ *
+ * The executor is injectable so the check is unit-testable without spawning
+ * real processes.
  */
 
-import { execFile } from 'node:child_process';
+import { resolveClaudeCli } from '../../server/src/cliResolver.js';
 
-export type CliCheckResult = { ok: true; version: string } | { ok: false; reason: string };
+export type CliCheckResult =
+  | { ok: true; version: string; command: string }
+  | { ok: false; reason: string; diagnostics?: string };
 
-export type CliExecutor = (command: string, args: string[]) => Promise<string>;
-
-/** Default executor: run `claude --version` and resolve with trimmed stdout. */
-export function defaultCliExecutor(command: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, { timeout: 15_000, windowsHide: true }, (error, stdout) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve((stdout ?? '').trim());
-    });
-  });
+/**
+ * Check that the `claude` CLI can be resolved AND answers `--version`.
+ * Returns `{ ok: true, version, command }` on success, or `{ ok: false,
+ * reason, diagnostics }` on failure. `diagnostics` carries the resolver's
+ * PATH / searched-path / install-hint block for the missing-CLI case.
+ */
+export async function ensureClaudeCliAvailable(): Promise<CliCheckResult> {
+  const resolution = await resolveClaudeCli();
+  if (!resolution.ok) {
+    return {
+      ok: false,
+      reason: 'claude not found (PATH + npm global bin searched)',
+      diagnostics: resolution.diagnostics,
+    };
+  }
+  if (!resolution.version) {
+    return { ok: false, reason: 'claude --version produced no output' };
+  }
+  return { ok: true, version: resolution.version, command: resolution.command };
 }
 
 /**
- * Check that `claude` is on PATH and responds to `--version`.
- *
- * Returns `{ ok: true, version }` on success, or `{ ok: false, reason }` on
- * any failure (missing binary, non-zero exit, timeout). `reason` is a
- * user-safe short string; callers surface the fixed user-facing message for
- * the missing-CLI case.
+ * Build the user-facing message for the missing-CLI case. `diagnostics` is
+ * the resolver's PATH / searched-paths / install-hint block (optional — the
+ * fixed message alone is used when no diagnostics are available).
  */
-export async function ensureClaudeCliAvailable(
-  executor: CliExecutor = defaultCliExecutor,
-): Promise<CliCheckResult> {
-  try {
-    const raw = await executor('claude', ['--version']);
-    const version = raw.trim();
-    if (!version) {
-      return { ok: false, reason: 'claude --version produced no output' };
-    }
-    return { ok: true, version };
-  } catch (e) {
-    const err = e as NodeJS.ErrnoException;
-    if (err?.code === 'ENOENT') {
-      return { ok: false, reason: 'claude not found in PATH' };
-    }
-    if (err?.code === 'ETIMEDOUT') {
-      return { ok: false, reason: 'claude --version timed out' };
-    }
-    return { ok: false, reason: `claude --version failed: ${err?.message ?? String(e)}` };
+export function claudeCliNotFoundMessage(diagnostics?: string): string {
+  const base = 'Claude Fleet: Claude Code CLI not found.';
+  if (diagnostics) {
+    return `${base}\n\n${diagnostics}`;
   }
+  return `${base} Please install Claude Code and ensure \`claude\` is available in PATH.`;
 }
 
 /** Fixed user-facing message when the CLI is unavailable (requirements FR-014). */
-export const CLAUDE_CLI_NOT_FOUND_MESSAGE =
-  'Claude Fleet: Claude Code CLI not found. Please install Claude Code and ensure `claude` is available in PATH.';
+export const CLAUDE_CLI_NOT_FOUND_MESSAGE = claudeCliNotFoundMessage();

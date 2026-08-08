@@ -23,6 +23,7 @@ import {
 } from './assetReload.js';
 import type { AssetCache, ReloadAssetsSideEffect } from './clientMessageHandler.js';
 import { createCliProviderStore } from './cliProviderStore.js';
+import { resolveClaudeCli } from './cliResolver.js';
 import { readConfig } from './configPersistence.js';
 import { MAX_PORT, MIN_PORT } from './constants.js';
 import { FileStateAdapter } from './fileStateAdapter.js';
@@ -192,12 +193,15 @@ export async function runLaunchCommand(): Promise<void> {
       {},
     );
 
-    // 6. Spawn native claude (never re-implement Claude Code).
+    // 6. Spawn native claude (never re-implement Claude Code). The binary
+    // goes through the CLI resolver (PATH + npm global bin, Windows
+    // claude.cmd/claude.exe, no env mutation — Spec 005 FR-008).
     const build = claudeProvider.buildLaunchCommand?.(sessionId, cwd, {
       modelId,
       sessionMode: resume ? 'resume' : 'new',
     });
-    const cmd = build?.command ?? 'claude';
+    const cliResolution = await resolveClaudeCli();
+    const cmd = cliResolution.ok ? cliResolution.command : (build?.command ?? 'claude');
     const args = build?.args ?? [];
     console.log(`\nLaunching: ${cmd} ${args.join(' ')}`);
     const child = spawn(cmd, args, {

@@ -178,7 +178,7 @@ describe('runRestartAgentCommand — Spec 004 FR-006 ~ FR-008', () => {
       launcher,
       baseLaunchOptions,
       picker: async () => 1,
-      cliCheck: async () => ({ ok: true, version: '2.1.0' }),
+      cliCheck: async () => ({ ok: true, version: '2.1.0', command: 'claude' }),
       showError,
     });
 
@@ -228,7 +228,7 @@ describe('runRestartAgentCommand — Spec 004 FR-006 ~ FR-008', () => {
       launcher,
       baseLaunchOptions: {} as never,
       picker: async () => undefined,
-      cliCheck: async () => ({ ok: true, version: 'x' }),
+      cliCheck: async () => ({ ok: true, version: 'x', command: 'claude' }),
       showError,
     });
 
@@ -245,7 +245,7 @@ describe('runRestartAgentCommand — Spec 004 FR-006 ~ FR-008', () => {
       launcher,
       baseLaunchOptions: {} as never,
       picker: async () => 999,
-      cliCheck: async () => ({ ok: true, version: 'x' }),
+      cliCheck: async () => ({ ok: true, version: 'x', command: 'claude' }),
       showError,
     });
 
@@ -366,7 +366,7 @@ describe('runSwitchProviderCommand — Spec 005 FR-011', () => {
       launcher,
       baseLaunchOptions: { providerProfileStore: {}, secretStorageProvider: {} } as never,
       picker: async () => 1,
-      cliCheck: async () => ({ ok: true, version: '2.1.220' }),
+      cliCheck: async () => ({ ok: true, version: '2.1.220', command: 'claude' }),
       showError,
     });
 
@@ -405,7 +405,7 @@ describe('runSwitchProviderCommand — Spec 005 FR-011', () => {
       launcher,
       baseLaunchOptions: {} as never,
       picker: async () => 1,
-      cliCheck: async () => ({ ok: true, version: 'x' }),
+      cliCheck: async () => ({ ok: true, version: 'x', command: 'claude' }),
       showError,
     });
 
@@ -436,7 +436,7 @@ describe('runNewSessionCommand — Spec 005 FR-010', () => {
       launcher,
       baseLaunchOptions: { providerProfileStore: {}, secretStorageProvider: {} } as never,
       picker: async () => 1,
-      cliCheck: async () => ({ ok: true, version: 'x' }),
+      cliCheck: async () => ({ ok: true, version: 'x', command: 'claude' }),
       showError: vi.fn(),
     });
 

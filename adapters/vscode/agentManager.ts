@@ -8,6 +8,7 @@ import type { InstanceLaunchConfig } from '../../core/src/providerProfiles.js';
 import { INHERIT_PROVIDER_PROFILE_ID } from '../../core/src/providerProfiles.js';
 import { AgentStateStore } from '../../server/src/agentStateStore.js';
 import { agentStateToUserStatus } from '../../server/src/agentStatus.js';
+import { resolveClaudeCli } from '../../server/src/cliResolver.js';
 import { DEFAULT_MAX_CONTEXT_TOKENS, JSONL_POLL_INTERVAL_MS } from '../../server/src/constants.js';
 import {
   ensureProjectScan,
@@ -200,7 +201,11 @@ export async function launchNewTerminal(
   if (!launch) {
     throw new Error('claudeProvider.buildLaunchCommand is not implemented');
   }
-  terminal.sendText([launch.command, ...launch.args].join(' '));
+  // Runtime launch goes through the CLI resolver: PATH + npm global bin,
+  // Windows claude.cmd/claude.exe support, no env mutation (Spec 005 FR-008).
+  const cliResolution = await resolveClaudeCli();
+  const command = cliResolution.ok ? cliResolution.command : launch.command;
+  terminal.sendText([command, ...launch.args].join(' '));
 
   const projectDir = getProjectDirPath(cwd);
 
