@@ -27,18 +27,24 @@ Claude Fleet 是一个 VS Code 扩展：让你在一个工作区里同时驱动�
 
 ### 从 VSIX 安装（Alpha 推荐）
 
-```bash
-code --install-extension claude-fleet-0.1.0.vsix
+本地构建产物固定位于：
+
+```text
+release/claude-fleet-0.1.0.vsix
 ```
 
-或：VS Code 命令面板 → `Extensions: Install from VSIX...` → 选择
-`claude-fleet-0.1.0.vsix`。
+VS Code 命令面板 → `Extensions: Install from VSIX...` → 选择
+`release/claude-fleet-0.1.0.vsix`。
 
-> 也可以使用隔离的扩展目录测试，不污染主环境：
->
-> ```bash
-> code --extensions-dir .tmp-vscode-alpha/extensions --install-extension .\claude-fleet-0.1.0.vsix
-> ```
+或命令行：
+
+```bash
+code --install-extension release/claude-fleet-0.1.0.vsix
+```
+
+> 公开 Alpha 将发布到 **GitHub Releases**（届时从 Releases 页面下载 VSIX
+> 即可）；当前版本尚未上传，请使用本地 `release/` 产物。
+> 安装方式选择见 [`docs/MANUAL_TEST_ALPHA.md`](./docs/MANUAL_TEST_ALPHA.md)。
 
 ## 使用
 
@@ -99,7 +105,8 @@ npm run check-types
 npm run lint
 npm test
 npm run build
-npx vsce package   # 产出 claude-fleet-0.1.0.vsix
+npm run vsix      # 固定产出 release/claude-fleet-0.1.0.vsix
+npm run vsix:ls   # 预览 VSIX 将包含的内容
 ```
 
 ## 许可证与 Attribution

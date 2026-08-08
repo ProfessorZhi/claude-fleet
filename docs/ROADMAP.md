@@ -157,4 +157,23 @@ Runtime / Repo / Session 级别的。
 
 - Codex、Gemini CLI、Antigravity 等作为一等实例。
 - 统一的 Instance Model，新增 Coding Agent 不需要重写宿主或可视化层。
+
+---
+
+## v0.1 Alpha — 当前版本状态（2026-08-08）
+
+```text
+001 multi-instance-runtime         ✅
+002 provider-model-isolation       ✅
+003 instance-status                ✅ Alpha scope
+004 minimal-control-ui             ✅ Alpha scope
+
+v0.1 Alpha
+状态：Code Complete / Awaiting Manual GUI Smoke Test
+（不是 Released — 等待用户手动 GUI 测试）
+```
+
+- 详细状态见 [`ALPHA_RELEASE.md`](./ALPHA_RELEASE.md)。
+- 手动测试清单见 [`MANUAL_TEST_ALPHA.md`](./MANUAL_TEST_ALPHA.md)。
+- 手动测试通过后：tag `v0.1.0-alpha.N` → GitHub Pre-release → 上传 VSIX → （后续）Marketplace。
 - 仅在出现清晰用户需求时才引入跨 Agent 协作流程。

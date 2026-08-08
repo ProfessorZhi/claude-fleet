@@ -60,8 +60,12 @@ allure-report/
 .playwright-mcp/
 
 # ===== 打包产物 =====
+# release/ 是本地 Alpha artifact 目录（npm run vsix 固定输出到
+# release/claude-fleet-<version>.vsix）。VSIX 是 Release Artifact，
+# 通过 GitHub Releases 发布，不提交到 Git。
 *.vsix
 *.map
+/release/
 
 # ===== 项目本地工具 / 临时目录 =====
 /sprites-export
