@@ -21,6 +21,9 @@ export interface AgentDiagnosticsEntry {
   providerProfileId?: string;
   providerDisplayName?: string;
   modelId?: string;
+  // Spec 005 — managed flag: true = launched by Fleet; false/undefined =
+  // external / unknown. NOT a secret.
+  managedByFleet?: boolean;
 }
 
 /**
@@ -58,6 +61,7 @@ export function buildAgentDiagnostics(store: AgentStateStore): AgentDiagnosticsE
       providerProfileId: agent.providerProfileId,
       providerDisplayName: agent.providerDisplayName,
       modelId: agent.modelId,
+      managedByFleet: agent.managedByFleet,
     });
   }
   return diagnostics;

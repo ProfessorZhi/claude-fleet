@@ -44,6 +44,13 @@ export interface PersistedAgent {
   providerDisplayName?: string;
   /** Model id passed as `claude --model <id>` at launch. */
   modelId?: string;
+
+  // -- Spec 005: Session Continuity / Managed flag --
+  /** True when launched by Fleet (vs discovered externally). Persisted so
+   *  Auto Discovery restores Provider/Model after a reload. NOT a secret. */
+  managedByFleet?: boolean;
+  /** Provider profile id used before a Switch Provider. NOT a secret. */
+  lastProviderProfileId?: string;
 }
 
 /** Agent seat assignment with visual identity

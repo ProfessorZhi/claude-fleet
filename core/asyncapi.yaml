@@ -144,6 +144,7 @@ components:
         - $ref: '#/components/schemas/NewAgent'
         - $ref: '#/components/schemas/StopAgent'
         - $ref: '#/components/schemas/RestartAgent'
+        - $ref: '#/components/schemas/SwitchProvider'
       discriminator: type
 
     # ── Server message variants ────────────────────────────────────
@@ -990,6 +991,17 @@ components:
       properties:
         type:
           const: restartAgent
+        id:
+          type: integer
+
+    SwitchProvider:
+      description: Spec 005 — Debug View Switch button (same session, new Provider env via native resume).
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties:
+        type:
+          const: switchProvider
         id:
           type: integer
 

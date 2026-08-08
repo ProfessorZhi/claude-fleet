@@ -15,6 +15,8 @@
  * style.
  */
 
+import type { ProviderType } from './providerRegistry.js';
+
 // ── AuthMode ─────────────────────────────────────────────────
 
 /**
@@ -43,6 +45,11 @@ function isAuthMode(value: unknown): value is AuthMode {
 /**
  * Provider profile — non-secret configuration describing *how* to call an
  * LLM endpoint. Plaintext secrets MUST NOT live here; only `secretRef`.
+ *
+ * Spec 005 分层：ProviderDefinition（core/src/providerRegistry.ts）是类型
+ * 模板；ProviderProfile 是用户配置实例（ADR-004）。`providerType` 是唯一
+ * 分支点（resolver 按它分派），`presetId` 引用 definition —— 新增 Provider
+ * 只加 definition + profile，Runtime 核心零改动。
  */
 export interface ProviderProfile {
   id: string;
@@ -50,6 +57,11 @@ export interface ProviderProfile {
   /** 'anthropic-compatible' for now; future variants (e.g. openai-compatible)
    *  can be added when a real second protocol is integrated. */
   kind: 'anthropic-compatible';
+  /** Spec 005: Provider 类型。缺省 'anthropic-compatible'（legacy 兼容）。 */
+  providerType?: ProviderType;
+  /** Spec 005: 引用 ProviderDefinition id（'deepseek' | 'minimax' …）。
+   *  缺省无（custom / legacy）。 */
+  presetId?: string;
   /** When absent, the Claude Code default endpoint is used. */
   baseUrl?: string;
   authMode: AuthMode;
@@ -59,6 +71,23 @@ export interface ProviderProfile {
   customHeaders?: Record<string, string>;
   /** Default Model if a new Instance picks this Profile without override. */
   defaultModelId?: string;
+  /** Spec 005: 该 Profile 可选的 model 列表（默认模型 + 可选候选）。 */
+  modelIds?: string[];
+  /** Spec 005: 是否在 New Agent / Switch 中可被选择。缺省 true（legacy）。 */
+  enabled?: boolean;
+}
+
+const VALID_PROVIDER_TYPES: ReadonlySet<string> = new Set([
+  'native-anthropic',
+  'anthropic-api',
+  'bedrock',
+  'vertex',
+  'foundry',
+  'anthropic-compatible',
+]);
+
+export function isProviderType(value: unknown): value is ProviderType {
+  return typeof value === 'string' && VALID_PROVIDER_TYPES.has(value);
 }
 
 const RESERVED_AUTH_HEADER_NAMES = new Set(['authorization', 'x-api-key', 'x-auth-token']);
@@ -84,6 +113,18 @@ export function validateProviderProfile(p: ProviderProfile): string | null {
   }
   if (p.kind !== 'anthropic-compatible') {
     return `Provider "${p.name}" has unsupported kind '${String(p.kind)}'.`;
+  }
+  if (p.providerType !== undefined && !isProviderType(p.providerType)) {
+    return `Provider "${p.name}" has unsupported providerType '${String(p.providerType)}'.`;
+  }
+  if (p.presetId !== undefined && (typeof p.presetId !== 'string' || p.presetId.trim() === '')) {
+    return `Provider "${p.name}" presetId must be a non-empty string when present.`;
+  }
+  if (p.modelIds !== undefined && !Array.isArray(p.modelIds)) {
+    return `Provider "${p.name}" modelIds must be an array when present.`;
+  }
+  if (p.enabled !== undefined && typeof p.enabled !== 'boolean') {
+    return `Provider "${p.name}" enabled must be a boolean when present.`;
   }
   if (p.authMode !== 'inherit' && !p.secretRef) {
     return `Provider "${p.name}" requires a secret when authMode is '${p.authMode}'.`;
@@ -158,11 +199,19 @@ export interface ModelProfile {
  * `cwd` may be empty; `launchNewTerminal` falls back to the first workspace
  * folder (or homedir) when empty. This lets callers like the auto-spawn path
  * use a one-liner `{ providerProfileId: 'claude-fleet.inherit' }`.
+ *
+ * Spec 005 Session Continuity: `sessionMode` 决定 claude CLI 的会话参数 ——
+ * `'new'`（默认）用 `--session-id <sessionId>`（新 UUID）；
+ * `'resume'` 用 `--resume <sessionId>` 恢复同一 Claude 原生 Session。
  */
 export interface InstanceLaunchConfig {
   cwd?: string;
   providerProfileId: string;
   modelId?: string;
+  /** Spec 005: 会话模式。缺省 'new'（与旧行为一致）。 */
+  sessionMode?: 'new' | 'resume';
+  /** Spec 005: 显式 sessionId。缺省时 launchNewTerminal 生成新 UUID。 */
+  sessionId?: string;
   /** Advanced: caller-provided extra env merged after the resolved env. */
   envOverride?: Record<string, string>;
 }
@@ -176,7 +225,9 @@ export function isInstanceLaunchConfig(value: unknown): value is InstanceLaunchC
   return (
     (v.cwd === undefined || typeof v.cwd === 'string') &&
     typeof v.providerProfileId === 'string' &&
-    v.providerProfileId.length > 0
+    v.providerProfileId.length > 0 &&
+    (v.sessionMode === undefined || v.sessionMode === 'new' || v.sessionMode === 'resume') &&
+    (v.sessionId === undefined || typeof v.sessionId === 'string')
   );
 }
 

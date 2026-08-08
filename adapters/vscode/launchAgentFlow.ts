@@ -21,11 +21,9 @@
 import * as vscode from 'vscode';
 
 import type { AuthMode, ProviderProfile } from '../../core/src/providerProfiles.js';
-import {
-  INHERIT_PROVIDER_PROFILE_ID,
-  makeInheritProviderProfile,
-  validateProviderProfile,
-} from '../../core/src/providerProfiles.js';
+import { validateProviderProfile } from '../../core/src/providerProfiles.js';
+import type { ProviderDefinition } from '../../core/src/providerRegistry.js';
+import { getVerifiedProviderDefinitions } from '../../core/src/providerRegistry.js';
 import type { LaunchNewTerminalOptions } from './agentManager.js';
 import {
   CLAUDE_CLI_NOT_FOUND_MESSAGE,
@@ -62,7 +60,9 @@ export async function runLaunchAgentFlowWithLauncher(
   if (cwd === undefined) return;
 
   // ── Step 2: Provider ──────────────────────────────────────
-  const profiles = deps.providerProfileStore.list();
+  // Spec 005 (FR-003): ONLY configured + enabled profiles appear. No
+  // auto-injected Inherit / Anthropic Account.
+  const profiles = deps.providerProfileStore.list().filter((p) => p.enabled !== false);
   const provider = await pickProvider(profiles, deps);
   if (provider === undefined) return;
 
@@ -115,47 +115,234 @@ async function pickProvider(
   profiles: ProviderProfile[],
   deps: LaunchAgentFlowDeps,
 ): Promise<ProviderProfile | undefined> {
-  const items: Array<vscode.QuickPickItem & { profile?: ProviderProfile; isCreate?: boolean }> =
+  if (profiles.length === 0) {
+    // Spec 005 (FR-003): no empty QuickPick — surface the empty state with an
+    // Add Provider entry.
+    const picked = await vscode.window.showQuickPick(
+      [
+        {
+          label: '$(plus) Add Provider…',
+          description: 'No Provider Profiles configured yet. Configure one to launch.',
+          isAdd: true,
+        },
+      ],
+      { title: 'Claude Fleet: Choose Provider', ignoreFocusOut: true },
+    );
+    if (!picked?.isAdd) return undefined;
+    const created = await runCreateCustomProviderFlow(deps);
+    if (!created) return undefined;
+    // One-shot re-entry: after adding a provider, immediately let the user pick it.
+    return created.enabled === false ? undefined : created;
+  }
+
+  const items: Array<vscode.QuickPickItem & { profile?: ProviderProfile; isAdd?: boolean }> =
     profiles.map((p) => ({
       label: p.name,
       description: describeProfile(p),
-      detail:
-        p.authMode === 'inherit' ? 'Built-in (uses your existing Claude Code login)' : p.baseUrl,
+      detail: p.baseUrl ?? p.presetId ?? undefined,
       profile: p,
     }));
   items.push({
-    label: '$(plus) Create Custom Provider…',
-    description: 'Configure a custom Anthropic-compatible endpoint',
-    isCreate: true,
+    label: '$(plus) Add Provider…',
+    description: 'Configure a new Provider Profile',
+    isAdd: true,
   });
   const picked = await vscode.window.showQuickPick(items, {
     title: 'Claude Fleet: Choose Provider',
     ignoreFocusOut: true,
   });
   if (!picked) return undefined;
-  if (picked.isCreate) {
-    return await runCreateCustomProviderFlow(deps);
+  if (picked.isAdd) {
+    const created = await runCreateCustomProviderFlow(deps);
+    if (!created) return undefined;
+    return created.enabled === false ? undefined : created;
   }
   return picked.profile;
 }
 
 function describeProfile(p: ProviderProfile): string {
+  const parts: string[] = [];
   switch (p.authMode) {
     case 'inherit':
-      return 'Inherit (no override)';
+      parts.push('Native login');
+      break;
     case 'apiKey':
-      return 'API Key';
+      parts.push('API Key');
+      break;
     case 'authToken':
-      return 'Auth Token';
+      parts.push('Auth Token');
+      break;
   }
+  if (p.enabled === false) parts.push('disabled');
+  return parts.join(' · ');
 }
 
 /**
- * Create-a-Custom-Provider sub-flow (InputBoxes + SecretStorage write).
- * Exported so the Manage Providers command (Spec 004) reuses the exact same
- * creation path instead of duplicating it.
+ * Add-a-Provider flow (Spec 005 FR-004): first pick a ProviderDefinition
+ * (Official/Native + Anthropic-compatible + Custom), then collect the
+ * fields that definition's authStrategy requires. Secrets go to
+ * SecretStorage BEFORE the profile is saved (same order as 002).
+ *
+ * Exported so the Manage Providers command reuses the exact same creation
+ * path instead of duplicating it.
  */
 export async function runCreateCustomProviderFlow(
+  deps: LaunchAgentFlowDeps,
+): Promise<ProviderProfile | undefined> {
+  const definition = await pickProviderDefinition();
+  if (!definition) return undefined;
+  if (definition.id === 'custom') {
+    return runCustomDefinitionFlow(deps);
+  }
+
+  const name = await vscode.window.showInputBox({
+    title: `${definition.displayName}: Profile Name`,
+    placeHolder: `e.g. ${definition.displayName} - Main`,
+    ignoreFocusOut: true,
+  });
+  if (!name) return undefined;
+
+  // endpoint — prefilled from official definition; user may adjust.
+  let endpoint = definition.defaultEndpoint;
+  if (definition.providerType === 'anthropic-compatible') {
+    const entered = await vscode.window.showInputBox({
+      title: `${definition.displayName}: Base URL`,
+      placeHolder: definition.defaultEndpoint ?? 'https://api.example.com/anthropic',
+      value: definition.defaultEndpoint ?? '',
+      ignoreFocusOut: true,
+    });
+    if (entered === undefined) return undefined;
+    endpoint = entered.trim() === '' ? definition.defaultEndpoint : entered.trim();
+    if (!endpoint) {
+      void vscode.window.showErrorMessage(
+        `Claude Fleet: ${definition.displayName} requires a Base URL.`,
+      );
+      return undefined;
+    }
+  }
+
+  // auth — per definition authStrategy.
+  let authMode: AuthMode = 'inherit';
+  let secret: string | undefined;
+  let secretLabel = '';
+  if (definition.authStrategy === 'api-key') {
+    authMode = 'apiKey';
+    secretLabel = 'API Key';
+  } else if (definition.authStrategy === 'auth-token') {
+    authMode = 'authToken';
+    secretLabel = 'API Key (sent as Bearer token)';
+  }
+  if (definition.authStrategy === 'api-key' || definition.authStrategy === 'auth-token') {
+    secret = await vscode.window.showInputBox({
+      title: `${definition.displayName}: ${secretLabel}`,
+      password: true,
+      placeHolder: 'paste secret…',
+      ignoreFocusOut: true,
+    });
+    if (!secret) return undefined;
+  } else if (definition.authStrategy === 'external-credential-chain') {
+    void vscode.window.showInformationMessage(
+      `Claude Fleet: "${definition.displayName}" uses your existing ` +
+        `system credential chain — no Secret is stored by Claude Fleet.`,
+    );
+  }
+
+  // default model — official model hints + free input.
+  const defaultModelId = await pickDefaultModel(
+    definition.displayName,
+    definition.supportedModelHints,
+  );
+  if (defaultModelId === undefined) return undefined;
+
+  const profile: ProviderProfile = {
+    id: `${definition.id}.${Date.now().toString(36)}`,
+    name,
+    kind: 'anthropic-compatible',
+    providerType: definition.providerType,
+    presetId: definition.id,
+    baseUrl: endpoint,
+    authMode,
+    secretRef:
+      authMode === 'inherit'
+        ? undefined
+        : `claude-fleet.provider.${definition.id}.${Date.now().toString(36)}`,
+    modelIds: definition.supportedModelHints?.slice(),
+    defaultModelId,
+    enabled: true,
+  };
+  const err = validateProviderProfile(profile);
+  if (err) {
+    void vscode.window.showErrorMessage(`Claude Fleet: ${err}`);
+    return undefined;
+  }
+
+  // Save secret FIRST so the secretRef is consistent. If save fails, abort.
+  if (profile.secretRef && secret !== undefined) {
+    try {
+      await deps.secretStorageProvider.set(profile.secretRef, secret);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      void vscode.window.showErrorMessage(
+        `Claude Fleet: Failed to store secret: ${msg}. Aborting Provider creation.`,
+      );
+      return undefined;
+    }
+  }
+  await deps.providerProfileStore.upsert(profile);
+  void vscode.window.showInformationMessage(`Claude Fleet: Provider "${name}" saved.`);
+  return profile;
+}
+
+/** Pick which ProviderDefinition to configure. */
+async function pickProviderDefinition(): Promise<ProviderDefinition | undefined> {
+  const definitions = getVerifiedProviderDefinitions();
+  const official = definitions.filter((d) => d.providerType !== 'anthropic-compatible');
+  const compatible = definitions.filter((d) => d.providerType === 'anthropic-compatible');
+  const items: Array<
+    vscode.QuickPickItem & { definition?: ProviderDefinition; isCustom?: boolean }
+  > = [];
+  if (official.length > 0) {
+    items.push({ label: 'Official / Native', kind: vscode.QuickPickItemKind.Separator });
+    for (const d of official) {
+      items.push({ label: d.displayName, description: d.description, definition: d });
+    }
+  }
+  if (compatible.length > 0) {
+    items.push({
+      label: 'Anthropic-compatible',
+      kind: vscode.QuickPickItemKind.Separator,
+    });
+    for (const d of compatible) {
+      items.push({ label: d.displayName, description: d.description, definition: d });
+    }
+  }
+  items.push({
+    label: '$(plus) Custom Anthropic-compatible…',
+    description: 'Any endpoint / model',
+    isCustom: true,
+  });
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: 'Claude Fleet: Add Provider',
+    ignoreFocusOut: true,
+  });
+  if (!picked) return undefined;
+  if (picked.isCustom) {
+    return {
+      id: 'custom',
+      displayName: 'Custom',
+      providerType: 'anthropic-compatible',
+      runtime: 'claude-code',
+      authStrategy: 'auth-token',
+      verified: true,
+      description: '',
+    } satisfies ProviderDefinition;
+  }
+  return picked.definition;
+}
+
+/** Legacy free-form custom provider flow (any endpoint / auth mode / model). */
+async function runCustomDefinitionFlow(
   deps: LaunchAgentFlowDeps,
 ): Promise<ProviderProfile | undefined> {
   const name = await vscode.window.showInputBox({
@@ -167,7 +354,7 @@ export async function runCreateCustomProviderFlow(
 
   const baseUrl = await vscode.window.showInputBox({
     title: 'Custom Provider: Base URL',
-    placeHolder: 'https://api.example.com',
+    placeHolder: 'https://api.example.com/anthropic',
     ignoreFocusOut: true,
   });
   if (!baseUrl) return undefined;
@@ -204,26 +391,19 @@ export async function runCreateCustomProviderFlow(
   });
   if (!secret) return undefined;
 
-  const defaultModelId = await vscode.window.showInputBox({
-    title: 'Custom Provider: Default Model ID',
-    placeHolder: 'e.g. my-custom-model',
-    ignoreFocusOut: true,
-  });
-  if (!defaultModelId) {
-    void vscode.window.showErrorMessage(
-      'Claude Fleet: Custom Provider requires a default Model ID.',
-    );
-    return undefined;
-  }
+  const defaultModelId = await pickDefaultModel('Custom Provider', []);
+  if (defaultModelId === undefined) return undefined;
 
   const profile: ProviderProfile = {
     id: `custom.${Date.now().toString(36)}`,
     name,
     kind: 'anthropic-compatible',
+    providerType: 'anthropic-compatible',
     baseUrl,
     authMode,
     secretRef: `claude-fleet.provider.custom.${Date.now().toString(36)}`,
     defaultModelId,
+    enabled: true,
   };
   const err = validateProviderProfile(profile);
   if (err) {
@@ -246,16 +426,56 @@ export async function runCreateCustomProviderFlow(
   return profile;
 }
 
-async function pickModel(provider: ProviderProfile): Promise<string | undefined> {
+async function pickDefaultModel(
+  title: string,
+  hints: string[] | undefined,
+): Promise<string | undefined> {
+  const presets: Array<vscode.QuickPickItem & { value?: string; isCustom?: boolean }> = [];
+  for (const hint of hints ?? []) {
+    presets.push({ label: hint, description: 'Suggested model', value: hint });
+  }
+  presets.push({
+    label: '$(edit) Enter model id…',
+    description: 'Type any model id',
+    isCustom: true,
+  });
+  const picked = await vscode.window.showQuickPick(presets, {
+    title: `${title}: Default Model`,
+    ignoreFocusOut: true,
+  });
+  if (!picked) return undefined;
+  if (picked.isCustom) {
+    const entered = await vscode.window.showInputBox({
+      title: `${title}: Model id`,
+      ignoreFocusOut: true,
+    });
+    return entered?.trim() || undefined;
+  }
+  return picked.value;
+}
+
+/** Exported for Switch Provider (Spec 005 FR-011) — one model picker for all flows. */
+export async function pickModel(provider: ProviderProfile): Promise<string | undefined> {
+  // Spec 005: prefer profile.modelIds (configured list), then defaultModelId.
+  const candidates = (provider.modelIds ?? []).filter((m) => m.trim() !== '');
   const defaultModel = provider.defaultModelId?.trim() ?? '';
   const presets: Array<vscode.QuickPickItem & { value?: string; isCustom?: boolean }> = [];
-  if (defaultModel) {
+  const seen = new Set<string>();
+  if (defaultModel && !seen.has(defaultModel)) {
     presets.push({ label: defaultModel, description: 'Provider default', value: defaultModel });
+    seen.add(defaultModel);
   }
-  // Common Anthropic aliases — shown for convenience; user can pick any of them.
+  for (const m of candidates) {
+    if (seen.has(m)) continue;
+    presets.push({ label: m, description: 'Configured model', value: m });
+    seen.add(m);
+  }
+  // Common Anthropic aliases — convenience; users on native Anthropic may
+  // pick any of them (claude --model accepts aliases like 'opus').
   for (const alias of ['opus', 'sonnet', 'haiku']) {
-    if (alias !== defaultModel) {
+    if (!seen.has(alias)) {
       presets.push({ label: alias, description: 'Anthropic alias', value: alias });
+      seen.add(alias);
     }
   }
   presets.push({
@@ -290,5 +510,9 @@ export function createLaunchAgentFlowDepsFromContext(
   return { providerProfileStore, secretStorageProvider, baseLaunchOptions };
 }
 
-// Re-export so callers don't have to reach into core for the inherit id.
-export { INHERIT_PROVIDER_PROFILE_ID, makeInheritProviderProfile };
+// Re-export so callers don't have to reach into core for the inherit id
+// (legacy restart fallback only — never shown in UI).
+export {
+  INHERIT_PROVIDER_PROFILE_ID,
+  makeInheritProviderProfile,
+} from '../../core/src/providerProfiles.js';

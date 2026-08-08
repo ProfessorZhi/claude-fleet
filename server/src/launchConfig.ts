@@ -27,6 +27,7 @@ import type {
   ResolvedLaunchConfig,
   ResolvedLaunchSafeMetadata,
 } from '../../core/src/providerProfiles.js';
+import { getProviderDefinition } from '../../core/src/providerRegistry.js';
 
 /** Function that returns the plaintext secret for a given `secretRef`,
  *  or `undefined` if not present. */
@@ -69,38 +70,63 @@ export function resolveClaudeLaunchConfig(
   // ── env (fresh object every call) ─────────────────────────
   const env: Record<string, string> = {};
 
-  // baseUrl — always present and process-scoped if defined.
-  if (profile.baseUrl && profile.baseUrl.trim() !== '') {
-    env.ANTHROPIC_BASE_URL = profile.baseUrl;
+  // Spec 005: preset requiredEnv（官方文档验证的推荐 env，不含 secret）。
+  // 先合并 preset 值，profile 显式字段（baseUrl / secret）再覆盖 —— 与
+  // Claude Code 官方"模型别名 env + 显式 --model 覆盖"语义一致。
+  const presetId = profile.presetId;
+  const definition = presetId ? getProviderDefinition(presetId) : undefined;
+  if (definition?.requiredEnv) {
+    for (const [k, v] of Object.entries(definition.requiredEnv)) {
+      env[k] = v;
+    }
   }
 
-  // auth — only inject when the profile opts into one.
-  if (profile.authMode === 'apiKey') {
-    if (!profile.secretRef) {
-      // Programmer error — validateProviderProfile should have caught this.
-      throw new MissingSecretError(profile.id, profile.name, 'apiKey');
+  // Spec 005: 按 providerType 分派（唯一分支点，ADR-004）。
+  //   - native-anthropic / external-credential-chain（bedrock/vertex/foundry）:
+  //     不注入任何 ANTHROPIC_* —— Claude Code 原生登录态 / 原系统凭据链生效。
+  //   - anthropic-api / anthropic-compatible: 按 authMode 注入。
+  //   - authMode 'inherit'（legacy 内部 fallback profile）: 无 auth 注入，
+  //     但 baseUrl 若配置仍注入（继承旧行为 —— 用户可仅换端点不换 auth）。
+  const noInject =
+    profile.providerType === 'native-anthropic' ||
+    profile.providerType === 'bedrock' ||
+    profile.providerType === 'vertex' ||
+    profile.providerType === 'foundry';
+
+  if (!noInject) {
+    // baseUrl — always present and process-scoped if defined.
+    // preset 无显式 baseUrl 时，用 definition.defaultEndpoint（官方值）。
+    const baseUrl = profile.baseUrl?.trim() || definition?.defaultEndpoint;
+    if (baseUrl) {
+      env.ANTHROPIC_BASE_URL = baseUrl;
     }
-    const secret = secretLookup(profile.secretRef);
-    if (typeof secret !== 'string' || secret.length === 0) {
-      // Fail closed. NEVER silently fall back to the user's Anthropic
-      // login — that would be misleading (the user thinks they're on a
-      // Custom Provider when they're not).
-      throw new MissingSecretError(profile.id, profile.name, 'apiKey');
+
+    // auth — only inject when the profile opts into one.
+    if (profile.authMode === 'apiKey') {
+      if (!profile.secretRef) {
+        // Programmer error — validateProviderProfile should have caught this.
+        throw new MissingSecretError(profile.id, profile.name, 'apiKey');
+      }
+      const secret = secretLookup(profile.secretRef);
+      if (typeof secret !== 'string' || secret.length === 0) {
+        // Fail closed. NEVER silently fall back to the user's Anthropic
+        // login — that would be misleading (the user thinks they're on a
+        // Custom Provider when they're not).
+        throw new MissingSecretError(profile.id, profile.name, 'apiKey');
+      }
+      env.ANTHROPIC_API_KEY = secret;
+    } else if (profile.authMode === 'authToken') {
+      if (!profile.secretRef) {
+        throw new MissingSecretError(profile.id, profile.name, 'authToken');
+      }
+      const secret = secretLookup(profile.secretRef);
+      if (typeof secret !== 'string' || secret.length === 0) {
+        throw new MissingSecretError(profile.id, profile.name, 'authToken');
+      }
+      env.ANTHROPIC_AUTH_TOKEN = secret;
     }
-    env.ANTHROPIC_API_KEY = secret;
-  } else if (profile.authMode === 'authToken') {
-    if (!profile.secretRef) {
-      throw new MissingSecretError(profile.id, profile.name, 'authToken');
-    }
-    const secret = secretLookup(profile.secretRef);
-    if (typeof secret !== 'string' || secret.length === 0) {
-      throw new MissingSecretError(profile.id, profile.name, 'authToken');
-    }
-    env.ANTHROPIC_AUTH_TOKEN = secret;
-  } else if (profile.authMode === 'inherit') {
-    // Deliberately do NOT set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN.
-    // The Claude Code process inherits the user's existing login. No
-    // secret is required or expected.
+    // authMode 'inherit' + 非 noInject（理论不存在，validator 保证）——
+    // 不注入 auth env，仅 baseUrl。
   }
 
   // PWD — match upstream behavior (so Claude Code's CWD detection agrees).

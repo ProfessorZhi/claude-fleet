@@ -1,5 +1,5 @@
 /**
- * ProviderProfileStore — Spec 002.
+ * ProviderProfileStore — Spec 002 / Spec 005.
  *
  * Persists ProviderProfile (NON-secret configuration) in VS Code globalState.
  * The plaintext secret lives in SecretStorage under `secretRef`.
@@ -9,11 +9,15 @@
  *
  * Invariants:
  *   - SecretStorage plaintext NEVER appears here.
- *   - The store always includes the built-in "Inherit" profile in `list()`
- *     so callers don't have to remember to seed it.
+ *   - Spec 005 (FR-003/FR-005): `list()` returns ONLY user-configured profiles.
+ *     The built-in Inherit profile is NO LONGER auto-injected — Native
+ *     Anthropic Account must be explicitly configured to appear in
+ *     New Agent / Switch. `get(INHERIT_PROVIDER_PROFILE_ID)` still resolves
+ *     for legacy restarts (001-era agents with no providerProfileId).
  *
  * See:
  *   docs/specs/002-provider-model-isolation/design.md § ProviderProfileStore
+ *   docs/specs/005-provider-registry-session-continuity/design.md D1/D5
  */
 
 import * as vscode from 'vscode';
@@ -55,18 +59,13 @@ export function createProviderProfileStore(
 
   return {
     list(): ProviderProfile[] {
-      const stored = readAll();
-      // Always surface the built-in Inherit profile; dedupe by id.
-      const map = new Map<string, ProviderProfile>();
-      map.set(INHERIT_PROVIDER_PROFILE_ID, makeInheritProviderProfile());
-      for (const p of stored) {
-        if (p && typeof p.id === 'string' && p.id.length > 0) {
-          map.set(p.id, p);
-        }
-      }
-      return [...map.values()];
+      // Spec 005: only user-configured profiles. No auto-injected Inherit.
+      return readAll().filter((p) => p && typeof p.id === 'string' && p.id.length > 0);
     },
     get(id: string): ProviderProfile | undefined {
+      // Legacy restart fallback: 001-era agents persisted with
+      // INHERIT_PROVIDER_PROFILE_ID resolve to the built-in inherit profile
+      // (authMode 'inherit' → no env injection). It is NOT listed in UI.
       if (id === INHERIT_PROVIDER_PROFILE_ID) return makeInheritProviderProfile();
       return readAll().find((p) => p.id === id);
     },

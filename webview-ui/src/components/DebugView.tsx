@@ -21,6 +21,8 @@ interface AgentDiagnostics {
   providerProfileId?: string;
   providerDisplayName?: string;
   modelId?: string;
+  // Spec 005 — true = launched by Fleet; false/undefined = external/unknown.
+  managedByFleet?: boolean;
 }
 
 interface DebugViewProps {
@@ -147,9 +149,22 @@ export function DebugView({
                 transport.send({ type: 'restartAgent', id });
               }}
               className={`opacity-70 ${isSelected ? 'text-white' : ''}`}
-              title="Restart agent (keeps Repo / Provider / Model)"
+              title="Restart agent (resumes the same conversation with the same Repo / Provider / Model)"
             >
               Restart
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid={`agent-switch-provider-${id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                transport.send({ type: 'switchProvider', id });
+              }}
+              className={`opacity-70 ${isSelected ? 'text-white' : ''}`}
+              title="Switch Provider (keeps the same session and conversation)"
+            >
+              Switch
             </Button>
             <Button
               variant="ghost"
@@ -213,6 +228,15 @@ export function DebugView({
                 !hasActiveTools &&
                 !!officeState.characters.get(id)?.waitingAwaitingInput,
             )}
+          </span>
+
+          <span className="opacity-60">Managed</span>
+          <span data-testid="agent-managed">
+            {diag?.managedByFleet
+              ? 'Fleet'
+              : diag?.providerDisplayName
+                ? 'External'
+                : 'External / Unknown'}
           </span>
         </div>
         {(tools.length > 0 || status === 'waiting') && (

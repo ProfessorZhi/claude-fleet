@@ -10,7 +10,8 @@ import type { AgentState, PersistedAgent } from './types.js';
  * attaches the resulting file to Allure so failures can be analyzed without
  * local repro. Zero cost when the env var is unset.
  */
-const DEBUG_LOG_PATH = process.env['PIXEL_AGENTS_DEBUG_LOG'];
+const DEBUG_LOG_PATH =
+  process.env['CLAUDE_FLEET_DEBUG_LOG'] ?? process.env['PIXEL_AGENTS_DEBUG_LOG'];
 
 function debugLogBroadcast(message: Record<string, unknown>): void {
   if (!DEBUG_LOG_PATH) return;
@@ -180,6 +181,9 @@ export class AgentStateStore {
         providerProfileId: agent.providerProfileId,
         providerDisplayName: agent.providerDisplayName,
         modelId: agent.modelId,
+        // Spec 005 — managed flag + pre-switch provider (NOT secrets).
+        managedByFleet: agent.managedByFleet,
+        lastProviderProfileId: agent.lastProviderProfileId,
       });
     }
     this.adapter.saveAgents(persisted);

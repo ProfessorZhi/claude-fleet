@@ -318,3 +318,42 @@ describe('AgentStateStore', () => {
     });
   });
 });
+
+describe('Spec 005 — managed flag persistence', () => {
+  it('persist round-trips managedByFleet and lastProviderProfileId', () => {
+    const localStore = new AgentStateStore();
+    const adapter = createMockAdapter();
+    localStore.setAdapter(adapter);
+    localStore.set(
+      1,
+      createTestAgent({
+        id: 1,
+        managedByFleet: true,
+        lastProviderProfileId: 'minimax.1',
+        providerProfileId: 'deepseek.1',
+      }),
+    );
+
+    localStore.persist();
+
+    const saved = (adapter.saveAgents as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as PersistedAgent[];
+    expect(saved[0].managedByFleet).toBe(true);
+    expect(saved[0].lastProviderProfileId).toBe('minimax.1');
+    expect(saved[0].providerProfileId).toBe('deepseek.1');
+  });
+
+  it('legacy agents persist without managed flag (undefined, no crash)', () => {
+    const localStore = new AgentStateStore();
+    const adapter = createMockAdapter();
+    localStore.setAdapter(adapter);
+    localStore.set(1, createTestAgent({ id: 1 }));
+
+    localStore.persist();
+
+    const saved = (adapter.saveAgents as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as PersistedAgent[];
+    expect(saved[0].managedByFleet).toBeUndefined();
+    expect(saved[0].lastProviderProfileId).toBeUndefined();
+  });
+});

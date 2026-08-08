@@ -100,6 +100,14 @@ export interface AgentState {
   /** Model id passed as `claude --model <id>` at launch. Persisted. */
   modelId?: string;
 
+  // -- Spec 005 Session Continuity / Managed flag --
+  /** True when this agent was launched by Fleet (vs. discovered externally).
+   *  Persisted so Auto Discovery can restore Provider/Model after a reload. */
+  managedByFleet?: boolean;
+  /** Provider profile id used BEFORE a Switch Provider (for diagnostics /
+   *  potential revert). NOT a secret. Transient-ish; persisted for parity. */
+  lastProviderProfileId?: string;
+
   // -- Spec 003 status --
   /** Launch timestamp (ms since epoch). TRANSIENT — never persisted; used by
    *  the error heuristic ("transcript never appeared within N seconds after
@@ -146,4 +154,11 @@ export interface PersistedAgent {
   providerDisplayName?: string;
   /** Model id passed as `claude --model <id>` at launch. */
   modelId?: string;
+
+  // -- Spec 005 Session Continuity / Managed flag --
+  /** True when launched by Fleet (vs discovered externally). Persisted so
+   *  Auto Discovery restores Provider/Model after a reload. */
+  managedByFleet?: boolean;
+  /** Provider profile id used before a Switch Provider. NOT a secret. */
+  lastProviderProfileId?: string;
 }

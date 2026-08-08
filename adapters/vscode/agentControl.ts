@@ -10,7 +10,7 @@
 
 import * as vscode from 'vscode';
 
-import type { InstanceLaunchConfig } from '../../core/src/providerProfiles.js';
+import type { InstanceLaunchConfig, ProviderProfile } from '../../core/src/providerProfiles.js';
 import { INHERIT_PROVIDER_PROFILE_ID } from '../../core/src/providerProfiles.js';
 import type { AgentRuntime } from '../../server/src/agentRuntime.js';
 import type { AgentStateStore } from '../../server/src/agentStateStore.js';
@@ -21,10 +21,12 @@ import {
   type CliCheckResult,
   ensureClaudeCliAvailable,
 } from './cliCheck.js';
+import { pickModel } from './launchAgentFlow.js';
+import type { ProviderProfileStore } from './providerProfileStore.js';
 
 /**
  * Project the launch intent of a running agent for Restart (Spec 004
- * FR-006). Pure — no vscode / fs — unit-tested.
+ * FR-006 + Spec 005 FR-009/FR-010). Pure — no vscode / fs — unit-tested.
  *
  * `cwd` is the exact repo the user picked at launch (AgentState.cwd,
  * persisted via PersistedAgent.cwd). `projectDir` is the Claude transcript
@@ -34,6 +36,12 @@ import {
  * (001-era) and scan-discovered agents that never went through a launch.
  * Legacy agents (no provider/model) also fall back to the built-in Inherit
  * profile.
+ *
+ * Spec 005 Session Continuity: Restart RESUMES the SAME Claude native
+ * session (`sessionMode: 'resume'`, `sessionId` preserved) instead of
+ * creating a fresh one. `sessionId` exists on every agent (launched ones
+ * carry the generated UUID; discovered ones derive it from the jsonl
+ * basename), so the projection is always well-defined.
  */
 export function restartConfigFromAgent(agent: AgentState): InstanceLaunchConfig {
   return {
@@ -41,6 +49,22 @@ export function restartConfigFromAgent(agent: AgentState): InstanceLaunchConfig 
     cwd: agent.cwd ?? agent.projectDir,
     providerProfileId: agent.providerProfileId ?? INHERIT_PROVIDER_PROFILE_ID,
     modelId: agent.modelId,
+    // Resume the same Claude native conversation on Restart.
+    sessionId: agent.sessionId,
+    sessionMode: 'resume',
+  };
+}
+
+/**
+ * Project the launch intent for "New Session" (Spec 005 FR-010): SAME
+ * Repo / Provider / Model, but a FRESH conversation (new sessionId).
+ */
+export function newSessionConfigFromAgent(agent: AgentState): InstanceLaunchConfig {
+  return {
+    cwd: agent.cwd ?? agent.projectDir,
+    providerProfileId: agent.providerProfileId ?? INHERIT_PROVIDER_PROFILE_ID,
+    modelId: agent.modelId,
+    // sessionMode defaults to 'new'; no sessionId → fresh UUID at launch.
   };
 }
 
@@ -156,4 +180,121 @@ export async function runRestartAgentCommand(deps: RestartAgentDeps): Promise<vo
     launchConfig: restartConfig,
     suppressShow: false,
   });
+}
+
+/**
+ * Run the `newSession` command (Spec 005 FR-010): SAME Repo / Provider /
+ * Model, but a FRESH Claude session (new sessionId, empty conversation).
+ */
+export async function runNewSessionCommand(deps: RestartAgentDeps): Promise<void> {
+  const { store, runtime } = deps;
+  const picker = deps.picker ?? (() => pickAgent(store));
+  const cliCheck = deps.cliCheck ?? ensureClaudeCliAvailable;
+  const showError = deps.showError ?? ((m: string) => void vscode.window.showErrorMessage(m));
+
+  const id = await picker();
+  if (id === undefined) return;
+
+  const agent = store.get(id);
+  if (!agent) return;
+  const config = newSessionConfigFromAgent(agent);
+
+  runtime.stopAgent(id);
+
+  const cli = await cliCheck();
+  if (!cli.ok) {
+    showError(CLAUDE_CLI_NOT_FOUND_MESSAGE);
+    return;
+  }
+
+  await deps.launcher({
+    ...deps.baseLaunchOptions,
+    launchConfig: config,
+    suppressShow: false,
+  });
+}
+
+/** Dependencies of runSwitchProviderCommand (extends RestartAgentDeps). */
+export interface SwitchProviderDeps extends RestartAgentDeps {
+  providerProfileStore: ProviderProfileStore;
+}
+
+/**
+ * Run the `switchProvider` command (Spec 005 FR-011/FR-012): pick a new
+ * configured Provider Profile (+ optional Model), then Stop the current
+ * Claude process and relaunch with the SAME cwd + sessionId + native
+ * transcript via Claude Code native resume. The conversation is preserved —
+ * Fleet NEVER copies chat content into a prompt.
+ *
+ * If the profile is missing / disabled at resolve time, we fail closed with
+ * a clear error (no silent fallback). If Claude Code later refuses the
+ * resume, the user is asked explicitly before starting a new session.
+ */
+export async function runSwitchProviderCommand(deps: SwitchProviderDeps): Promise<void> {
+  const { store, runtime, providerProfileStore } = deps;
+  const picker = deps.picker ?? (() => pickAgent(store));
+  const cliCheck = deps.cliCheck ?? ensureClaudeCliAvailable;
+  const showError = deps.showError ?? ((m: string) => void vscode.window.showErrorMessage(m));
+
+  const id = await picker();
+  if (id === undefined) return;
+
+  const agent = store.get(id);
+  if (!agent) return;
+
+  // Only configured + enabled profiles (Spec 005 FR-003).
+  const profiles = providerProfileStore.list().filter((p) => p.enabled !== false);
+  if (profiles.length === 0) {
+    showError(
+      'Claude Fleet: No Provider Profiles configured. Add one via Manage Providers before switching.',
+    );
+    return;
+  }
+  const provider = await pickProfileForSwitch(profiles, agent);
+  if (!provider) return;
+  const modelId = await pickModel(provider);
+  if (modelId === undefined) return;
+
+  // Remember the previous provider for diagnostics (not a secret).
+  if (agent.providerProfileId && agent.providerProfileId !== provider.id) {
+    agent.lastProviderProfileId = agent.providerProfileId;
+  }
+
+  runtime.stopAgent(id);
+
+  const cli = await cliCheck();
+  if (!cli.ok) {
+    showError(CLAUDE_CLI_NOT_FOUND_MESSAGE);
+    return;
+  }
+
+  // Resume the SAME native session with the NEW provider env.
+  await deps.launcher({
+    ...deps.baseLaunchOptions,
+    launchConfig: {
+      cwd: agent.cwd ?? agent.projectDir,
+      providerProfileId: provider.id,
+      modelId,
+      sessionId: agent.sessionId,
+      sessionMode: 'resume',
+    },
+    suppressShow: false,
+  });
+}
+
+async function pickProfileForSwitch(
+  profiles: ProviderProfile[],
+  agent: AgentState,
+): Promise<ProviderProfile | undefined> {
+  const items = profiles.map((p) => ({
+    label: p.name,
+    description: p.baseUrl ?? p.presetId ?? undefined,
+    detail: p.id === agent.providerProfileId ? 'Current provider' : (p.defaultModelId ?? undefined),
+    profile: p,
+  }));
+  const picked = await vscode.window.showQuickPick(items, {
+    title: 'Claude Fleet: Switch Provider',
+    ignoreFocusOut: true,
+  });
+  return picked?.profile;
 }

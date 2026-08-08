@@ -188,10 +188,14 @@ export async function launchNewTerminal(
     terminal.show();
   }
 
-  const sessionId = crypto.randomUUID();
+  // Spec 005 Session Continuity: explicit sessionId (Restart/Switch resume)
+  // or a fresh UUID for a new session.
+  const sessionMode = launchConfig?.sessionMode ?? 'new';
+  const sessionId = launchConfig?.sessionId ?? crypto.randomUUID();
   const launch = claudeProvider.buildLaunchCommand?.(sessionId, cwd, {
     bypassPermissions,
     modelId: resolved.safeMetadata.modelId,
+    sessionMode,
   });
   if (!launch) {
     throw new Error('claudeProvider.buildLaunchCommand is not implemented');
@@ -250,6 +254,9 @@ export async function launchNewTerminal(
     // Spec 003 — launch timestamp (transient; drives the "transcript never
     // appeared" error heuristic in agentStatus.ts).
     createdAt: Date.now(),
+    // Spec 005 — Fleet 启动的实例；Auto Discovery 重发现时据此恢复
+    // Provider / Model（外部 agent 无此标记 → External / Unknown）。
+    managedByFleet: true,
   };
 
   assignPaletteIfNeeded(agent, agents);
@@ -433,6 +440,9 @@ export function persistAgents(agents: AgentStateStore, adapter: StateAdapter): v
       providerProfileId: agent.providerProfileId,
       providerDisplayName: agent.providerDisplayName,
       modelId: agent.modelId,
+      // Spec 005 — managed flag + pre-switch provider (NOT secrets).
+      managedByFleet: agent.managedByFleet,
+      lastProviderProfileId: agent.lastProviderProfileId,
     });
   }
   adapter.saveAgents(persisted);
@@ -538,6 +548,10 @@ export function restoreAgents(
       providerProfileId: p.providerProfileId,
       providerDisplayName: p.providerDisplayName,
       modelId: p.modelId,
+      // Spec 005 — managed flag + pre-switch provider restored. Absent on
+      // legacy / external agents.
+      managedByFleet: p.managedByFleet,
+      lastProviderProfileId: p.lastProviderProfileId,
     };
 
     assignPaletteIfNeeded(agent, store);

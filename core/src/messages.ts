@@ -62,7 +62,8 @@ export type ClientMessage =
   | RequestDiagnostics
   | NewAgent
   | StopAgent
-  | RestartAgent;
+  | RestartAgent
+  | SwitchProvider;
 
 export interface ProviderCapabilities {
   type: 'providerCapabilities';
@@ -420,5 +421,10 @@ export interface StopAgent {
 
 export interface RestartAgent {
   type: 'restartAgent';
+  id: number;
+}
+
+export interface SwitchProvider {
+  type: 'switchProvider';
   id: number;
 }

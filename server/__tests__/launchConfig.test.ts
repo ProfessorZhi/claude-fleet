@@ -376,3 +376,121 @@ describe('validateProviderProfile — invariants', () => {
     expect(validateProviderProfile(p)).toBeNull();
   });
 });
+
+describe('resolveClaudeLaunchConfig — Spec 005 provider types', () => {
+  const noSecret = () => undefined;
+
+  it('native-anthropic profile injects NO ANTHROPIC_* auth env', () => {
+    const profile: ProviderProfile = {
+      id: 'nat',
+      name: 'Anthropic Personal',
+      kind: 'anthropic-compatible',
+      providerType: 'native-anthropic',
+      presetId: 'anthropic-account',
+      authMode: 'inherit',
+    };
+    const r = resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', noSecret);
+    expect(r.env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(r.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(r.env.ANTHROPIC_BASE_URL).toBeUndefined();
+  });
+
+  it('deepseek preset injects official base URL + token + official env block', () => {
+    const profile: ProviderProfile = {
+      id: 'deepseek.1',
+      name: 'DeepSeek - Main',
+      kind: 'anthropic-compatible',
+      providerType: 'anthropic-compatible',
+      presetId: 'deepseek',
+      authMode: 'authToken',
+      secretRef: 'claude-fleet.provider.deepseek.1',
+    };
+    const r = resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', () => 'sk-deepseek-key');
+    expect(r.env.ANTHROPIC_BASE_URL).toBe('https://api.deepseek.com/anthropic');
+    expect(r.env.ANTHROPIC_AUTH_TOKEN).toBe('sk-deepseek-key');
+    expect(r.env.ANTHROPIC_MODEL).toBe('deepseek-v4-pro[1m]');
+    expect(r.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('deepseek-v4-flash');
+    // Secrets never in safeMetadata.
+    expect(r.safeMetadata.providerProfileId).toBe('deepseek.1');
+    expect(JSON.stringify(r.safeMetadata)).not.toContain('sk-deepseek-key');
+  });
+
+  it('minimax preset injects official base URL + compact window env', () => {
+    const profile: ProviderProfile = {
+      id: 'minimax.1',
+      name: 'MiniMax - Main',
+      kind: 'anthropic-compatible',
+      providerType: 'anthropic-compatible',
+      presetId: 'minimax',
+      authMode: 'authToken',
+      secretRef: 'claude-fleet.provider.minimax.1',
+    };
+    const r = resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', () => 'mm-key');
+    expect(r.env.ANTHROPIC_BASE_URL).toBe('https://api.minimax.io/anthropic');
+    expect(r.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('1000000');
+  });
+
+  it('explicit baseUrl overrides the preset default; explicit model wins via args', () => {
+    const profile: ProviderProfile = {
+      id: 'deepseek.2',
+      name: 'DeepSeek - CN',
+      kind: 'anthropic-compatible',
+      providerType: 'anthropic-compatible',
+      presetId: 'deepseek',
+      baseUrl: 'https://mirror.example.com/anthropic',
+      authMode: 'authToken',
+      secretRef: 'claude-fleet.provider.deepseek.2',
+    };
+    const r = resolveClaudeLaunchConfig(profile, 'custom-model', '/repo', 's', () => 'k');
+    expect(r.env.ANTHROPIC_BASE_URL).toBe('https://mirror.example.com/anthropic');
+    // --model is an explicit arg (overrides env ANTHROPIC_MODEL per Claude Code).
+    expect(r.args).toContain('--model');
+    expect(r.args).toContain('custom-model');
+  });
+
+  it('external-credential-chain (bedrock/vertex/foundry) injects no ANTHROPIC_*', () => {
+    for (const preset of ['bedrock', 'vertex', 'foundry'] as const) {
+      const profile: ProviderProfile = {
+        id: `${preset}.1`,
+        name: `${preset} - Work`,
+        kind: 'anthropic-compatible',
+        providerType: preset,
+        presetId: preset,
+        authMode: 'inherit',
+      };
+      const r = resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', noSecret);
+      expect(r.env.ANTHROPIC_API_KEY, preset).toBeUndefined();
+      expect(r.env.ANTHROPIC_AUTH_TOKEN, preset).toBeUndefined();
+      expect(r.env.ANTHROPIC_BASE_URL, preset).toBeUndefined();
+    }
+  });
+
+  it('anthropic-api profile injects API key', () => {
+    const profile: ProviderProfile = {
+      id: 'api.1',
+      name: 'Anthropic API',
+      kind: 'anthropic-compatible',
+      providerType: 'anthropic-api',
+      presetId: 'anthropic-api',
+      authMode: 'apiKey',
+      secretRef: 'claude-fleet.provider.api.1',
+    };
+    const r = resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', () => 'sk-ant-123');
+    expect(r.env.ANTHROPIC_API_KEY).toBe('sk-ant-123');
+  });
+
+  it('missing secret still fails closed on preset profiles', () => {
+    const profile: ProviderProfile = {
+      id: 'deepseek.3',
+      name: 'DeepSeek - Broken',
+      kind: 'anthropic-compatible',
+      providerType: 'anthropic-compatible',
+      presetId: 'deepseek',
+      authMode: 'authToken',
+      secretRef: 'claude-fleet.provider.deepseek.3',
+    };
+    expect(() => resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', noSecret)).toThrow(
+      MissingSecretError,
+    );
+  });
+});

@@ -15,8 +15,11 @@ vi.mock('vscode', () => ({
 
 import {
   focusAgent,
+  newSessionConfigFromAgent,
   restartConfigFromAgent,
+  runNewSessionCommand,
   runRestartAgentCommand,
+  runSwitchProviderCommand,
 } from '../../adapters/vscode/agentControl.js';
 import {
   CLAUDE_CLI_NOT_FOUND_MESSAGE,
@@ -69,6 +72,9 @@ describe('restartConfigFromAgent — Spec 004 FR-006', () => {
       cwd: 'D:/projects/zuno',
       providerProfileId: 'custom.xyz',
       modelId: 'my-model-1',
+      // Spec 005 — Restart resumes the SAME session.
+      sessionId: 'sess-1',
+      sessionMode: 'resume',
     });
   });
 
@@ -83,6 +89,8 @@ describe('restartConfigFromAgent — Spec 004 FR-006', () => {
       cwd: '/workspace/repo-a',
       providerProfileId: 'custom.xyz',
       modelId: 'my-model-1',
+      sessionId: 'sess-1',
+      sessionMode: 'resume',
     });
   });
 
@@ -97,6 +105,8 @@ describe('restartConfigFromAgent — Spec 004 FR-006', () => {
       cwd: '/old/repo',
       providerProfileId: INHERIT_PROVIDER_PROFILE_ID,
       modelId: undefined,
+      sessionId: 'sess-1',
+      sessionMode: 'resume',
     });
   });
 
@@ -111,6 +121,8 @@ describe('restartConfigFromAgent — Spec 004 FR-006', () => {
       cwd: '/old/repo',
       providerProfileId: INHERIT_PROVIDER_PROFILE_ID,
       modelId: undefined,
+      sessionId: 'sess-1',
+      sessionMode: 'resume',
     });
   });
 });
@@ -173,13 +185,15 @@ describe('runRestartAgentCommand — Spec 004 FR-006 ~ FR-008', () => {
     // Old instance fully stopped (removed from store)
     expect(store.get(1)).toBeUndefined();
     // New launch carries the preserved config — cwd is the ORIGINAL repo,
-    // not the transcript projectDir.
+    // not the transcript projectDir; the SAME session is resumed (Spec 005).
     expect(launcher).toHaveBeenCalledTimes(1);
     expect(launcher.mock.calls[0][0]).toMatchObject({
       launchConfig: {
         cwd: 'D:/projects/zuno',
         providerProfileId: 'custom.xyz',
         modelId: 'model-a',
+        sessionId: 'sess-1',
+        sessionMode: 'resume',
       },
     });
     expect(showError).not.toHaveBeenCalled();
@@ -242,5 +256,208 @@ describe('runRestartAgentCommand — Spec 004 FR-006 ~ FR-008', () => {
   it('uses the real CLI check by default (integration sanity)', async () => {
     // ensureClaudeCliAvailable exists and is wired as the default in agentControl
     expect(ensureClaudeCliAvailable).toBeTypeOf('function');
+  });
+});
+
+// ── Spec 005: Session Continuity ─────────────────────────────
+
+describe('restartConfigFromAgent — Spec 005 resume semantics', () => {
+  it('Restart now RESUMES the same Claude session (sessionMode resume + sessionId)', () => {
+    const agent = makeAgent(1, {
+      cwd: '/repo-a',
+      projectDir: '/transcripts/a',
+      sessionId: 'sess-1',
+      providerProfileId: 'deepseek.1',
+      modelId: 'deepseek-v4-pro[1m]',
+    });
+    expect(restartConfigFromAgent(agent)).toEqual({
+      cwd: '/repo-a',
+      providerProfileId: 'deepseek.1',
+      modelId: 'deepseek-v4-pro[1m]',
+      sessionId: 'sess-1',
+      sessionMode: 'resume',
+    });
+  });
+
+  it('newSessionConfigFromAgent keeps repo/provider/model but drops the session', () => {
+    const agent = makeAgent(1, {
+      cwd: '/repo-a',
+      projectDir: '/transcripts/a',
+      sessionId: 'sess-1',
+      providerProfileId: 'deepseek.1',
+      modelId: 'deepseek-v4-pro[1m]',
+    });
+    expect(newSessionConfigFromAgent(agent)).toEqual({
+      cwd: '/repo-a',
+      providerProfileId: 'deepseek.1',
+      modelId: 'deepseek-v4-pro[1m]',
+    });
+  });
+});
+
+describe('runSwitchProviderCommand — Spec 005 FR-011', () => {
+  function makeStore(
+    profiles: Array<Partial<import('../../core/src/providerProfiles.js').ProviderProfile>>,
+  ) {
+    return {
+      list: () =>
+        profiles.map((p, i) => ({
+          id: `p${i}`,
+          name: `P${i}`,
+          kind: 'anthropic-compatible' as const,
+          authMode: 'inherit' as const,
+          ...p,
+        })),
+      get: (id: string) => profiles.find((p) => p.id === id),
+      upsert: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+    };
+  }
+
+  it('switches provider keeping cwd + sessionId with resume mode', async () => {
+    const agent = makeAgent(1, {
+      cwd: '/repo-zuno',
+      projectDir: '/transcripts/zuno',
+      sessionId: 'S1',
+      providerProfileId: 'minimax.1',
+      modelId: 'MiniMax-M3[1m]',
+      terminalRef: { dispose: vi.fn() } as never,
+    });
+    const store = new AgentStateStore();
+    store.set(1, agent);
+    const runtime = new AgentRuntime(store, claudeProvider);
+    const launcher = vi.fn(async (_options: unknown) => {});
+    const profileStore = makeStore([
+      { id: 'minimax.1', name: 'MiniMax - Main' },
+      {
+        id: 'deepseek.1',
+        name: 'DeepSeek - Main',
+        defaultModelId: 'deepseek-v4-pro[1m]',
+        modelIds: ['deepseek-v4-pro[1m]', 'deepseek-v4-flash'],
+      },
+    ]) as never;
+    const showError = vi.fn();
+
+    // Drive the QuickPicks by call order:
+    //   1. pickProfileForSwitch → the DeepSeek profile item
+    //   2. pickModel → the model value item
+    const vscodeMock = await import('vscode');
+    const pickSpy = vscodeMock.window.showQuickPick as ReturnType<typeof vi.fn>;
+    pickSpy.mockReset();
+    let quickPickCall = 0;
+    pickSpy.mockImplementation(async (items: Array<{ profile?: unknown; value?: string }>) => {
+      quickPickCall += 1;
+      if (quickPickCall === 1) {
+        const withProfile = (items as Array<{ profile?: unknown }>).filter((i) => i.profile);
+        return (
+          withProfile.find((i) => (i.profile as { id?: string })?.id === 'deepseek.1') ??
+          withProfile[0]
+        );
+      }
+      // Model picker: pick the preset whose value is the DeepSeek model.
+      const withValue = (items as Array<{ value?: string }>).filter((i) => i.value);
+      return withValue.find((i) => i.value === 'deepseek-v4-pro[1m]') ?? withValue[0];
+    });
+
+    await runSwitchProviderCommand({
+      store,
+      runtime,
+      providerProfileStore: profileStore,
+      launcher,
+      baseLaunchOptions: { providerProfileStore: {}, secretStorageProvider: {} } as never,
+      picker: async () => 1,
+      cliCheck: async () => ({ ok: true, version: '2.1.220' }),
+      showError,
+    });
+
+    expect(store.get(1)).toBeUndefined(); // old instance stopped
+    expect(launcher).toHaveBeenCalledTimes(1);
+    const cfg = (
+      launcher.mock.calls[0][0] as {
+        launchConfig: {
+          cwd: string;
+          providerProfileId: string;
+          sessionId: string;
+          sessionMode: string;
+          modelId: string;
+        };
+      }
+    ).launchConfig;
+    expect(cfg.cwd).toBe('/repo-zuno'); // Repo unchanged
+    expect(cfg.sessionId).toBe('S1'); // Session unchanged
+    expect(cfg.sessionMode).toBe('resume'); // Native resume
+    expect(cfg.providerProfileId).toBe('deepseek.1'); // New provider
+    expect(cfg.modelId).toBe('deepseek-v4-pro[1m]'); // New model
+  });
+
+  it('fails closed with a clear error when no profiles are configured', async () => {
+    const agent = makeAgent(1, { cwd: '/r', sessionId: 'S1', providerProfileId: 'x' });
+    const store = new AgentStateStore();
+    store.set(1, agent);
+    const runtime = new AgentRuntime(store, claudeProvider);
+    const launcher = vi.fn(async () => {});
+    const showError = vi.fn();
+
+    await runSwitchProviderCommand({
+      store,
+      runtime,
+      providerProfileStore: makeStore([]) as never,
+      launcher,
+      baseLaunchOptions: {} as never,
+      picker: async () => 1,
+      cliCheck: async () => ({ ok: true, version: 'x' }),
+      showError,
+    });
+
+    expect(launcher).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalled();
+    expect(store.get(1)).toBeDefined(); // agent untouched
+  });
+});
+
+describe('runNewSessionCommand — Spec 005 FR-010', () => {
+  it('launches a fresh session with the same repo/provider/model', async () => {
+    const agent = makeAgent(1, {
+      cwd: '/repo-a',
+      projectDir: '/t/a',
+      sessionId: 'S1',
+      providerProfileId: 'deepseek.1',
+      modelId: 'deepseek-v4-pro[1m]',
+      terminalRef: { dispose: vi.fn() } as never,
+    });
+    const store = new AgentStateStore();
+    store.set(1, agent);
+    const runtime = new AgentRuntime(store, claudeProvider);
+    const launcher = vi.fn(async (_options: unknown) => {});
+
+    await runNewSessionCommand({
+      store,
+      runtime,
+      launcher,
+      baseLaunchOptions: { providerProfileStore: {}, secretStorageProvider: {} } as never,
+      picker: async () => 1,
+      cliCheck: async () => ({ ok: true, version: 'x' }),
+      showError: vi.fn(),
+    });
+
+    expect(launcher).toHaveBeenCalledTimes(1);
+    const cfg = (
+      launcher.mock.calls[0][0] as {
+        launchConfig: {
+          cwd: string;
+          providerProfileId: string;
+          modelId: string;
+          sessionId?: string;
+          sessionMode?: string;
+        };
+      }
+    ).launchConfig;
+    expect(cfg.cwd).toBe('/repo-a');
+    expect(cfg.providerProfileId).toBe('deepseek.1');
+    expect(cfg.modelId).toBe('deepseek-v4-pro[1m]');
+    // No explicit sessionId → launchNewTerminal generates a fresh UUID;
+    // sessionMode defaults to 'new'.
+    expect(cfg.sessionId).toBeUndefined();
+    expect(cfg.sessionMode).toBeUndefined();
   });
 });

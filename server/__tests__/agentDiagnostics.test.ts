@@ -79,6 +79,7 @@ describe('buildAgentDiagnostics', () => {
         'jsonlFile',
         'lastDataAt',
         'linesProcessed',
+        'managedByFleet',
         'modelId',
         'projectDir',
         'projectDirExists',

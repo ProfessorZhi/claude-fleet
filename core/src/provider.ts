@@ -125,11 +125,13 @@ export interface HookProvider {
   /** Parse one line of a transcript file into an AgentEvent. */
   parseTranscriptLine?(line: string): AgentEvent | null;
   /** Build CLI launch command for +Agent button.
-   *  `modelId` (added in Spec 002) is appended as `--model <id>`. */
+   *  `modelId` (added in Spec 002) is appended as `--model <id>`.
+   *  `sessionMode` (Spec 005): 'resume' 用 `--resume <sessionId>` 恢复同一
+   *  原生 Session；缺省 'new' 用 `--session-id <uuid>` 新会话。 */
   buildLaunchCommand?(
     sessionId: string,
     cwd: string,
-    opts?: { bypassPermissions?: boolean; modelId?: string },
+    opts?: { bypassPermissions?: boolean; modelId?: string; sessionMode?: 'new' | 'resume' },
   ): {
     command: string;
     args: string[];
