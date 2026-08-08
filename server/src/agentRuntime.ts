@@ -1,7 +1,7 @@
 /**
  * AgentRuntime: shared agent lifecycle core for VS Code and standalone modes.
  *
- * Owns all infrastructure that both PixelAgentsViewProvider (VS Code) and the
+ * Owns all infrastructure that both ClaudeFleetViewProvider (VS Code) and the
  * standalone CLI need: timer Maps, file watchers, HookEventHandler, DismissalTracker,
  * session scanning, and agent removal. Adapters (VS Code, CLI) create an instance
  * and register platform-specific lifecycle callbacks.

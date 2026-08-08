@@ -1,4 +1,4 @@
-const debug = process.env.PIXEL_AGENTS_DEBUG !== '0';
+const debug = (process.env.CLAUDE_FLEET_DEBUG ?? process.env.PIXEL_AGENTS_DEBUG) !== '0';
 
 import type { HookProvider } from '../../core/src/provider.js';
 import type { AgentStateStore } from './agentStateStore.js';

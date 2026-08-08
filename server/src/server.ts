@@ -44,7 +44,7 @@ type HookEventCallback = (providerId: string, event: Record<string, unknown>) =>
  * VS Code server and a standalone `npx pixel-agents` server can run at once,
  * each owning its own registry entry, both reachable by hook fan-out.
  */
-export class PixelAgentsServer {
+export class ClaudeFleetServer {
   private app: FastifyInstance | null = null;
   private config: ServerConfig | null = null;
   private ownsServer = false;
@@ -118,8 +118,11 @@ export class PixelAgentsServer {
       protocol: SERVER_REGISTRY_PROTOCOL_VERSION,
       // Diagnostic-only: forward the debug-log path to the hook script via
       // server.json (env vars don't reach the spawned hook reliably).
-      ...(process.env['PIXEL_AGENTS_DEBUG_LOG']
-        ? { debugLog: process.env['PIXEL_AGENTS_DEBUG_LOG'] }
+      ...((process.env['CLAUDE_FLEET_DEBUG_LOG'] ?? process.env['PIXEL_AGENTS_DEBUG_LOG'])
+        ? {
+            debugLog:
+              process.env['CLAUDE_FLEET_DEBUG_LOG'] ?? process.env['PIXEL_AGENTS_DEBUG_LOG'],
+          }
         : {}),
     };
     this.ownsServer = true;

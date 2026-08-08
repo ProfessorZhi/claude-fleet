@@ -36,8 +36,8 @@ import {
 } from '../../server/src/layoutPersistence.js';
 import { PathSet } from '../../server/src/pathKey.js';
 import { claudeProvider, copyHookScript } from '../../server/src/providers/index.js';
-import { PixelAgentsServer } from '../../server/src/server.js';
-import { runRestartAgentCommand } from './agentControl.js';
+import { ClaudeFleetServer } from '../../server/src/server.js';
+import { runRestartAgentCommand, runSwitchProviderCommand } from './agentControl.js';
 import type { LaunchNewTerminalOptions } from './agentManager.js';
 import {
   getProjectDirPath,
@@ -72,7 +72,7 @@ import { VscodeTerminalAdapter } from './vscodeTerminalAdapter.js';
  *  wrong (webviewReady never arriving) — log and drop the oldest. */
 const MAX_PENDING_BROADCASTS = 1_000;
 
-export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
+export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
   store = new AgentStateStore();
   webviewView: vscode.WebviewView | undefined;
 
@@ -101,8 +101,8 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   // Cross-window layout sync
   layoutWatcher: LayoutWatcher | null = null;
 
-  // Pixel Agents Server (hook event reception)
-  private pixelAgentsServer: PixelAgentsServer | null = null;
+  // Claude Fleet Server (hook event reception)
+  private claudeFleetServer: ClaudeFleetServer | null = null;
   private adapter: StateAdapter;
 
   // Spec 002 — Provider / Model storage + secrets.
@@ -117,7 +117,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
    */
   launchFromFlow: (options: LaunchNewTerminalOptions) => Promise<void> = async () => {
     throw new Error(
-      'PixelAgentsViewProvider.launchFromFlow not yet bound (resolveWebviewView not called).',
+      'ClaudeFleetViewProvider.launchFromFlow not yet bound (resolveWebviewView not called).',
     );
   };
 
@@ -230,12 +230,12 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   }
 
   private initServer(): void {
-    this.pixelAgentsServer = new PixelAgentsServer();
-    this.pixelAgentsServer.onHookEvent((providerId, event) => {
+    this.claudeFleetServer = new ClaudeFleetServer();
+    this.claudeFleetServer.onHookEvent((providerId, event) => {
       this.runtime.handleHookEvent(providerId, event);
     });
 
-    this.pixelAgentsServer
+    this.claudeFleetServer
       .start({ store: this.store, embedded: true })
       .then((config) => {
         // Server always starts regardless of hooks-enabled state.
@@ -299,37 +299,10 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage(async (message) => {
       if (message.type === 'launchAgent') {
-        const prevAgentIds = new Set(this.store.keys());
-        await launchNewTerminal(
-          this.store.nextAgentId,
-          this.store.nextTerminalIndex,
-          this.store,
-          this.runtime.activeAgentId,
-          this.runtime.knownJsonlFiles,
-          this.runtime.fileWatchers,
-          this.runtime.pollingTimers,
-          this.runtime.waitingTimers,
-          this.runtime.permissionTimers,
-          this.runtime.jsonlPollTimers,
-          this.runtime.projectScanTimer,
-          () => this.store.persist(),
-          {
-            // Spec 002 — webview-initiated +Agent uses the built-in Inherit
-            // profile. Real Provider/Model selection happens through the
-            // `claude-fleet.newAgent` Launch Flow (T009).
-            folderPath: message.folderPath as string | undefined,
-            bypassPermissions: message.bypassPermissions as boolean | undefined,
-            launchConfig: { providerProfileId: 'claude-fleet.inherit' },
-            providerProfileStore: this.providerProfileStore,
-            secretStorageProvider: this.secretStorageProvider,
-          },
-        );
-        // Register newly created agent(s) with hook handler
-        for (const [id, agent] of this.store) {
-          if (!prevAgentIds.has(id)) {
-            this.runtime.registerAgent(agent.sessionId, id);
-          }
-        }
+        // Spec 005 (FR-003/FR-005): the webview +Agent button routes through
+        // the full New Agent flow — Provider/Model must come from configured
+        // profiles; the built-in Inherit profile is no longer auto-injected.
+        await vscode.commands.executeCommand(COMMAND_NEW_AGENT);
       } else if (message.type === 'focusAgent') {
         const agent = this.store.get(message.id);
         if (agent) {
@@ -354,10 +327,27 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
       } else if (message.type === 'restartAgent') {
         // Spec 004 — Debug View Restart button. Reuses the command flow so
         // Repo / Provider / Model are preserved; the button targets the
-        // clicked agent directly (no second QuickPick).
+        // clicked agent directly (no second QuickPick). Spec 005: resumes
+        // the SAME Claude native session.
         await runRestartAgentCommand({
           store: this.store,
           runtime: this.runtime,
+          baseLaunchOptions: {
+            providerProfileStore: this.providerProfileStore,
+            secretStorageProvider: this.secretStorageProvider,
+          },
+          launcher: async (options) => {
+            await this.launchFromFlow(options);
+          },
+          picker: async () => message.id as number,
+        });
+      } else if (message.type === 'switchProvider') {
+        // Spec 005 — Debug View Switch button: new Provider env + SAME
+        // session via Claude Code native resume.
+        await runSwitchProviderCommand({
+          store: this.store,
+          runtime: this.runtime,
+          providerProfileStore: this.providerProfileStore,
           baseLaunchOptions: {
             providerProfileStore: this.providerProfileStore,
             secretStorageProvider: this.secretStorageProvider,
@@ -387,7 +377,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         this.adapter.setSetting(GLOBAL_KEY_HOOKS_ENABLED, enabled);
         this.runtime.hooksEnabled.current = enabled;
         if (enabled) {
-          const serverConfig = this.pixelAgentsServer?.getConfig();
+          const serverConfig = this.claudeFleetServer?.getConfig();
           void claudeProvider.installHooks(
             serverConfig ? `http://127.0.0.1:${serverConfig.port}` : '',
             serverConfig?.token ?? '',
@@ -543,37 +533,42 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           this.autoSpawnAttempted = true;
           console.log('[Claude Fleet] Auto-spawning agent on startup');
           // When the user also opted into autoShowPanel, skip terminal.show()
-          // so the panel view stays on Pixel Agents. The terminal still runs;
+          // so the panel view stays on Claude Fleet. The terminal still runs;
           // clicking the character focuses it via the focusAgent handler.
           const autoShowPanel = vscode.workspace
             .getConfiguration()
             .get<boolean>(CONFIG_KEY_AUTO_SHOW_PANEL, false);
-          const prevAgentIds = new Set(this.store.keys());
-          await launchNewTerminal(
-            this.store.nextAgentId,
-            this.store.nextTerminalIndex,
-            this.store,
-            this.runtime.activeAgentId,
-            this.runtime.knownJsonlFiles,
-            this.runtime.fileWatchers,
-            this.runtime.pollingTimers,
-            this.runtime.waitingTimers,
-            this.runtime.permissionTimers,
-            this.runtime.jsonlPollTimers,
-            this.runtime.projectScanTimer,
-            () => this.store.persist(),
-            {
-              // Spec 002 — auto-spawn uses the built-in "Inherit" profile
-              // (no override; user keeps their existing Claude Code login).
-              launchConfig: { cwd: '', providerProfileId: 'claude-fleet.inherit' },
-              suppressShow: autoShowPanel,
-              providerProfileStore: this.providerProfileStore,
-              secretStorageProvider: this.secretStorageProvider,
-            },
-          );
-          for (const [id, agent] of this.store) {
-            if (!prevAgentIds.has(id)) {
-              this.runtime.registerAgent(agent.sessionId, id);
+          // Spec 005: auto-spawn uses the first configured + enabled profile;
+          // with none configured it is skipped (no silent Inherit fallback).
+          const autoProfiles = this.providerProfileStore.list().filter((p) => p.enabled !== false);
+          if (autoProfiles.length === 0) {
+            console.warn('[Claude Fleet] Auto-spawn skipped: no Provider Profiles configured.');
+          } else {
+            const prevAgentIds = new Set(this.store.keys());
+            await launchNewTerminal(
+              this.store.nextAgentId,
+              this.store.nextTerminalIndex,
+              this.store,
+              this.runtime.activeAgentId,
+              this.runtime.knownJsonlFiles,
+              this.runtime.fileWatchers,
+              this.runtime.pollingTimers,
+              this.runtime.waitingTimers,
+              this.runtime.permissionTimers,
+              this.runtime.jsonlPollTimers,
+              this.runtime.projectScanTimer,
+              () => this.store.persist(),
+              {
+                launchConfig: { cwd: '', providerProfileId: autoProfiles[0].id },
+                suppressShow: autoShowPanel,
+                providerProfileStore: this.providerProfileStore,
+                secretStorageProvider: this.secretStorageProvider,
+              },
+            );
+            for (const [id, agent] of this.store) {
+              if (!prevAgentIds.has(id)) {
+                this.runtime.registerAgent(agent.sessionId, id);
+              }
             }
           }
         } else {
@@ -752,7 +747,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         }
         const uri = await vscode.window.showSaveDialog({
           filters: { 'JSON Files': ['json'] },
-          defaultUri: vscode.Uri.file(path.join(os.homedir(), 'pixel-agents-layout.json')),
+          defaultUri: vscode.Uri.file(path.join(os.homedir(), 'claude-fleet-layout.json')),
         });
         if (uri) {
           fs.writeFileSync(uri.fsPath, JSON.stringify(layout, null, 2), 'utf-8');
@@ -941,8 +936,8 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   }
 
   dispose() {
-    this.pixelAgentsServer?.stop();
-    this.pixelAgentsServer = null;
+    this.claudeFleetServer?.stop();
+    this.claudeFleetServer = null;
     this.runtime.dispose();
     this.layoutWatcher?.dispose();
     this.layoutWatcher = null;

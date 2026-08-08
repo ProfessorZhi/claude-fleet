@@ -9,9 +9,12 @@
 // ── Hook API ─────────────────────────────────────────────────
 
 export const HOOK_API_PREFIX = '/api/hooks';
-export const SERVER_JSON_DIR = '.pixel-agents';
+// Spec 006: Fleet-owned state now lives under ~/.claude-fleet (migrated from
+// ~/.pixel-agents). `.pixel-agents` remains only as the legacy read source
+// during migration.
+export const SERVER_JSON_DIR = '.claude-fleet';
 export const SERVER_JSON_NAME = 'server.json';
-export const HOOK_SCRIPTS_DIR = '.pixel-agents/hooks';
+export const HOOK_SCRIPTS_DIR = '.claude-fleet/hooks';
 
 // ── Display ──────────────────────────────────────────────────
 

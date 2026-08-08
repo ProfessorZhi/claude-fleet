@@ -56,7 +56,7 @@ function writeClaudeSettings(settings: ClaudeSettings): void {
       fs.mkdirSync(dir, { recursive: true });
     }
     // Atomic write via tmp file + rename
-    const tmpPath = settingsPath + '.pixel-agents-tmp';
+    const tmpPath = settingsPath + '.claude-fleet-tmp';
     fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2), 'utf-8');
     fs.renameSync(tmpPath, settingsPath);
   } catch (e) {

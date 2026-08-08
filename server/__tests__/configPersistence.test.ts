@@ -111,7 +111,7 @@ describe('configPersistence: areas', () => {
     });
 
     it('coerces a hand-edited config.json with malformed areaMappings into defaults', () => {
-      const configDir = path.join(tempHome, '.pixel-agents');
+      const configDir = path.join(tempHome, '.claude-fleet');
       fs.mkdirSync(configDir, { recursive: true });
       fs.writeFileSync(
         path.join(configDir, 'config.json'),

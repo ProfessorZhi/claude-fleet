@@ -236,4 +236,181 @@ _(none)_
 
 ---
 
+## ADR-003: Claude Fleet 是管理层，不是 Claude Code 的 fork / runtime 替代品
+
+### Status
+
+Accepted（2026-08-08，Spec 005 落地）
+
+### Context
+
+真实手动测试暴露：用户没有 Anthropic 官方订阅 / Console API / Bedrock /
+Vertex / Foundry，实际使用 DeepSeek / MiniMax 等 Anthropic-compatible API。
+启动 Claude Code 后落入官方登录选择（"1. Claude account / 2. Anthropic
+Console / 3. Bedrock / Foundry / Vertex"），产品流程错误。
+
+### Decision
+
+Claude Fleet 只负责：Provider / Account / API Profile 管理 + Model 选择 +
+多 Claude Code Instance 管理 + Repo / Session 管理 + Pixel 可视化 / Auto
+Discovery。进入 Claude Code 之后，所有原生能力（/help /resume /mcp / skills /
+hooks / CLAUDE.md / subagents / Agent Teams / permissions / session history）
+与用户直接运行 `claude` 一致。
+
+禁止：重新实现 Claude Code、自建 Conversation Engine、复制聊天内容模拟
+Resume、代理 Claude Code TUI、patch claude 安装文件、魔改登录选择页面。
+
+### Reasons
+
+- 用户的核心诉求是"进入 Claude Code 之前选好 Provider / Model / Session"，
+  而不是一个新的聊天界面。
+- 所有 Provider（Anthropic / DeepSeek / MiniMax / Bedrock…）运行的都是
+  Claude Code runtime —— 会话连续性用 native resume，不复制对话。
+
+### Consequences
+
+- New Agent 流程：Repo → Configured Profile → Model → New/Resume → 原生 claude。
+- Restart = native resume；Switch Provider = 新 env + native resume 同 session。
+- 检测到 Provider 注入失败（仍落入官方 Login 选择）时视为 BLOCKER。
+
+---
+
+## ADR-004: ProviderDefinition ≠ ProviderProfile
+
+### Status
+
+Accepted（2026-08-08，Spec 005 落地）
+
+### Context
+
+ProviderProfile 早期模型较简单（kind/authMode/baseUrl），无法表达
+"DeepSeek / MiniMax 是同一类协议的不同厂商预设"这一层。
+
+### Decision
+
+两层概念：
+
+- **ProviderDefinition / Preset**（`core/src/providerRegistry.ts`）：类型模板
+  （native-anthropic / anthropic-api / bedrock / vertex / foundry /
+  anthropic-compatible），定义 id / displayName / authStrategy / 官方验证的
+  defaultEndpoint / requiredEnv / model hints。不含 Secret。
+- **ProviderProfile**（`core/src/providerProfiles.ts`）：用户配置实例
+  （DeepSeek - Main），含 providerType / presetId / authStrategy / endpoint /
+  secretRef / modelIds / enabled。
+
+Runtime 核心唯一的 Provider 分支点是 `providerType`（resolver 内一层）。
+新增 Provider（智谱、公司 Gateway）只加 definition + profile，零核心改动。
+**禁止 `if (presetId === 'deepseek')` 散落。**
+
+### Consequences
+
+- DeepSeek = `providerType: anthropic-compatible` + `presetId: deepseek`。
+- 官方文档无法验证的 preset 标记 `verified: false`，不编造 endpoint/model。
+
+---
+
+## ADR-005: Session ≠ Provider
+
+### Status
+
+Accepted（2026-08-08，Spec 005 落地）
+
+### Context
+
+早期模型把 Session 视为 launch 时的副作用；Restart 总是 fresh session。
+用户希望 Restart / Switch Provider 后对话保留。
+
+### Decision
+
+Session 是 Claude Code 原生 Session（transcript / JSONL）。Fleet 只保存
+sessionId / cwd / providerProfileId / modelId / managedByFleet。
+Provider 是"当前 launch configuration"，不是 conversation owner。
+会话连续性 = Claude Code native resume（`claude --resume <sessionId>`，
+2.1.220 实测支持）。切换 Provider = 同一 cwd + sessionId + 新 env + resume。
+Resume 被拒绝时显式提示，不静默新建会话。
+
+### Consequences
+
+- Restart = resume 同 session；New Session 才是 fresh conversation。
+- AgentState / PersistedAgent 扩展 managedByFleet / lastProviderProfileId。
+- 同一 Profile 可服务多个 Agent（独立 env object）；同一 Provider 可多个 Profile。
+
+---
+
+## ADR-006: Provider 切换使用 Claude Code 原生 Resume
+
+### Status
+
+Accepted（2026-08-08，Spec 005 落地）
+
+### Context
+
+跨 Provider（MiniMax → DeepSeek）保持对话的候选方案：复制聊天内容拼
+Prompt（错误架构，禁止）；Fleet 自建会话 DB（重新实现 Claude Code，禁止）；
+native resume（正确）。
+
+### Decision
+
+Switch Provider / Restart 一律走 Claude Code 原生 `--resume <sessionId>`。
+Fleet 只改变 launch env（Provider 凭据 / Base URL / Model）。自动测试只验证
+launch semantics（参数 / env / 顺序）；真实 API 行为由用户手动验证。
+
+### Consequences
+
+- 若 Claude Code 拒绝跨 Provider resume：显式提示
+  "could not be resumed… Start a new session instead?"，用户确认后才新建。
+- 不读取 `~/.claude/.credentials.json`（undocumented）；用 `claude auth
+status`（官方 JSON）探测 native 登录态，不可用时仅显式 Profile。
+
+---
+
+## ADR-007: Auto Discovery 一等公民
+
+### Status
+
+Accepted（2026-08-08，Spec 006 落地）
+
+### Context
+
+Pixel Agents 上游的 Global Session Scanner / Watch All Sessions / External
+Adoption / JSONL discovery 是核心资产，不能因为 Fleet 自己 launch Agent 而消失。
+
+### Decision
+
+统一 Discovery 语义：Fleet managed + 用户外部手动 `claude` + CLI launched
+全部被发现。按 sessionId upsert（Restart / Switch 后不重复）。Fleet launch
+时持久化 sessionId → provider 映射（managedByFleet）；外部 agent 不猜
+Provider，显示 External / Unknown。
+
+### Consequences
+
+- `upsertAgentBySessionId` 接入 adopt 路径；knownJsonlFiles / pathsMatch /
+  dismissalTracker 既有机制保留。
+
+---
+
+## ADR-008: ~/.pixel-agents → ~/.claude-fleet 状态迁移
+
+### Status
+
+Accepted（2026-08-08，Spec 006 落地）
+
+### Context
+
+Claude Fleet 自己创建的状态（config / hooks / layout / state）仍写在
+`~/.pixel-agents/`（上游 namespace）。产品品牌已迁移，状态路径也应迁移。
+
+### Decision
+
+新状态根 `~/.claude-fleet/`；`server/src/migrateStateDir.ts` 一次性迁移：
+幂等（new 存在即 no-op）、失败安全（copy 失败保留 old、可重试）、成功后写
+migration.json 标记、**永不删除旧目录**（Alpha 期间保留）。Hook 安装器识别
+legacy pixel-agents entry 并替换为 claude-fleet 路径，保留用户其他 hooks。
+
+### Consequences
+
+- `migrateStateDir()` 在 extension activate / CLI 启动时调用。
+- 剩余 `.pixel-agents` 命中仅限：attribution / 迁移代码 / legacy 兼容 /
+  globalState 旧 key 读取。
+
 <!-- 新 ADR 追加在下方。 -->

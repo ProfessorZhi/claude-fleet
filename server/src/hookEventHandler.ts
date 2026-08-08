@@ -9,7 +9,7 @@ import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
 import { notifyBackgroundAgentCompleted } from './transcriptParser.js';
 import type { AgentState } from './types.js';
 
-const debug = process.env.PIXEL_AGENTS_DEBUG !== '0';
+const debug = (process.env.CLAUDE_FLEET_DEBUG ?? process.env.PIXEL_AGENTS_DEBUG) !== '0';
 
 /** Normalized hook event received from any provider's hook script via the HTTP server. */
 export interface HookEvent {
@@ -145,7 +145,7 @@ export class HookEventHandler {
     const normEvent = normalized.event;
     const eventName = event.hook_event_name; // retained for logs only
     // CI / e2e diagnostic: see agentStateStore.ts debugLogBroadcast comment.
-    if (process.env['PIXEL_AGENTS_DEBUG_LOG']) {
+    if (process.env['CLAUDE_FLEET_DEBUG_LOG'] ?? process.env['PIXEL_AGENTS_DEBUG_LOG']) {
       try {
         const fs = require('fs') as typeof import('fs');
         const sid = (event.session_id as string | undefined)?.slice(0, 8) ?? '?';
@@ -154,7 +154,7 @@ export class HookEventHandler {
             ? ` toolName=${(normEvent as { toolName?: string }).toolName}`
             : '';
         fs.appendFileSync(
-          process.env['PIXEL_AGENTS_DEBUG_LOG']!,
+          process.env['CLAUDE_FLEET_DEBUG_LOG'] ?? process.env['PIXEL_AGENTS_DEBUG_LOG']!,
           `${new Date().toISOString()} HOOK kind=${normEvent.kind} sid=${sid} src=${(normEvent as { source?: string }).source ?? ''}${extras}\n`,
         );
       } catch {

@@ -11,7 +11,7 @@ const HOOK_SCRIPT = path.join(__dirname, '../../dist/hooks/claude-hook.js');
 let tmpBase: string;
 
 function writeServerJson(port: number, token: string): void {
-  const dir = path.join(tmpBase, '.pixel-agents');
+  const dir = path.join(tmpBase, '.claude-fleet');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, 'server.json'),
@@ -21,7 +21,7 @@ function writeServerJson(port: number, token: string): void {
 
 /** Write one multi-server registry entry (~/.pixel-agents/servers/<pid>-<port>.json). */
 function writeRegistryEntry(pid: number, port: number, token: string): void {
-  const dir = path.join(tmpBase, '.pixel-agents', 'servers');
+  const dir = path.join(tmpBase, '.claude-fleet', 'servers');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, `${pid}-${port}.json`),
@@ -259,7 +259,7 @@ describe('claude-hook.js integration', () => {
     skipIfNotBuilt();
     if (!fs.existsSync(HOOK_SCRIPT)) return;
 
-    fs.mkdirSync(path.join(tmpBase, '.pixel-agents', 'servers'), { recursive: true });
+    fs.mkdirSync(path.join(tmpBase, '.claude-fleet', 'servers'), { recursive: true });
     const legacy = await startRecordingServer();
     writeServerJson(legacy.port, 'legacy-token');
 

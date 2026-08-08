@@ -116,7 +116,7 @@ async function ensurePanelIsLarge(window: Page): Promise<void> {
  */
 /**
  * Close the bottom panel. Triggers onDidChangeVisibility(false) on every
- * WebviewView hosted there; since PixelAgentsViewProvider does NOT set
+ * WebviewView hosted there; since ClaudeFleetViewProvider does NOT set
  * retainContextWhenHidden, the webview is disposed and resolveWebviewView
  * is called fresh when the panel reopens. Used by the restored-agents test to exercise
  * the existingAgents restore path without a destructive iframe reload.

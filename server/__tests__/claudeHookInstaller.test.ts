@@ -103,7 +103,7 @@ describe('claudeHookInstaller', () => {
 
     copyHookScript(mockExtPath);
 
-    const dst = path.join(tmpBase, '.pixel-agents', 'hooks', 'claude-hook.js');
+    const dst = path.join(tmpBase, '.claude-fleet', 'hooks', 'claude-hook.js');
     expect(fs.existsSync(dst)).toBe(true);
     expect(fs.readFileSync(dst, 'utf-8')).toBe('// mock hook script');
   });
@@ -119,7 +119,7 @@ describe('claudeHookInstaller', () => {
 
     copyHookScript(mockExtPath);
 
-    const dst = path.join(tmpBase, '.pixel-agents', 'hooks', 'claude-hook.js');
+    const dst = path.join(tmpBase, '.claude-fleet', 'hooks', 'claude-hook.js');
     const stat = fs.statSync(dst);
     // Check owner execute bit
     expect(stat.mode & 0o100).toBeTruthy();
@@ -140,7 +140,7 @@ describe('claudeHookInstaller', () => {
   //     nothing — the silent failure the reporter flagged.
   it('copyHookScript returns false when the source is missing', () => {
     const mockExtPath = path.join(tmpBase, 'mock-ext'); // no dist/hooks/claude-hook.js
-    const dst = path.join(tmpBase, '.pixel-agents', 'hooks', 'claude-hook.js');
+    const dst = path.join(tmpBase, '.claude-fleet', 'hooks', 'claude-hook.js');
 
     expect(copyHookScript(mockExtPath)).toBe(false);
     expect(fs.existsSync(dst)).toBe(false);

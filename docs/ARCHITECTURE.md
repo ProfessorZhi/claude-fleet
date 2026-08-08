@@ -27,43 +27,37 @@
 与 ADR-001），Claude Fleet 第一阶段**直接基于** Pixel Agents 上游代码进行二次开发，
 作为 VS Code Runtime 与可视化基线。
 
-### 高层形态（基于上游实际结构）
+### 高层形态（Spec 005/006 后）
 
 ```
-┌──────────────── Claude Fleet Extension (VS Code Host) ────────────────────────┐
-│                                                                              │
-│   adapters/vscode/                                                           │
-│   ├── extension.ts                — activate / deactivate                   │
-│   ├── agentManager.ts             — launchNewTerminal (Multi-Instance)        │
-│   ├── PixelAgentsViewProvider.ts  — Webview Panel 宿主                       │
-│   ├── vscodeTerminalAdapter.ts    — vscode.window.createTerminal             │
-│   ├── migrateVsCodeState.ts       — 旧状态迁移                                │
-│   └── constants.ts                — 命名空间常量                              │
-│                                                                              │
-│   server/                                                                    │
-│   ├── src/agentStateStore.ts      — AgentState / AgentStateStore             │
-│   ├── src/agentRuntime.ts         — Runtime 生命周期                          │
-│   ├── src/hookEventHandler.ts     — Hook 事件分发                              │
-│   ├── src/fileWatcher.ts          — JSONL / transcript 监听                  │
-│   ├── src/httpServer.ts           — Fastify + WebSocket                       │
-│   ├── src/{layoutPersistence,configPersistence}.ts — 持久化                  │
-│   └── src/providers/hook/claude/  — Claude Code Provider 实现               │
-│                                                                              │
-│   core/                                                                      │
-│   ├── src/provider.ts             — Provider 接口                            │
-│   ├── src/adapter.ts              — State Adapter 接口                       │
-│   ├── src/transport.ts            — 消息传输接口                              │
-│   ├── src/messages.ts             — 协议消息模型                              │
-│   └── src/schemas.ts              — Zod schema                               │
-│                                                                              │
-│   webview-ui/                                                                │
-│   ├── src/App.tsx                 — Canvas 主应用                            │
-│   ├── src/components/             — 弹窗 / 列表 / 控件                        │
-│   ├── src/office/                 — Pixel Office 渲染                        │
-│   └── src/transport/              — WebSocket / postMessage                  │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
+Claude Fleet
+│
+├── Provider Registry          core/src/providerRegistry.ts + providerProfiles.ts
+│   ├── ProviderDefinition     （类型模板：native-anthropic / anthropic-api /
+│   │                            bedrock / vertex / foundry / anthropic-compatible
+│   │                            + presetId（deepseek / minimax / custom））
+│   └── ProviderProfileStore   （用户配置实例；globalState（VS Code）/ 文件（CLI））
+├── Secret Store               VS Code SecretStorage / CLI secrets.json
+├── Session Registry           AgentState.cwd / sessionId / provider / model /
+│                              managedByFleet / lastProviderProfileId
+├── Instance Manager           launchNewTerminal（new / resume）· Stop · Focus ·
+│                              Restart(resume) · Switch Provider · New Session
+├── Auto Discovery             global scanner / external adoption / upsert(按 sessionId)
+├── Status / Pixel UI          Agent card：Repo / Provider / Model / Session /
+│                              Status / Managed（Fleet | External）
+│
+└── Claude Code Runtime Adapter
+    ├── resolveClaudeLaunchConfig（唯一 Resolver：Profile+Secret → env/args/safeMetadata）
+    ├── buildLaunchCommand      （claude 原生参数：--session-id / --resume / --model）
+    ├── ClaudeFleetServer       （hook 事件接收）
+    └── native `claude` CLI     （永不 re-implement Claude Code）
 ```
+
+Claude Fleet **不是** Claude Code 的替代品：它只做 Provider/Account/Profile 管理、
+Model 选择、多实例管理、Repo/Session 管理、Pixel 可视化 / Auto Discovery；
+进入 Claude Code 后的所有原生能力（/help /resume /mcp / skills / hooks /
+CLAUDE.md / subagents / Agent Teams / permissions / session history）与用户
+直接运行 `claude` 一致（ADR-003）。
 
 每个 Agent 实例在概念上：
 
@@ -81,23 +75,26 @@
 
 > 表中**当前选择**列基于 ADR-001，已经从 TBD 推进为"复用上游"。
 
-| 模块                     | 职责                                                                         | 状态                                                                  |
-| ------------------------ | ---------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| VS Code Extension Host   | `adapters/vscode/extension.ts`                                               | **当前选择**：复用上游                                                |
-| Instance Manager         | `adapters/vscode/agentManager.ts` 的 `launchNewTerminal` + `AgentStateStore` | **当前选择**：复用上游；按需扩展字段（已扩展 `InstanceLaunchConfig`） |
-| Provider 抽象            | `core/src/provider.ts`、`server/src/providers/index.ts`                      | **当前选择**：复用上游；Claude 是首个 Provider                        |
-| Claude Provider          | `server/src/providers/hook/claude/`                                          | **当前选择**：复用上游；`buildLaunchCommand` 已支持 `modelId`         |
-| Provider Profile 模型    | `core/src/providerProfiles.ts`                                               | **当前选择**：本 Feature 新增                                         |
-| Launch Config Resolver   | `server/src/launchConfig.ts` `resolveClaudeLaunchConfig`                     | **当前选择**：本 Feature 新增（纯函数）                               |
-| SecretStorage 适配       | `adapters/vscode/secretStorageProvider.ts`                                   | **当前选择**：本 Feature 新增                                         |
-| ProviderProfileStore     | `adapters/vscode/providerProfileStore.ts`                                    | **当前选择**：本 Feature 新增（globalState）                          |
-| Launch Flow              | `adapters/vscode/launchAgentFlow.ts`                                         | **当前选择**：本 Feature 新增（QuickPick / InputBox）                 |
-| Repo Binder              | `getProjectDirPath` + Claude session dir 映射                                | **当前选择**：复用上游                                                |
-| Status / Event Stream    | `AgentStateStore` + `hookEventHandler` + Webview transport                   | **当前选择**：复用上游                                                |
-| Pixel-style 可视化       | `webview-ui/src/office/`                                                     | **当前选择**：复用上游；不在 001 重做 UI                              |
-| Provider / Model 隔离    | per-terminal env + `claude --model`                                          | **当前选择**：本 Feature 落地（方案 A，见 ADR-002）                   |
-| 持久化策略（State 放哪） | 上游默认走 `~/.pixel-agents/`                                                | TBD（决定是否迁移到 Claude Fleet 命名空间）                           |
-| 跨 Coding Agent 接入     | Provider subdirectory 抽象                                                   | TBD（Phase 5）                                                        |
+| 模块                     | 职责                                                                                | 状态                                                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| VS Code Extension Host   | `adapters/vscode/extension.ts`                                                      | **当前选择**：复用上游                                                                |
+| Instance Manager         | `adapters/vscode/agentManager.ts` 的 `launchNewTerminal` + `AgentStateStore`        | **当前选择**：复用上游；已扩展 `InstanceLaunchConfig`（sessionMode/sessionId）        |
+| Provider Registry        | `core/src/providerRegistry.ts` + `providerProfiles.ts`                              | **当前选择**：Spec 005 新增（Definition≠Profile，ADR-004）                            |
+| Claude Provider          | `server/src/providers/hook/claude/`                                                 | **当前选择**：复用上游；`buildLaunchCommand` 支持 `modelId` + `sessionMode`           |
+| Launch Config Resolver   | `server/src/launchConfig.ts` `resolveClaudeLaunchConfig`                            | **当前选择**：Spec 005 扩展（按 providerType 分派 + preset env；唯一真相）            |
+| SecretStorage 适配       | `adapters/vscode/secretStorageProvider.ts`（VS Code）/ `cliProviderStore.ts`（CLI） | **当前选择**：Spec 005 新增 CLI 文件版（alpha 限制：未加密）                          |
+| ProviderProfileStore     | `adapters/vscode/providerProfileStore.ts` / `server/src/cliProviderStore.ts`        | **当前选择**：Spec 005 扩展（enabled/modelIds/presetId；不再默认 Inherit）            |
+| Launch Flow              | `adapters/vscode/launchAgentFlow.ts`                                                | **当前选择**：Spec 005 改造（只显示 configured profiles；Add Provider 按 definition） |
+| Manage Providers         | `adapters/vscode/manageProvidersFlow.ts`                                            | **当前选择**：Spec 005 扩展（Add/Edit/Delete；secret 不回显）                         |
+| Session Continuity       | `agentControl.ts` Restart(resume)/Switch/NewSession；native `--resume`              | **当前选择**：Spec 005 新增（ADR-006）                                                |
+| Repo Binder              | `getProjectDirPath` + Claude session dir 映射                                       | **当前选择**：复用上游                                                                |
+| Status / Event Stream    | `AgentStateStore` + `hookEventHandler` + Webview transport                          | **当前选择**：复用上游                                                                |
+| Auto Discovery           | global scanner / external adoption / upsert（按 sessionId 去重）                    | **当前选择**：复用上游 + Spec 006 增强（ADR-007）                                     |
+| Pixel-style 可视化       | `webview-ui/src/office/`                                                            | **当前选择**：复用上游；不在 001 重做 UI                                              |
+| Provider / Model 隔离    | per-terminal env + `claude --model`                                                 | **当前选择**：方案 A（ADR-002 保留，不强制 CLAUDE_CONFIG_DIR）                        |
+| 持久化策略（State 放哪） | `~/.claude-fleet/`（从 `~/.pixel-agents` 迁移，ADR-008）                            | **当前选择**：Spec 006 迁移完成（旧目录保留）                                         |
+| Branding                 | `ClaudeFleetViewProvider` / `CLAUDE_FLEET_DEBUG` / `assets/branding/`               | **当前选择**：Spec 006 完成（attribution 保留）                                       |
+| 跨 Coding Agent 接入     | Provider subdirectory 抽象                                                          | TBD（Phase 5）                                                                        |
 
 ---
 

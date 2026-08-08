@@ -1,40 +1,51 @@
 import * as vscode from 'vscode';
 
 import { FileStateAdapter } from '../../server/src/fileStateAdapter.js';
+import { migrateStateDir } from '../../server/src/migrateStateDir.js';
 import {
   runFocusAgentCommand,
+  runNewSessionCommand,
   runRestartAgentCommand,
   runStopAgentCommand,
+  runSwitchProviderCommand,
 } from './agentControl.js';
+import { ClaudeFleetViewProvider } from './ClaudeFleetViewProvider.js';
 import {
   COMMAND_EXPORT_DEFAULT_LAYOUT,
   COMMAND_FOCUS_AGENT,
   COMMAND_MANAGE_PROVIDERS,
   COMMAND_NEW_AGENT,
+  COMMAND_NEW_SESSION,
   COMMAND_RESTART_AGENT,
   COMMAND_SHOW_PANEL,
   COMMAND_STOP_AGENT,
+  COMMAND_SWITCH_PROVIDER,
   CONFIG_KEY_AUTO_SHOW_PANEL,
   VIEW_ID,
 } from './constants.js';
 import { runLaunchAgentFlowWithLauncher } from './launchAgentFlow.js';
 import { runManageProvidersFlow } from './manageProvidersFlow.js';
 import { migrateVsCodeState } from './migrateVsCodeState.js';
-import { PixelAgentsViewProvider } from './PixelAgentsViewProvider.js';
 
-let providerInstance: PixelAgentsViewProvider | undefined;
+let providerInstance: ClaudeFleetViewProvider | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
-  console.log(`[Claude Fleet] PIXEL_AGENTS_DEBUG=${process.env.PIXEL_AGENTS_DEBUG ?? 'not set'}`);
+  // CLAUDE_FLEET_DEBUG 优先；PIXEL_AGENTS_DEBUG 为 legacy fallback（Spec 006）。
+  const debugEnv = process.env.CLAUDE_FLEET_DEBUG ?? process.env.PIXEL_AGENTS_DEBUG ?? 'not set';
+  console.log(`[Claude Fleet] CLAUDE_FLEET_DEBUG=${debugEnv}`);
 
-  // Shared file-backed state adapter (VS Code namespace in ~/.pixel-agents/config.json).
+  // Spec 006 — migrate Fleet-owned state from ~/.pixel-agents to
+  // ~/.claude-fleet (idempotent, failure-safe, legacy dir preserved).
+  migrateStateDir();
+
+  // Shared file-backed state adapter (VS Code namespace in ~/.claude-fleet/config.json).
   const adapter = new FileStateAdapter({ namespace: 'vscode' });
 
   // One-time migration from legacy workspaceState/globalState. Idempotent; runs every
   // activate. Warns until all keys are cleared (e.g. if a disk error blocks writes).
   migrateVsCodeState(context, adapter);
 
-  const provider = new PixelAgentsViewProvider(context, adapter);
+  const provider = new ClaudeFleetViewProvider(context, adapter);
   providerInstance = provider;
 
   context.subscriptions.push(vscode.window.registerWebviewViewProvider(VIEW_ID, provider));
@@ -105,6 +116,42 @@ export function activate(context: vscode.ExtensionContext) {
       await runRestartAgentCommand({
         store: provider.store,
         runtime: provider.runtime,
+        baseLaunchOptions: {
+          providerProfileStore: provider.providerProfileStore,
+          secretStorageProvider: provider.secretStorageProvider,
+        },
+        launcher: async (options) => {
+          await provider.launchFromFlow(options);
+        },
+      });
+    }),
+  );
+
+  // Spec 005 — New Session: same Repo/Provider/Model, fresh conversation.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(COMMAND_NEW_SESSION, async () => {
+      await runNewSessionCommand({
+        store: provider.store,
+        runtime: provider.runtime,
+        baseLaunchOptions: {
+          providerProfileStore: provider.providerProfileStore,
+          secretStorageProvider: provider.secretStorageProvider,
+        },
+        launcher: async (options) => {
+          await provider.launchFromFlow(options);
+        },
+      });
+    }),
+  );
+
+  // Spec 005 — Switch Provider: same Session/Repo, new Provider env via
+  // Claude Code native resume.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(COMMAND_SWITCH_PROVIDER, async () => {
+      await runSwitchProviderCommand({
+        store: provider.store,
+        runtime: provider.runtime,
+        providerProfileStore: provider.providerProfileStore,
         baseLaunchOptions: {
           providerProfileStore: provider.providerProfileStore,
           secretStorageProvider: provider.secretStorageProvider,

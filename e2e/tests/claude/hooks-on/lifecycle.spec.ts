@@ -1108,12 +1108,12 @@ test.describe('Hooks ON / lifecycle', () => {
   // ~300ms (the matrix rain animation), regressing the "instant restore" UX.
   //
   // Trigger: close the bottom panel, then reopen it. closeBottomPanel hides
-  // the WebviewView; PixelAgentsViewProvider does not set
+  // the WebviewView; ClaudeFleetViewProvider does not set
   // retainContextWhenHidden so VS Code disposes the webview. Reopening via
   // openPixelAgentsPanel re-runs resolveWebviewView, bootstraps a fresh
   // React app, sends webviewReady, and the extension's view provider
   // unconditionally calls sendExistingAgents on every webviewReady
-  // (PixelAgentsViewProvider.ts:479).
+  // (ClaudeFleetViewProvider.ts:479).
   //
   // window.location.reload() does NOT work here: vscode-webview:// iframes
   // can't survive a content-level reload (the security token / CSP / API
@@ -1566,7 +1566,7 @@ test.describe('Hooks ON / lifecycle', () => {
   // `webviewReady`. The extension reads from its persisted state (workspace
   // and global state plus ~/.pixel-agents/config.json) and resends. A
   // regression in any of {FileStateAdapter.setSetting, configPersistence,
-  // PixelAgentsViewProvider's webviewReady handler} would surface as "I
+  // ClaudeFleetViewProvider's webviewReady handler} would surface as "I
   // turned X off, restarted, X is back on."
   //
   // Trigger: toggle Always Show Labels off, close+reopen the panel (forces a

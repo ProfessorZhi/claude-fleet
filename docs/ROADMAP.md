@@ -163,17 +163,23 @@ Runtime / Repo / Session 级别的。
 ## v0.1 Alpha — 当前版本状态（2026-08-08）
 
 ```text
-001 multi-instance-runtime         ✅
-002 provider-model-isolation       ✅
-003 instance-status                ✅ Alpha scope
-004 minimal-control-ui             ✅ Alpha scope
+001 multi-instance-runtime                   ✅
+002 provider-model-isolation                 ✅
+003 instance-status                          ✅ Alpha scope
+004 minimal-control-ui                       ✅ Alpha scope
+005 provider-registry-session-continuity     ✅（Provider Registry / Restart=Resume /
+                                                Switch Provider / CLI providers+launch）
+006 branding-discovery-migration             ✅（PixelAgents→ClaudeFleet 品牌 /
+                                                ~/.claude-fleet 迁移 / Discovery upsert /
+                                                Branding assets）
 
 v0.1 Alpha
-状态：Code Complete / Awaiting Manual GUI Smoke Test
-（不是 Released — 等待用户手动 GUI 测试）
+状态：Implementation Complete / Awaiting Extension Development Host Manual Test
+（不是 Released — 等待用户手动 Development Host 测试；VSIX Packaging BLOCKED）
 ```
 
 - 详细状态见 [`ALPHA_RELEASE.md`](./ALPHA_RELEASE.md)。
-- 手动测试清单见 [`MANUAL_TEST_ALPHA.md`](./MANUAL_TEST_ALPHA.md)。
-- 手动测试通过后：tag `v0.1.0-alpha.N` → GitHub Pre-release → 上传 VSIX → （后续）Marketplace。
+- Development Host 手动测试清单见 [`MANUAL_TEST_ALPHA.md`](./MANUAL_TEST_ALPHA.md) 阶段一。
+- Development Host 测试通过后：`npm run vsix` → VSIX 安装测试 → tag
+  `v0.1.0-alpha.N` → GitHub Pre-release → 上传 VSIX → （后续）Marketplace。
 - 仅在出现清晰用户需求时才引入跨 Agent 协作流程。

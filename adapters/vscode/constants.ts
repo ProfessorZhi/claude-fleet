@@ -1,7 +1,7 @@
 // ── User-Level Layout Persistence (re-exports from server/) ──
 // The user-level persistence contract, surfaced as one adapter-facing barrel so
 // VS Code code never reaches into server/src/constants.js directly. Only
-// LAYOUT_REVISION_KEY has an adapter consumer today (PixelAgentsViewProvider);
+// LAYOUT_REVISION_KEY has an adapter consumer today (ClaudeFleetViewProvider);
 // the rest travel with it because they describe the same ~/.pixel-agents
 // file layout, and splitting the set would leave the next caller guessing which
 // half to import from where.
@@ -62,3 +62,7 @@ export const COMMAND_MANAGE_PROVIDERS = 'claude-fleet.manageProviders';
 export const COMMAND_FOCUS_AGENT = 'claude-fleet.focusAgent';
 export const COMMAND_STOP_AGENT = 'claude-fleet.stopAgent';
 export const COMMAND_RESTART_AGENT = 'claude-fleet.restartAgent';
+
+// Spec 005 — session continuity commands.
+export const COMMAND_NEW_SESSION = 'claude-fleet.newSession';
+export const COMMAND_SWITCH_PROVIDER = 'claude-fleet.switchProvider';

@@ -25,7 +25,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type * as vscode from 'vscode';
 
-const debug = process.env.PIXEL_AGENTS_DEBUG !== '0';
+const debug = (process.env.CLAUDE_FLEET_DEBUG ?? process.env.PIXEL_AGENTS_DEBUG) !== '0';
 
 import type { HookProvider } from '../../core/src/provider.js';
 import type { TeamProvider } from '../../core/src/teamProvider.js';
@@ -56,12 +56,12 @@ import type { AgentState } from './types.js';
  *  seededMtimes, and pendingClearFiles Maps/Sets. */
 let dismissalTracker: DismissalTracker | null = null;
 
-/** Register the DismissalTracker instance. Called from PixelAgentsViewProvider at startup. */
+/** Register the DismissalTracker instance. Called from ClaudeFleetViewProvider at startup. */
 export function setDismissalTracker(tracker: DismissalTracker): void {
   dismissalTracker = tracker;
 }
 
-/** Get the active DismissalTracker (for PixelAgentsViewProvider direct access).
+/** Get the active DismissalTracker (for ClaudeFleetViewProvider direct access).
  *
  * @public
  */
@@ -77,12 +77,12 @@ export function setTerminalAdapter(adapter: ITerminalAdapter): void {
   terminalAdapter = adapter;
 }
 
-/** Agent removal callback. Injected by PixelAgentsViewProvider to avoid a
+/** Agent removal callback. Injected by ClaudeFleetViewProvider to avoid a
  *  server/src/ → src/ back-import on agentManager.ts. The ViewProvider closure
  *  captures the store and timer Maps, so only the agent ID is needed. */
 let agentRemovalCallback: ((id: number) => void) | null = null;
 
-/** Register the agent removal callback. Called by PixelAgentsViewProvider. */
+/** Register the agent removal callback. Called by ClaudeFleetViewProvider. */
 export function setAgentRemovalCallback(cb: typeof agentRemovalCallback): void {
   agentRemovalCallback = cb;
 }
@@ -495,8 +495,25 @@ function adoptTerminalForFile(
   persistAgents: () => void,
   onAgentCreated?: (agent: AgentState) => void,
 ): void {
-  const id = nextAgentIdRef.current++;
   const sessionId = path.basename(jsonlFile, '.jsonl');
+  // Spec 006 FR-009 — sessionId upsert: if this Claude native session is
+  // ALREADY tracked (e.g. Fleet Restart/Switch resumed the same session and
+  // the scanner re-discovers its transcript), reattach the terminal to the
+  // existing agent instead of creating a duplicate character.
+  if (
+    upsertAgentBySessionId(agents, sessionId, {
+      terminalRef: terminal,
+      jsonlFile,
+      projectDir,
+    })
+  ) {
+    console.log(
+      `[Claude Fleet] Watcher: Agent reattached terminal "${terminal.name}" to session ${sessionId} (upsert, no duplicate)`,
+    );
+    return;
+  }
+
+  const id = nextAgentIdRef.current++;
   // Skip to end of file -- adopted terminals show live activity only, not replay history
   let fileOffset = 0;
   try {
@@ -551,6 +568,34 @@ function adoptTerminalForFile(
     permissionTimers,
   );
   readNewLines(id, agents, waitingTimers, permissionTimers);
+}
+
+/**
+ * Spec 006 FR-009 — upsert an already-tracked agent by its Claude native
+ * sessionId (the stable discovery key). Returns true when a match was found
+ * and updated; false when no agent carries this sessionId (caller creates).
+ *
+ * TerminalRef / jsonlFile / projectDir are reattached; Provider / Model /
+ * managedByFleet are NOT touched here so a Fleet-managed agent keeps its
+ * provider identity after Restart/Switch re-discovery.
+ */
+export function upsertAgentBySessionId(
+  agents: AgentStateStore,
+  sessionId: string,
+  update: {
+    terminalRef?: vscode.Terminal;
+    jsonlFile?: string;
+    projectDir?: string;
+  },
+): boolean {
+  for (const agent of agents.values()) {
+    if (agent.sessionId !== sessionId) continue;
+    if (update.terminalRef !== undefined) agent.terminalRef = update.terminalRef;
+    if (update.jsonlFile !== undefined) agent.jsonlFile = update.jsonlFile;
+    if (update.projectDir !== undefined) agent.projectDir = update.projectDir;
+    return true;
+  }
+  return false;
 }
 
 // ── Lead + Teammates support (provider-driven) ──
@@ -1168,6 +1213,23 @@ function adoptExternalSession(
   persistAgents: () => void,
   folderName?: string,
 ): void {
+  const sessionId = path.basename(jsonlFile, '.jsonl');
+  // Spec 006 FR-009 — sessionId upsert: a Fleet-managed session re-discovered
+  // after Restart/Switch (or a restore race) must not create a duplicate
+  // agent. Provider/Model/managedByFleet are left untouched, so a Fleet agent
+  // keeps its identity; a genuinely new external session creates fresh here.
+  if (
+    upsertAgentBySessionId(agents, sessionId, {
+      jsonlFile,
+      projectDir,
+    })
+  ) {
+    console.log(
+      `[Claude Fleet] Watcher: Session ${sessionId} already tracked — upserted (no duplicate)`,
+    );
+    return;
+  }
+
   const id = nextAgentIdRef.current++;
   // Decide whether to replay the existing file content or skip to its end.
   //
@@ -1200,7 +1262,7 @@ function adoptExternalSession(
   }
   const agent: AgentState = {
     id,
-    sessionId: path.basename(jsonlFile, '.jsonl'),
+    sessionId,
     terminalRef: undefined,
     isExternal: true,
     projectDir,

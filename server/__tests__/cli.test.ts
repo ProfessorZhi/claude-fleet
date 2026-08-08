@@ -143,7 +143,7 @@ describe('dist/cli.js entry-point guard', () => {
 
     const { code, stdout } = await runCli(['--help']);
     expect(code).toBe(0);
-    expect(stdout).toContain('Usage: pixel-agents');
+    expect(stdout).toContain('Usage: claude-fleet');
   });
 
   // 12. Direct execution still runs main()'s port validation (rejects before listen())
@@ -188,7 +188,7 @@ describe('dist/cli.js entry-point guard', () => {
         }
       });
 
-      const installedHook = path.join(tmpHome, '.pixel-agents', 'hooks', 'claude-hook.js');
+      const installedHook = path.join(tmpHome, '.claude-fleet', 'hooks', 'claude-hook.js');
       await waitForCondition(() => fs.existsSync(installedHook));
       expect(fs.readFileSync(installedHook, 'utf-8')).toContain('#!/usr/bin/env node');
       if (process.platform !== 'win32') {
@@ -214,5 +214,22 @@ describe('dist/cli.js entry-point guard', () => {
       fs.rmSync(tmpHome, { recursive: true, force: true });
       fs.rmSync(workspaceDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('parseArgs — Spec 005 subcommands', () => {
+  it('parses the providers subcommand', () => {
+    expect(parseArgs(['providers']).command).toBe('providers');
+    expect(parseArgs(['providers', '--port', '3100']).command).toBe('providers');
+    expect(parseArgs(['providers', '--port', '3100']).port).toBe(3100);
+  });
+
+  it('parses the launch subcommand', () => {
+    expect(parseArgs(['launch']).command).toBe('launch');
+  });
+
+  it('leaves command undefined for plain server mode (backward compatible)', () => {
+    expect(parseArgs([]).command).toBeUndefined();
+    expect(parseArgs(['--port', '8080']).command).toBeUndefined();
   });
 });

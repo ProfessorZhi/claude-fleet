@@ -21,7 +21,7 @@ export function toMajorMinor(version: string): string {
   return parts.length >= 2 ? `${parts[0]}.${parts[1]}` : version;
 }
 
-export const CHANGELOG_REPO_URL = 'https://github.com/pixel-agents-hq/pixel-agents';
+export const CHANGELOG_REPO_URL = 'https://github.com/ProfessorZhi/claude-fleet';
 
 export const DISCORD_INVITE_URL = 'https://discord.gg/Yk7jXebv9H';
 
@@ -44,7 +44,7 @@ export const changelogEntries: ChangelogEntry[] = [
       {
         title: 'Standalone and Architecture',
         items: [
-          'Run the browser office with npx pixel-agents',
+          'Run the office with the Claude Fleet VS Code extension',
           'Layered architecture with a shared runtime, provider contracts, and transport adapters',
           'Multi-server hook fan-out lets VS Code and standalone run together',
           'Published AsyncAPI WebSocket contract with generated TypeScript bindings',

@@ -24,7 +24,7 @@ vi.mock('os', async () => {
 });
 
 // Must import AFTER mock setup
-const { PixelAgentsServer } = await import('../src/server.js');
+const { ClaudeFleetServer } = await import('../src/server.js');
 
 async function postHook(
   port: number,
@@ -42,16 +42,16 @@ async function postHook(
   });
 }
 
-describe('PixelAgentsServer', () => {
-  let server: InstanceType<typeof PixelAgentsServer>;
+describe('ClaudeFleetServer', () => {
+  let server: InstanceType<typeof ClaudeFleetServer>;
 
   beforeEach(() => {
     tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-server-test-'));
-    serverJsonDir = path.join(tmpBase, '.pixel-agents');
+    serverJsonDir = path.join(tmpBase, '.claude-fleet');
     serverJsonPath = path.join(serverJsonDir, 'server.json');
     registryDir = path.join(serverJsonDir, 'servers');
     fs.mkdirSync(serverJsonDir, { recursive: true });
-    server = new PixelAgentsServer();
+    server = new ClaudeFleetServer();
   });
 
   afterEach(() => {
@@ -175,7 +175,7 @@ describe('PixelAgentsServer', () => {
   // 11. Second instance, same capability (embedded+embedded), reuses existing server
   it('second embedded instance reuses an existing embedded server', async () => {
     const config1 = await server.start({ embedded: true });
-    const server2 = new PixelAgentsServer();
+    const server2 = new ClaudeFleetServer();
     const config2 = await server2.start({ embedded: true });
     expect(config2.port).toBe(config1.port);
     expect(config2.pid).toBe(config1.pid);
@@ -186,7 +186,7 @@ describe('PixelAgentsServer', () => {
   // 12. Second instance, same capability (standalone+standalone), reuses existing server
   it('second standalone instance reuses an existing standalone server', async () => {
     const config1 = await server.start({ embedded: false });
-    const server2 = new PixelAgentsServer();
+    const server2 = new ClaudeFleetServer();
     const config2 = await server2.start({ embedded: false });
     expect(config2.port).toBe(config1.port);
     expect(registryFiles()).toHaveLength(1);
@@ -196,7 +196,7 @@ describe('PixelAgentsServer', () => {
   // 13. Capability mismatch: a standalone caller never reuses an embedded server
   it('standalone does not reuse an existing embedded server; starts its own', async () => {
     const config1 = await server.start({ embedded: true });
-    const server2 = new PixelAgentsServer();
+    const server2 = new ClaudeFleetServer();
     const config2 = await server2.start({ embedded: false });
     expect(config2.port).not.toBe(config1.port);
     expect(registryFiles()).toHaveLength(2);
@@ -206,7 +206,7 @@ describe('PixelAgentsServer', () => {
   // 14. Capability mismatch, mirrored: an embedded caller never reuses a standalone server
   it('embedded does not reuse an existing standalone server; starts its own', async () => {
     const config1 = await server.start({ embedded: false });
-    const server2 = new PixelAgentsServer();
+    const server2 = new ClaudeFleetServer();
     const config2 = await server2.start({ embedded: true });
     expect(config2.port).not.toBe(config1.port);
     expect(registryFiles()).toHaveLength(2);
@@ -216,7 +216,7 @@ describe('PixelAgentsServer', () => {
   // 15. Embedded + standalone coexist: two independent live registry entries, neither reuses
   it('embedded and standalone servers coexist as two live registry entries', async () => {
     const embeddedConfig = await server.start({ embedded: true });
-    const standalone = new PixelAgentsServer();
+    const standalone = new ClaudeFleetServer();
     const standaloneConfig = await standalone.start({ embedded: false });
 
     expect(standaloneConfig.port).not.toBe(embeddedConfig.port);
@@ -296,7 +296,7 @@ describe('PixelAgentsServer', () => {
       JSON.stringify({ port: 9999, pid: 999999, token: 'fake', startedAt: 0 }),
     );
     // Server never started (it would reuse), just stop
-    const server2 = new PixelAgentsServer();
+    const server2 = new ClaudeFleetServer();
     server2.stop();
     expect(fs.existsSync(serverJsonPath)).toBe(true);
   });
@@ -304,7 +304,7 @@ describe('PixelAgentsServer', () => {
   // 20. stop() removes only this server's own registry entry, preserves the other's (D6)
   it('deletes only its own registry entry on stop, preserving a coexisting server', async () => {
     const embeddedConfig = await server.start({ embedded: true });
-    const standalone = new PixelAgentsServer();
+    const standalone = new ClaudeFleetServer();
     const standaloneConfig = await standalone.start({ embedded: false });
     expect(registryFiles()).toHaveLength(2);
 

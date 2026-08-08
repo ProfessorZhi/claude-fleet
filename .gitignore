@@ -28,9 +28,10 @@ pnpm-debug.log*
 /logs
 
 # ===== 编辑器 / IDE =====
-.vscode/
+.vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+!.vscode/launch.json
 .vscode-test/
 .idea/
 *.swp
@@ -88,6 +89,9 @@ agent-orchestrator.yaml
 
 # VS Code 隔离测试运行时（--extensions-dir .tmp-vscode-alpha，用完即弃）
 .tmp-vscode-alpha/
+
+# 字面 %USERPROFILE% 目录（Windows 上环境变量未展开时的误产物）
+/%USERPROFILE%/
 
 # ===== 注意：以下目录**故意**保留在仓库中 =====
 # AGENTS.md        —— 所有 Agent 的统一入口

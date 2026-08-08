@@ -29,7 +29,7 @@ const SERVERS_REGISTRY_DIR = path.join(os.homedir(), SERVER_JSON_DIR, SERVERS_DI
 // inheritEnv:false, etc.). After reading the registry we fall back to a
 // live server's `debugLog` field, which the server populated from the same
 // env var.
-let debugLogPath = process.env['PIXEL_AGENTS_DEBUG_LOG'];
+let debugLogPath = process.env['CLAUDE_FLEET_DEBUG_LOG'] ?? process.env['PIXEL_AGENTS_DEBUG_LOG'];
 function hookDebug(line: string): void {
   if (!debugLogPath) return;
   try {
