@@ -40,9 +40,21 @@ export interface ResolveOptions {
 /**
  * Pure function: build per-instance env + args + safe metadata.
  *
+ * Fail-closed semantics (Spec 002 FR-004 + FR-010):
+ *   - `authMode: 'apiKey'` or `'authToken'` REQUIRES a non-empty secret.
+ *   - If the secret is missing or empty, this function THROWS a
+ *     `MissingSecretError` carrying the profile id and authMode.
+ *   - The throw happens BEFORE any `env` is returned, so callers can
+ *     decide whether to proceed with `vscode.window.createTerminal`. They
+ *     MUST NOT create the terminal and then surface the error.
+ *   - `authMode: 'inherit'` does NOT require a secret.
+ *
  * Caller responsibilities:
  *   - Pass a stable `secretLookup` closure. The default impl in the adapter
  *     layer delegates to `vscode.SecretStorage`.
+ *   - Catch `MissingSecretError` and surface a clear UI message; do NOT
+ *     catch it silently and let Claude Code fall back to a different
+ *     auth source (that would be a Spec violation — see FR-004).
  *   - Ensure `profile` is valid (`validateProviderProfile`); this resolver
  *     assumes validity and does not re-validate to keep it pure and cheap.
  */
@@ -65,30 +77,30 @@ export function resolveClaudeLaunchConfig(
   // auth — only inject when the profile opts into one.
   if (profile.authMode === 'apiKey') {
     if (!profile.secretRef) {
-      throw new Error(
-        `resolveClaudeLaunchConfig: profile "${profile.id}" has authMode 'apiKey' but no secretRef.`,
-      );
+      // Programmer error — validateProviderProfile should have caught this.
+      throw new MissingSecretError(profile.id, profile.name, 'apiKey');
     }
     const secret = secretLookup(profile.secretRef);
-    if (typeof secret === 'string' && secret.length > 0) {
-      env.ANTHROPIC_API_KEY = secret;
+    if (typeof secret !== 'string' || secret.length === 0) {
+      // Fail closed. NEVER silently fall back to the user's Anthropic
+      // login — that would be misleading (the user thinks they're on a
+      // Custom Provider when they're not).
+      throw new MissingSecretError(profile.id, profile.name, 'apiKey');
     }
-    // If secret is missing, deliberately omit the env var. The Claude Code
-    // process will fall back to its other auth sources (subscription login).
-    // The adapter layer surfaces the missing-secret condition separately.
+    env.ANTHROPIC_API_KEY = secret;
   } else if (profile.authMode === 'authToken') {
     if (!profile.secretRef) {
-      throw new Error(
-        `resolveClaudeLaunchConfig: profile "${profile.id}" has authMode 'authToken' but no secretRef.`,
-      );
+      throw new MissingSecretError(profile.id, profile.name, 'authToken');
     }
     const secret = secretLookup(profile.secretRef);
-    if (typeof secret === 'string' && secret.length > 0) {
-      env.ANTHROPIC_AUTH_TOKEN = secret;
+    if (typeof secret !== 'string' || secret.length === 0) {
+      throw new MissingSecretError(profile.id, profile.name, 'authToken');
     }
+    env.ANTHROPIC_AUTH_TOKEN = secret;
   } else if (profile.authMode === 'inherit') {
     // Deliberately do NOT set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN.
-    // The Claude Code process inherits the user's existing login.
+    // The Claude Code process inherits the user's existing login. No
+    // secret is required or expected.
   }
 
   // PWD — match upstream behavior (so Claude Code's CWD detection agrees).
@@ -112,4 +124,25 @@ export function resolveClaudeLaunchConfig(
   };
 
   return { env, args, safeMetadata };
+}
+
+/**
+ * Error thrown by `resolveClaudeLaunchConfig` when a Custom Provider
+ * (apiKey or authToken) has a missing or empty secret in SecretStorage.
+ *
+ * The adapter layer MUST catch this, surface a UI message, and abort
+ * before any `vscode.window.createTerminal` call.
+ */
+export class MissingSecretError extends Error {
+  readonly profileId: string;
+  readonly profileName: string;
+  readonly authMode: 'apiKey' | 'authToken';
+
+  constructor(profileId: string, profileName: string, authMode: 'apiKey' | 'authToken') {
+    super(`Claude Fleet: Provider "${profileName}" 缺少 Secret，请重新配置该 Provider 后再启动。`);
+    this.name = 'MissingSecretError';
+    this.profileId = profileId;
+    this.profileName = profileName;
+    this.authMode = authMode;
+  }
 }

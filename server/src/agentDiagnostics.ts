@@ -17,6 +17,10 @@ export interface AgentDiagnosticsEntry {
   fileOffset: number;
   lastDataAt: number;
   linesProcessed: number;
+  // Spec 002 — Provider / Model. NOT secrets.
+  providerProfileId?: string;
+  providerDisplayName?: string;
+  modelId?: string;
 }
 
 /**
@@ -51,6 +55,9 @@ export function buildAgentDiagnostics(store: AgentStateStore): AgentDiagnosticsE
       fileOffset: agent.fileOffset,
       lastDataAt: agent.lastDataAt,
       linesProcessed: agent.linesProcessed,
+      providerProfileId: agent.providerProfileId,
+      providerDisplayName: agent.providerDisplayName,
+      modelId: agent.modelId,
     });
   }
   return diagnostics;

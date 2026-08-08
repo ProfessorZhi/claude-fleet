@@ -23,14 +23,19 @@ T011 isolation tests                                   [x]
 T012 integration / smoke validation                    [x]*
 T013 docs update                                       [x]
 T014 self review                                       [x]
+T015 fix: missing-secret fail-closed                   [x]
+T016 webview metadata UI + tests                       [x]
 ```
 
-\* T012 备注：自动化 pipeline 全部通过；运行时的手动 Smoke Test
-（在 VS Code Extension Dev Host 中真实启动 2 个不同 Provider 的实例）需要 GUI
-环境，不在本环境内可执行。build artifacts 通过 secret-leakage grep（除测试
-fixture）零命中。
+\* T012 备注：**manual verification pending**。自动化 pipeline（check-types /
+lint / build / unit tests / secret-leak grep）全部通过；运行时的手动 Smoke Test
+（在 VS Code Extension Dev Host 中真实启动 2 个不同 Provider 的实例，并手动
+确认错误路径）需要 GUI 环境，在当前会话中**未**执行。
+下一轮 Spec（003 / 后续维护）由人类用户在 VS Code 内补做。
 
 ---
+
+## 关键证据（Evidence）
 
 ## 关键证据（Evidence）
 
@@ -50,7 +55,7 @@ cwd, sessionId, secretLookup, opts)`。
 
 ### T011 隔离测试
 
-- `server/__tests__/launchConfig.test.ts` —— 16 个测试全部通过。
+- `server/__tests__/launchConfig.test.ts` —— 19 个测试全部通过（Spec Gap 修复后）。
 - 覆盖：
   - Test 1 —— env 独立性（mutate A 不影响 B）
   - Test 2 —— Profile 改动不影响已解析 env
@@ -58,24 +63,77 @@ cwd, sessionId, secretLookup, opts)`。
   - Test 4 —— secret 不进入 safeMetadata
   - Test 5 —— Inherit profile 不注入 auth env
   - Test 6 —— authToken profile 注入 ANTHROPIC_AUTH_TOKEN
-  - Test 7 —— missing secret 不抛异常
-  - Test 8 —— PWD 永远设置 + secret 在任何 auth mode 下都不入 safeMetadata
-  - Test 9 —— bypassPermissions / session-id args
-  - Test 10 —— safeMetadata 字段透传
+  - **Test 7（修复后）—— missing secret for apiKey profile FAILS CLOSED**（FR-004 + FR-010）
+  - **Test 8（修复后）—— missing secret for authToken profile FAILS CLOSED**
+  - **Test 9（修复后）—— empty-string secret for apiKey profile FAILS CLOSED**
+  - **Test 10（修复后）—— inherit profile 仍然正常（不要求 secret）**
+  - Test 11 —— PWD 永远设置 + secret 在任何 auth mode 下都不入 safeMetadata
+  - Test 12 —— bypassPermissions / session-id args
+  - Test 13 —— safeMetadata 字段透传
   - Plus 6 个 `validateProviderProfile` 测试。
 
-### T012 pipeline 结果
+### T016 webview metadata 测试
 
-| 命令                                       | 结果                                                                                                                                                                                                                        |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run check-types`                      | ✅ 0 errors                                                                                                                                                                                                                 |
-| `npm run lint`                             | ✅ 0 errors（1 upstream React warning）                                                                                                                                                                                     |
-| `npm run build`                            | ✅ dist/extension.js + dist/webview/ + dist/hooks/ + dist/cli.js                                                                                                                                                            |
-| `npm test`                                 | 16/16 新 isolation tests 通过；374/385 total。7 个 upstream pre-existing failures（configPersistence, clientMessageHandler, cli areas tests + mockClaudeRunner timeouts）—— **与 002 改动无关**，在 001 baseline 上同样失败 |
-| `gitleaks protect --staged`                | ✅ no leaks                                                                                                                                                                                                                 |
-| grep `sk-...` in dist/adapters/server/core | ✅ 零命中（仅 test fixtures 含 mock strings）                                                                                                                                                                               |
+- `webview-ui/test/agentMetadata.test.ts` —— 17 个测试全部通过。
+- 覆盖：`basename`（POSIX / Windows / mixed / trailing slash）、`shortSessionId`（不同路径 / 截短 / 空 / 短 session）、`statusLabel`（每种 status + waitingForInput override）。
+- 完整 React 组件测试（rendering、user events）需要 React Testing Library / jsdom，
+  当前 webview-ui **未**安装这些依赖，因此本次仅覆盖纯函数层。组件结构（`data-testid`、
+  metadata grid、可选字段 fallback）的渲染通过 `npm run build` + 类型检查间接覆盖。
+
+### T015 修复（Spec Gap 收尾）
+
+- `server/src/launchConfig.ts`：
+  - 新增 `MissingSecretError`（带 `profileId` / `profileName` / `authMode`）。
+  - `resolveClaudeLaunchConfig` 对 `apiKey` / `authToken` 模式在 Secret 缺失或为空时**抛**`MissingSecretError`，**绝不**再静默 fallback 到 Anthropic 登录。
+  - `authMode: 'inherit'` 仍然允许没有 Secret（沿用用户当前登录）。
+- `adapters/vscode/agentManager.ts`：`launchNewTerminal` 在 `await resolveLaunchConfigFromStore` 之后、`vscode.window.createTerminal` 之前捕获 `MissingSecretError`，调用 `vscode.window.showErrorMessage` 并提前 `return`。
+- 触发结果：terminal **不会**被创建，agent **不会**被注册，错误消息明确告知用户"Provider 缺少 Secret，请重新配置"。
+- 用户视角：Custom Provider + Secret 缺失时，绝不会误以为在使用该 Custom Provider。
+
+### T016 UI Metadata 修复
+
+- `server/src/agentDiagnostics.ts`：扩展 `AgentDiagnosticsEntry` 含 `providerProfileId` / `providerDisplayName` / `modelId`。
+- `webview-ui/src/components/DebugView.tsx`：在 Agent card 标题下方新增 metadata grid（data-testid 已加）：
+  - Repo（来自 `projectDir` basename）
+  - Provider（来自 `providerDisplayName`，缺省 `—`）
+  - Model（来自 `modelId`，缺省 `—`）
+  - Session（来自 `jsonlFile` basename 去 `.jsonl` 取前 8 字符，缺省 `—`）
+  - Status（来自 `status` 经 `statusLabel` 映射，含 "Waiting for input" override）
+- `webview-ui/src/components/agentMetadata.ts`：纯函数 `basename` / `shortSessionId` / `statusLabel` 已提取并单元测试覆盖。
+- 不修改 Pixel Office 布局 / Sprite 渲染 / 不在 sprite 上方堆文字。
+
+### T015 / T016 pipeline 结果（修复后）
+
+| 命令                                                         | 结果                                                             |
+| ------------------------------------------------------------ | ---------------------------------------------------------------- |
+| `npm run check-types`                                        | ✅ 0 errors                                                      |
+| `npm run lint`                                               | ✅ 0 errors（1 upstream React warning）                          |
+| `npm run build`                                              | ✅ dist/extension.js + dist/webview/ + dist/hooks/ + dist/cli.js |
+| `npx vitest run server/__tests__/launchConfig.test.ts`       | ✅ 19/19                                                         |
+| `cd webview-ui && npx vitest run test/agentMetadata.test.ts` | ✅ 17/17                                                         |
+| `gitleaks protect --staged`                                  | ✅ no leaks                                                      |
+| grep `sk-...` in dist/adapters/server/core                   | ✅ 零命中（仅 test fixtures 含 mock strings）                    |
 
 详细分解见下文。任务执行时**打勾**，不删除条目。
+
+---
+
+## Exit Criteria 收尾确认
+
+| FR                                                | 状态 | 证据                                                                                                   |
+| ------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------ |
+| FR-004 Secret 安全                                | ✅   | `providerProfile.secretRef`（无 plaintext）；SecretStorage 隔离；`MissingSecretError` 强制 fail-closed |
+| FR-009 UI 元数据                                  | ✅   | DebugView 渲染 Repo / Provider / Model / Session / Status（`data-testid` 标记）                        |
+| FR-010 错误处理（Missing Secret）                 | ✅   | `MissingSecretError` 在 `createTerminal` 之前抛出；`showErrorMessage` 提示；terminal 不创建            |
+| Exit Criteria: ≥2 Instance                        | ✅   | 001 + 002 共同保证；001 已有 baseline 通过                                                             |
+| Exit Criteria: 修改 A 不影响 B                    | ✅   | Test 2 单测通过                                                                                        |
+| Exit Criteria: Provider Profile non-secret 持久化 | ✅   | `providerProfileStore.ts` 走 VS Code globalState                                                       |
+| Exit Criteria: Secret 走 SecretStorage            | ✅   | `secretStorageProvider.ts`                                                                             |
+| Exit Criteria: check-types / build / lint 通过    | ✅   | 见 pipeline 表                                                                                         |
+| Exit Criteria: isolation tests 通过               | ✅   | 19/19 通过                                                                                             |
+| Exit Criteria: 保留 LICENSE + attribution         | ✅   | `LICENSE` 与 `THIRD_PARTY_NOTICES.md` 未改                                                             |
+
+**runtime 手动验证**：标记为 **manual verification pending**（GUI 环境不可用，留给人类用户在 VS Code 中补做）。
 
 ---
 

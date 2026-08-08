@@ -15,7 +15,7 @@ import {
   makeInheritProviderProfile,
   validateProviderProfile,
 } from '../../core/src/providerProfiles.js';
-import { resolveClaudeLaunchConfig } from '../src/launchConfig.js';
+import { MissingSecretError, resolveClaudeLaunchConfig } from '../src/launchConfig.js';
 
 const SECRET_A = 'sk-ant-secret-AAAA-AAAA-AAAA-AAAA';
 const SECRET_B = 'sk-ant-secret-BBBB-BBBB-BBBB-BBBB';
@@ -190,17 +190,60 @@ describe('resolveClaudeLaunchConfig — Spec 002 isolation', () => {
     expect(result.env.ANTHROPIC_API_KEY).toBeUndefined();
   });
 
-  it('missing secret for non-inherit profile deliberately omits the env var (no crash)', () => {
+  it('missing secret for apiKey profile FAILS CLOSED with MissingSecretError (no fallback)', () => {
     const profile = makeCustomProfile({
       id: 'missing',
-      name: 'Missing Secret',
+      name: 'Missing Secret Provider',
       authMode: 'apiKey',
       secretRef: 'claude-fleet.provider.missing',
     });
-    const result = resolveClaudeLaunchConfig(profile, 'model', '/repo', 's', () => undefined);
-    expect(result.env.ANTHROPIC_API_KEY).toBeUndefined();
-    // The launch will be reported as missing-secret elsewhere; the resolver
-    // itself doesn't throw here.
+    let threw = false;
+    try {
+      resolveClaudeLaunchConfig(profile, 'model', '/repo', 's', () => undefined);
+    } catch (e) {
+      threw = true;
+      expect(e).toBeInstanceOf(MissingSecretError);
+      const mse = e as MissingSecretError;
+      expect(mse.profileId).toBe('missing');
+      expect(mse.profileName).toBe('Missing Secret Provider');
+      expect(mse.authMode).toBe('apiKey');
+      // The error message must mention the profile name and ask the user to
+      // reconfigure — never suggest "we'll just fall back to your login".
+      expect(mse.message).toContain('Missing Secret Provider');
+      expect(mse.message).toMatch(/Secret/i);
+    }
+    expect(threw).toBe(true);
+  });
+
+  it('missing secret for authToken profile FAILS CLOSED with MissingSecretError', () => {
+    const profile = makeCustomProfile({
+      id: 'missing-tok',
+      name: 'Missing Token Provider',
+      authMode: 'authToken',
+      secretRef: 'claude-fleet.provider.missing-tok',
+    });
+    expect(() =>
+      resolveClaudeLaunchConfig(profile, 'model', '/repo', 's', () => undefined),
+    ).toThrowError(MissingSecretError);
+  });
+
+  it('empty-string secret for apiKey profile FAILS CLOSED (whitespace-only too)', () => {
+    const profile = makeCustomProfile({
+      id: 'empty',
+      name: 'Empty Secret Provider',
+      authMode: 'apiKey',
+      secretRef: 'claude-fleet.provider.empty',
+    });
+    expect(() => resolveClaudeLaunchConfig(profile, 'model', '/repo', 's', () => '')).toThrowError(
+      MissingSecretError,
+    );
+  });
+
+  it('inherit profile does NOT require a secret (no throw)', () => {
+    const inherit = makeInheritProviderProfile();
+    expect(() =>
+      resolveClaudeLaunchConfig(inherit, undefined, '/repo', 's', () => undefined),
+    ).not.toThrow();
   });
 
   it('always adds PWD; never includes secret in safeMetadata for any auth mode', () => {

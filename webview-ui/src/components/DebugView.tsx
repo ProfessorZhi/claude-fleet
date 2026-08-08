@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import type { OfficeState } from '../office/engine/officeState.js';
 import type { ToolActivity } from '../office/types.js';
 import { transport } from '../transport/index.js';
+import { basename, shortSessionId, statusLabel } from './agentMetadata.js';
 import { Button } from './ui/Button.js';
 
 interface AgentDiagnostics {
@@ -15,6 +16,11 @@ interface AgentDiagnostics {
   fileOffset: number;
   lastDataAt: number;
   linesProcessed: number;
+  // Spec 002 — Provider / Model metadata. Optional so legacy / 001-era
+  // agents (no Provider / Model) don't break the UI.
+  providerProfileId?: string;
+  providerDisplayName?: string;
+  modelId?: string;
 }
 
 interface DebugViewProps {
@@ -128,6 +134,43 @@ export function DebugView({
             ✕
           </Button>
         </span>
+
+        {/* Spec 002 — Agent metadata. Repo / Provider / Model / Session / Status.
+            All fields are optional so legacy agents (001-era, no metadata) render
+            without crashing. The session id is shortened for readability. */}
+        <div
+          className="mt-2 px-4 py-3 text-base opacity-90 grid gap-x-6 gap-y-1 border-t border-white/8"
+          style={{ gridTemplateColumns: 'auto 1fr' }}
+          data-testid="agent-metadata"
+        >
+          <span className="opacity-60">Repo</span>
+          <span className="font-mono text-sm break-all">
+            {diag?.projectDir ? basename(diag.projectDir) : '—'}
+          </span>
+
+          <span className="opacity-60">Provider</span>
+          <span data-testid="agent-provider">{diag?.providerDisplayName ?? '—'}</span>
+
+          <span className="opacity-60">Model</span>
+          <span data-testid="agent-model" className="font-mono text-sm">
+            {diag?.modelId ?? '—'}
+          </span>
+
+          <span className="opacity-60">Session</span>
+          <span className="font-mono text-sm">
+            {diag?.jsonlFile ? shortSessionId(diag.jsonlFile) : '—'}
+          </span>
+
+          <span className="opacity-60">Status</span>
+          <span data-testid="agent-status">
+            {statusLabel(
+              status,
+              status === 'waiting' &&
+                !hasActiveTools &&
+                !!officeState.characters.get(id)?.waitingAwaitingInput,
+            )}
+          </span>
+        </div>
         {(tools.length > 0 || status === 'waiting') && (
           <div className="flex flex-col gap-[1px] mt-4 pl-4">
             {tools.map((tool) => (

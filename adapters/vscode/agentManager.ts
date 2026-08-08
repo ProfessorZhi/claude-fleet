@@ -15,6 +15,7 @@ import {
   startFileWatching,
 } from '../../server/src/fileWatcher.js';
 import { resolveClaudeLaunchConfig } from '../../server/src/launchConfig.js';
+import { MissingSecretError } from '../../server/src/launchConfig.js';
 import { loadLayout } from '../../server/src/layoutPersistence.js';
 import { assignPaletteIfNeeded } from '../../server/src/paletteAssigner.js';
 import { CLAUDE_TERMINAL_NAME_PREFIX } from '../../server/src/providers/hook/claude/constants.js';
@@ -145,15 +146,33 @@ export async function launchNewTerminal(
   const idx = nextTerminalIndexRef.current++;
 
   // ── Resolve Provider Profile + secret → env + safeMetadata (Spec 002) ──
-  const resolved = await resolveLaunchConfigFromStore({
-    launchConfig: launchConfig ?? {
-      cwd,
-      providerProfileId: INHERIT_PROVIDER_PROFILE_ID,
-    },
-    providerProfileStore,
-    secretStorageProvider,
-    bypassPermissions,
-  });
+  // Fail-closed (FR-004 + FR-010): if the Custom Provider has a missing or
+  // empty Secret, MissingSecretError is thrown BEFORE we touch
+  // vscode.window.createTerminal. We surface the error message via
+  // showErrorMessage and return early — no Terminal is created, no Agent
+  // is registered. The Launch Flow caller simply sees a clean abort.
+  let resolved: Awaited<ReturnType<typeof resolveLaunchConfigFromStore>>;
+  try {
+    resolved = await resolveLaunchConfigFromStore({
+      launchConfig: launchConfig ?? {
+        cwd,
+        providerProfileId: INHERIT_PROVIDER_PROFILE_ID,
+      },
+      providerProfileStore,
+      secretStorageProvider,
+      bypassPermissions,
+    });
+  } catch (e) {
+    if (e instanceof MissingSecretError) {
+      console.error(`[Claude Fleet] launch aborted: ${e.message}`);
+      void vscode.window.showErrorMessage(e.message);
+      // Roll back the terminal-index increment so the next launch uses
+      // the same number — avoids leaving a "gap" in #N labels.
+      nextTerminalIndexRef.current = idx;
+      return;
+    }
+    throw e;
+  }
 
   const terminal = vscode.window.createTerminal({
     name: `${CLAUDE_TERMINAL_NAME_PREFIX} #${idx}`,
