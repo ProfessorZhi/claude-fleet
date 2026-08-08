@@ -134,8 +134,8 @@
   },
   "devDependencies": {
     "@asyncapi/modelina": "^5.10.1",
-    "@asyncapi/parser": "^3.6.0",
-    "@playwright/test": "^1.58.2",
+    "@asyncapi/parser": "^3.6.1",
+    "@playwright/test": "^1.62.1",
     "@types/node": "26.x",
     "@types/pngjs": "^6.0.5",
     "@types/vscode": "^1.105.0",
@@ -148,15 +148,15 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-simple-import-sort": "^14.0.0",
     "husky": "^9.1.7",
-    "knip": "^6.3.0",
+    "knip": "^6.31.0",
     "lint-staged": "^16.3.2",
     "npm-run-all": "^4.1.5",
     "pngjs": "^7.0.0",
     "prettier": "^3.8.1",
     "semver": "^7.8.5",
-    "tsx": "^4.21.0",
+    "tsx": "^4.23.7",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.54.0"
+    "typescript-eslint": "^8.66.0"
   },
   "lint-staged": {
     "adapters/vscode/**/*.ts": "eslint --fix",
@@ -171,7 +171,7 @@
     "@fastify/cors": "^11.2.0",
     "@fastify/static": "^10.1.2",
     "@fastify/websocket": "^11.2.0",
-    "fastify": "^5.8.5"
+    "fastify": "^5.11.2"
   },
   "overrides": {
     "jsonpath-plus": "^10.4.0",
