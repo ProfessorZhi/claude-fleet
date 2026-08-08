@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/branding/claude-fleet-key-art.png" width="720" alt="Claude Fleet" />
+</p>
+
 # Claude Fleet
 
 > **当前状态：v0.1 Alpha** — 早期测试版本。

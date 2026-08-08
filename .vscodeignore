@@ -2,7 +2,7 @@
 # Keep ONLY what the installed extension needs at runtime:
 #   dist/extension.js, dist/cli.js, dist/hooks/, dist/assets/,
 #   dist/webview/, package.json, README.md, LICENSE,
-#   THIRD_PARTY_NOTICES.md, CHANGELOG.md, icon.png
+#   THIRD_PARTY_NOTICES.md, CHANGELOG.md, assets/branding/icon.png
 #
 # Everything else (sources, specs, docs, tests, CI, dev tooling) stays out.
 # Verify with: npx vsce ls

@@ -12,7 +12,7 @@
     "server",
     "webview-ui"
   ],
-  "icon": "icon.png",
+  "icon": "assets/branding/icon.png",
   "license": "MIT",
   "engines": {
     "node": ">=20",
@@ -60,6 +60,14 @@
       {
         "command": "claude-fleet.restartAgent",
         "title": "Claude Fleet: Restart Agent"
+      },
+      {
+        "command": "claude-fleet.newSession",
+        "title": "Claude Fleet: New Session"
+      },
+      {
+        "command": "claude-fleet.switchProvider",
+        "title": "Claude Fleet: Switch Provider…"
       }
     ],
     "viewsContainers": {
