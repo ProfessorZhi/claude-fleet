@@ -124,11 +124,12 @@ export interface HookProvider {
   readonly sessionFilePattern?: string;
   /** Parse one line of a transcript file into an AgentEvent. */
   parseTranscriptLine?(line: string): AgentEvent | null;
-  /** Build CLI launch command for +Agent button. */
+  /** Build CLI launch command for +Agent button.
+   *  `modelId` (added in Spec 002) is appended as `--model <id>`. */
   buildLaunchCommand?(
     sessionId: string,
     cwd: string,
-    opts?: { bypassPermissions?: boolean },
+    opts?: { bypassPermissions?: boolean; modelId?: string },
   ): {
     command: string;
     args: string[];

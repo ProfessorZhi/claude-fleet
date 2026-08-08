@@ -45,6 +45,14 @@
       {
         "command": "claude-fleet.exportDefaultLayout",
         "title": "Claude Fleet: Export Layout as Default"
+      },
+      {
+        "command": "claude-fleet.newAgent",
+        "title": "Claude Fleet: New Agent…"
+      },
+      {
+        "command": "claude-fleet.manageProviders",
+        "title": "Claude Fleet: Manage Providers…"
       }
     ],
     "viewsContainers": {

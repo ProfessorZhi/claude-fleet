@@ -85,6 +85,15 @@ export interface AgentState {
   palette?: number;
   /** Hue shift in degrees (0-360). Rotates the base palette colors. */
   hueShift?: number;
+
+  // -- Provider / Model (Spec 002) --
+  /** Provider profile id used at launch. Persisted so the UI can show the
+   *  source of an agent even after restart. NOT a secret. */
+  providerProfileId?: string;
+  /** Display name of the provider profile (for UI). Persisted alongside id. */
+  providerDisplayName?: string;
+  /** Model id passed as `claude --model <id>` at launch. Persisted. */
+  modelId?: string;
 }
 
 export interface PersistedAgent {
@@ -114,4 +123,11 @@ export interface PersistedAgent {
   palette?: number;
   /** Hue shift in degrees (0-360). Persisted alongside palette. */
   hueShift?: number;
+
+  // -- Provider / Model (Spec 002) --
+  /** Provider profile id used at launch. NOT a secret. */
+  providerProfileId?: string;
+  providerDisplayName?: string;
+  /** Model id passed as `claude --model <id>` at launch. */
+  modelId?: string;
 }

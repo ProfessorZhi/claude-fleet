@@ -101,9 +101,14 @@ function getSessionDirs(workspacePath: string): string[] {
 function buildLaunchCommand(
   sessionId: string,
   cwd: string,
-  opts?: { bypassPermissions?: boolean },
+  opts?: { bypassPermissions?: boolean; modelId?: string },
 ): { command: string; args: string[]; env?: Record<string, string> } {
   const args = ['--session-id', sessionId];
+  // Per-instance model — `--model` overrides both ANTHROPIC_MODEL env and the
+  // `model` setting in ~/.claude/settings.json (see Claude Code docs / ADR-002).
+  if (opts?.modelId && opts.modelId.trim() !== '') {
+    args.push('--model', opts.modelId);
+  }
   if (opts?.bypassPermissions) args.push('--dangerously-skip-permissions');
   return { command: 'claude', args, env: { PWD: cwd } };
 }

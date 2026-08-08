@@ -4,6 +4,8 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import type { StateAdapter } from '../../core/src/adapter.js';
+import type { InstanceLaunchConfig } from '../../core/src/providerProfiles.js';
+import { INHERIT_PROVIDER_PROFILE_ID } from '../../core/src/providerProfiles.js';
 import { AgentStateStore } from '../../server/src/agentStateStore.js';
 import { DEFAULT_MAX_CONTEXT_TOKENS, JSONL_POLL_INTERVAL_MS } from '../../server/src/constants.js';
 import {
@@ -12,12 +14,90 @@ import {
   reassignAgentToFile,
   startFileWatching,
 } from '../../server/src/fileWatcher.js';
+import { resolveClaudeLaunchConfig } from '../../server/src/launchConfig.js';
 import { loadLayout } from '../../server/src/layoutPersistence.js';
 import { assignPaletteIfNeeded } from '../../server/src/paletteAssigner.js';
 import { CLAUDE_TERMINAL_NAME_PREFIX } from '../../server/src/providers/hook/claude/constants.js';
 import { claudeProvider } from '../../server/src/providers/index.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from '../../server/src/timerManager.js';
 import type { AgentState, PersistedAgent } from '../../server/src/types.js';
+import type { ProviderProfileStore } from './providerProfileStore.js';
+import type { SecretStorageProvider } from './secretStorageProvider.js';
+
+/**
+ * Options accepted by `launchNewTerminal` (Spec 002 — collapsed positional args
+ * into an object to keep call sites readable).
+ *
+ * `providerProfileStore` and `secretStorageProvider` are required for Spec 002
+ * even when using the built-in "Inherit" profile (the resolver still needs to
+ * call `secretLookup` even if no secret will be set).
+ */
+export interface LaunchNewTerminalOptions {
+  /** Optional explicit cwd override; defaults to launchConfig.cwd or first workspace. */
+  folderPath?: string;
+  /** Per-instance Provider / Model / cwd intent (Spec 002). */
+  launchConfig?: InstanceLaunchConfig;
+  /** When true, pass `--dangerously-skip-permissions`. */
+  bypassPermissions?: boolean;
+  /** When true, do not call `terminal.show()` (used by auto-spawn). */
+  suppressShow?: boolean;
+  providerProfileStore: ProviderProfileStore;
+  secretStorageProvider: SecretStorageProvider;
+}
+
+/**
+ * Adapter-layer glue: pull a Profile from the store, look up its secret via
+ * SecretStorage, and run the pure `resolveClaudeLaunchConfig` function.
+ *
+ * Async because SecretStorage.get is async. We resolve the secret once here
+ * and pass a sync closure into the pure resolver.
+ *
+ * Never logs the secret value; if the secret is missing for a non-inherit
+ * profile, the resolver deliberately omits the env var (Claude Code will
+ * fall back to its other auth sources; the UI surfaces the missing-secret
+ * condition via AgentState fields elsewhere).
+ */
+async function resolveLaunchConfigFromStore(args: {
+  launchConfig: InstanceLaunchConfig;
+  providerProfileStore: ProviderProfileStore;
+  secretStorageProvider: SecretStorageProvider;
+  bypassPermissions?: boolean;
+}): Promise<ReturnType<typeof resolveClaudeLaunchConfig>> {
+  const profile = args.providerProfileStore.get(args.launchConfig.providerProfileId);
+  if (!profile) {
+    throw new Error(
+      `launchNewTerminal: provider profile "${args.launchConfig.providerProfileId}" not found.`,
+    );
+  }
+
+  let secret: string | undefined;
+  if (profile.secretRef) {
+    try {
+      secret = await args.secretStorageProvider.get(profile.secretRef);
+    } catch (e) {
+      // Deliberately do NOT log e.message if it might contain the secret.
+      // The store layer throws Error instances with the ref name (not the
+      // secret) so this is safe.
+      console.error(
+        `[Claude Fleet] launchNewTerminal: failed to read secret for profile "${profile.id}".`,
+      );
+      throw e;
+    }
+  }
+
+  // sessionId is generated inside launchNewTerminal AFTER this resolver runs;
+  // we pass a placeholder here. The resolver's args still include it for
+  // completeness, but the canonical args source is `buildLaunchCommand` in
+  // launchNewTerminal, which appends the real session id.
+  return resolveClaudeLaunchConfig(
+    profile,
+    args.launchConfig.modelId,
+    args.launchConfig.cwd ?? '',
+    '00000000-0000-0000-0000-000000000000',
+    (_ref) => secret,
+    { bypassPermissions: args.bypassPermissions },
+  );
+}
 
 export function getProjectDirPath(cwd?: string): string {
   // Fall back to home directory when no workspace folder is open (common on Linux/macOS
@@ -46,20 +126,39 @@ export async function launchNewTerminal(
   jsonlPollTimers: Map<number, ReturnType<typeof setInterval>>,
   projectScanTimerRef: { current: ReturnType<typeof setInterval> | null },
   persistAgents: () => void,
-  folderPath?: string,
-  bypassPermissions?: boolean,
-  suppressShow?: boolean,
+  options: LaunchNewTerminalOptions,
 ): Promise<void> {
+  const {
+    folderPath,
+    launchConfig,
+    bypassPermissions,
+    suppressShow,
+    providerProfileStore,
+    secretStorageProvider,
+  } = options;
   const folders = vscode.workspace.workspaceFolders;
   // Use home directory as fallback cwd when no workspace is open (common on Linux/macOS).
   // This ensures the terminal starts in a predictable location that matches the project
   // dir hash Claude Code will use for JSONL transcript files.
-  const cwd = folderPath || folders?.[0]?.uri.fsPath || os.homedir();
+  const cwd = folderPath || launchConfig?.cwd || folders?.[0]?.uri.fsPath || os.homedir();
   const isMultiRoot = !!(folders && folders.length > 1);
   const idx = nextTerminalIndexRef.current++;
+
+  // ── Resolve Provider Profile + secret → env + safeMetadata (Spec 002) ──
+  const resolved = await resolveLaunchConfigFromStore({
+    launchConfig: launchConfig ?? {
+      cwd,
+      providerProfileId: INHERIT_PROVIDER_PROFILE_ID,
+    },
+    providerProfileStore,
+    secretStorageProvider,
+    bypassPermissions,
+  });
+
   const terminal = vscode.window.createTerminal({
     name: `${CLAUDE_TERMINAL_NAME_PREFIX} #${idx}`,
     cwd,
+    env: resolved.env,
   });
   // When suppressShow is set (auto-spawn + autoShowPanel), keep the panel view
   // on Pixel Agents instead of switching to Terminal. Claude Code still runs
@@ -70,7 +169,10 @@ export async function launchNewTerminal(
   }
 
   const sessionId = crypto.randomUUID();
-  const launch = claudeProvider.buildLaunchCommand?.(sessionId, cwd, { bypassPermissions });
+  const launch = claudeProvider.buildLaunchCommand?.(sessionId, cwd, {
+    bypassPermissions,
+    modelId: resolved.safeMetadata.modelId,
+  });
   if (!launch) {
     throw new Error('claudeProvider.buildLaunchCommand is not implemented');
   }
@@ -118,6 +220,10 @@ export async function launchNewTerminal(
     hookDelivered: false,
     contextTokens: 0,
     maxContextTokens: DEFAULT_MAX_CONTEXT_TOKENS,
+    // Spec 002 — Provider / Model metadata (non-secret).
+    providerProfileId: resolved.safeMetadata.providerProfileId,
+    providerDisplayName: resolved.safeMetadata.providerDisplayName,
+    modelId: resolved.safeMetadata.modelId,
   };
 
   assignPaletteIfNeeded(agent, agents);
@@ -392,6 +498,10 @@ export function restoreAgents(
       teamUsesTmux: p.teamUsesTmux,
       palette: p.palette,
       hueShift: p.hueShift,
+      // Spec 002 — Provider / Model restored from persistence. NOT secrets.
+      providerProfileId: p.providerProfileId,
+      providerDisplayName: p.providerDisplayName,
+      modelId: p.modelId,
     };
 
     assignPaletteIfNeeded(agent, store);

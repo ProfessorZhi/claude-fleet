@@ -132,6 +132,13 @@ Instance B → Anthropic
 **Phase 3 才正式完成 Provider / Model Isolation**。Phase 2 提供的隔离能力只是
 Runtime / Repo / Session 级别的。
 
+**当前状态（2026-08-08）**：Spec 002（[`docs/specs/002-provider-model-isolation/`](./specs/002-provider-model-isolation/)）
+实现完成。核心 Exit Criteria 中"修改 A 不得影响 B"已通过单测验证（`server/__tests__/launchConfig.test.ts`）；
+运行时手动验证（同一 VS Code 内同时跑两个不同 Provider 实例）需要 GUI 环境，
+属于"人类用户在 VS Code 中执行的最终确认"，留待实际部署时执行。
+`CLAUDE_CONFIG_DIR` 隔离方案由 [ADR-002](./specs/002-provider-model-isolation/design.md#adr-002-%E6%91%98%E8%A6%81)
+锁定为方案 A（per-terminal env + `claude --model`，**不**强制独立 config dir）。
+
 ---
 
 ## Phase 4 — 状态监控与可视化

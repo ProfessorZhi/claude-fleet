@@ -13,6 +13,21 @@ export {
 export type { ClientMessage, FurnitureAssetMessage, ServerMessage } from './messages.js';
 export type { AgentEvent, HookProvider } from './provider.js';
 export type {
+  AuthMode,
+  InstanceLaunchConfig,
+  ModelProfile,
+  ProviderProfile,
+  ResolvedLaunchConfig,
+  ResolvedLaunchSafeMetadata,
+} from './providerProfiles.js';
+export {
+  INHERIT_PROVIDER_PROFILE_ID,
+  isInstanceLaunchConfig,
+  isProviderProfile,
+  makeInheritProviderProfile,
+  validateProviderProfile,
+} from './providerProfiles.js';
+export type {
   AgentMeta,
   ColorValue,
   Disposable,

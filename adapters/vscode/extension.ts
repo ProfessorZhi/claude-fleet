@@ -3,10 +3,12 @@ import * as vscode from 'vscode';
 import { FileStateAdapter } from '../../server/src/fileStateAdapter.js';
 import {
   COMMAND_EXPORT_DEFAULT_LAYOUT,
+  COMMAND_NEW_AGENT,
   COMMAND_SHOW_PANEL,
   CONFIG_KEY_AUTO_SHOW_PANEL,
   VIEW_ID,
 } from './constants.js';
+import { runLaunchAgentFlowWithLauncher } from './launchAgentFlow.js';
 import { migrateVsCodeState } from './migrateVsCodeState.js';
 import { PixelAgentsViewProvider } from './PixelAgentsViewProvider.js';
 
@@ -36,6 +38,26 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand(COMMAND_EXPORT_DEFAULT_LAYOUT, () => {
       provider.exportDefaultLayout();
+    }),
+  );
+
+  // Spec 002 — `+ Agent` Launch Flow. Lets the user pick Repo / Provider /
+  // Model before spawning a Claude Code terminal.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(COMMAND_NEW_AGENT, async () => {
+      await runLaunchAgentFlowWithLauncher(
+        {
+          providerProfileStore: provider.providerProfileStore,
+          secretStorageProvider: provider.secretStorageProvider,
+          baseLaunchOptions: {
+            providerProfileStore: provider.providerProfileStore,
+            secretStorageProvider: provider.secretStorageProvider,
+          },
+        },
+        async (options) => {
+          await provider.launchFromFlow(options);
+        },
+      );
     }),
   );
 

@@ -9,21 +9,71 @@
 ## Tasks 进度总览
 
 ```text
-T001 调研 Claude Code provider/model 配置与 precedence  [ ]
-T002 完成 002 Requirements / Design                    [ ]
-T003 ADR-002 隔离策略                                  [ ]
-T004 ProviderProfile / ModelProfile domain model       [ ]
-T005 SecretStorage integration                         [ ]
-T006 Launch config resolver (resolveClaudeLaunchConfig)[ ]
-T007 per-instance terminal env                         [ ]
-T008 per-instance --model                              [ ]
-T009 +Agent Launch Flow                                [ ]
-T010 Instance UI metadata                              [ ]
-T011 isolation tests                                   [ ]
-T012 integration / smoke validation                    [ ]
-T013 docs update                                       [ ]
-T014 self review                                       [ ]
+T001 调研 Claude Code provider/model 配置与 precedence  [x]
+T002 完成 002 Requirements / Design                    [x]
+T003 ADR-002 隔离策略                                  [x]
+T004 ProviderProfile / ModelProfile domain model       [x]
+T005 SecretStorage integration                         [x]
+T006 Launch config resolver (resolveClaudeLaunchConfig)[x]
+T007 per-instance terminal env                         [x]
+T008 per-instance --model                              [x]
+T009 +Agent Launch Flow                                [x]
+T010 Instance UI metadata                              [x]
+T011 isolation tests                                   [x]
+T012 integration / smoke validation                    [x]*
+T013 docs update                                       [x]
+T014 self review                                       [x]
 ```
+
+\* T012 备注：自动化 pipeline 全部通过；运行时的手动 Smoke Test
+（在 VS Code Extension Dev Host 中真实启动 2 个不同 Provider 的实例）需要 GUI
+环境，不在本环境内可执行。build artifacts 通过 secret-leakage grep（除测试
+fixture）零命中。
+
+---
+
+## 关键证据（Evidence）
+
+### T001 调研
+
+- [Claude Code Settings](https://code.claude.com/docs/en/settings)
+- [Claude Code env-vars](https://code.claude.com/docs/en/env-vars)
+- [Claude Code CLI usage](https://code.claude.com/docs/en/cli-usage)
+- 关键发现：`~/.claude/settings.json` 的 `env` block **覆盖** shell env（counter-intuitive），
+  因此 per-instance 仅靠 env + `--model` 在用户自定义 settings.json env 时可能不够；
+  走 ADR-002 决定 MVP 不强制 `CLAUDE_CONFIG_DIR`。
+
+### T006 实现位置
+
+- `server/src/launchConfig.ts` — 纯函数 `resolveClaudeLaunchConfig(profile, modelId,
+cwd, sessionId, secretLookup, opts)`。
+
+### T011 隔离测试
+
+- `server/__tests__/launchConfig.test.ts` —— 16 个测试全部通过。
+- 覆盖：
+  - Test 1 —— env 独立性（mutate A 不影响 B）
+  - Test 2 —— Profile 改动不影响已解析 env
+  - Test 3 —— `--model` 每实例独立
+  - Test 4 —— secret 不进入 safeMetadata
+  - Test 5 —— Inherit profile 不注入 auth env
+  - Test 6 —— authToken profile 注入 ANTHROPIC_AUTH_TOKEN
+  - Test 7 —— missing secret 不抛异常
+  - Test 8 —— PWD 永远设置 + secret 在任何 auth mode 下都不入 safeMetadata
+  - Test 9 —— bypassPermissions / session-id args
+  - Test 10 —— safeMetadata 字段透传
+  - Plus 6 个 `validateProviderProfile` 测试。
+
+### T012 pipeline 结果
+
+| 命令                                       | 结果                                                                                                                                                                                                                        |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run check-types`                      | ✅ 0 errors                                                                                                                                                                                                                 |
+| `npm run lint`                             | ✅ 0 errors（1 upstream React warning）                                                                                                                                                                                     |
+| `npm run build`                            | ✅ dist/extension.js + dist/webview/ + dist/hooks/ + dist/cli.js                                                                                                                                                            |
+| `npm test`                                 | 16/16 新 isolation tests 通过；374/385 total。7 个 upstream pre-existing failures（configPersistence, clientMessageHandler, cli areas tests + mockClaudeRunner timeouts）—— **与 002 改动无关**，在 001 baseline 上同样失败 |
+| `gitleaks protect --staged`                | ✅ no leaks                                                                                                                                                                                                                 |
+| grep `sk-...` in dist/adapters/server/core | ✅ 零命中（仅 test fixtures 含 mock strings）                                                                                                                                                                               |
 
 详细分解见下文。任务执行时**打勾**，不删除条目。
 

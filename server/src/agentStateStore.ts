@@ -173,6 +173,10 @@ export class AgentStateStore {
           agent.backgroundAgentToolIds.size > 0 ? [...agent.backgroundAgentToolIds] : undefined,
         palette: agent.palette,
         hueShift: agent.hueShift,
+        // Spec 002 — Provider / Model. NOT secrets, safe to persist.
+        providerProfileId: agent.providerProfileId,
+        providerDisplayName: agent.providerDisplayName,
+        modelId: agent.modelId,
       });
     }
     this.adapter.saveAgents(persisted);

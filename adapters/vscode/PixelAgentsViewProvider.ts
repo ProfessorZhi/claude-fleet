@@ -36,6 +36,7 @@ import {
 import { PathSet } from '../../server/src/pathKey.js';
 import { claudeProvider, copyHookScript } from '../../server/src/providers/index.js';
 import { PixelAgentsServer } from '../../server/src/server.js';
+import type { LaunchNewTerminalOptions } from './agentManager.js';
 import {
   getProjectDirPath,
   launchNewTerminal,
@@ -57,6 +58,11 @@ import {
   GLOBAL_KEY_WATCH_ALL_SESSIONS,
   LAYOUT_REVISION_KEY,
 } from './constants.js';
+import { createProviderProfileStore, type ProviderProfileStore } from './providerProfileStore.js';
+import {
+  createSecretStorageProvider,
+  type SecretStorageProvider,
+} from './secretStorageProvider.js';
 import { VscodeTerminalAdapter } from './vscodeTerminalAdapter.js';
 
 /** Cap on the pending-broadcast queue. If we exceed this, something has gone
@@ -95,6 +101,22 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   private pixelAgentsServer: PixelAgentsServer | null = null;
   private adapter: StateAdapter;
 
+  // Spec 002 — Provider / Model storage + secrets.
+  providerProfileStore: ProviderProfileStore;
+  secretStorageProvider: SecretStorageProvider;
+
+  /**
+   * Spec 002 — Launch Flow entry point. Bound in `resolveWebviewView` to a
+   * closure that has access to `this.store` and `this.runtime`. Declared here
+   * so callers (extension.ts `claude-fleet.newAgent`) can call it without
+   * knowing about the webview lifecycle.
+   */
+  launchFromFlow: (options: LaunchNewTerminalOptions) => Promise<void> = async () => {
+    throw new Error(
+      'PixelAgentsViewProvider.launchFromFlow not yet bound (resolveWebviewView not called).',
+    );
+  };
+
   // Auto-spawn guard: ensures the startup spawn fires at most once per VS Code
   // session, even though webviewReady fires on every panel focus.
   private autoSpawnAttempted = false;
@@ -105,6 +127,8 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   ) {
     this.adapter = adapter;
     this.store.setAdapter(this.adapter);
+    this.providerProfileStore = createProviderProfileStore(this.context);
+    this.secretStorageProvider = createSecretStorageProvider(this.context);
     this.store.on('agentAdded', (id, agent) => {
       this.sendOrBuffer({
         type: 'agentCreated',
@@ -118,6 +142,11 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         hooksOnly: agent.hooksOnly || undefined,
         palette: agent.palette,
         hueShift: agent.hueShift,
+        // Spec 002 — Provider / Model metadata. Safe to send to webview
+        // (no secrets here).
+        providerProfileId: agent.providerProfileId,
+        providerDisplayName: agent.providerDisplayName,
+        modelId: agent.modelId,
       });
     });
     this.store.on('agentRemoved', (id) => {
@@ -233,6 +262,37 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = getWebviewContent(webviewView.webview, this.extensionUri);
 
+    /**
+     * Spec 002 — entry point invoked by the `claude-fleet.newAgent` Launch
+     * Flow (QuickPick / InputBox). Wires the resolved options through to
+     * `launchNewTerminal` with the runtime args this provider owns.
+     */
+    this.launchFromFlow = async (options: LaunchNewTerminalOptions): Promise<void> => {
+      const prevAgentIds = new Set(this.store.keys());
+      await launchNewTerminal(
+        this.store.nextAgentId,
+        this.store.nextTerminalIndex,
+        this.store,
+        this.runtime.activeAgentId,
+        this.runtime.knownJsonlFiles,
+        this.runtime.fileWatchers,
+        this.runtime.pollingTimers,
+        this.runtime.waitingTimers,
+        this.runtime.permissionTimers,
+        this.runtime.jsonlPollTimers,
+        this.runtime.projectScanTimer,
+        () => this.store.persist(),
+        options,
+      );
+      // Register newly created agent(s) with the hook handler, mirroring
+      // the legacy webview `launchAgent` path above.
+      for (const [id, agent] of this.store) {
+        if (!prevAgentIds.has(id)) {
+          this.runtime.registerAgent(agent.sessionId, id);
+        }
+      }
+    };
+
     webviewView.webview.onDidReceiveMessage(async (message) => {
       if (message.type === 'launchAgent') {
         const prevAgentIds = new Set(this.store.keys());
@@ -249,8 +309,16 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           this.runtime.jsonlPollTimers,
           this.runtime.projectScanTimer,
           () => this.store.persist(),
-          message.folderPath as string | undefined,
-          message.bypassPermissions as boolean | undefined,
+          {
+            // Spec 002 — webview-initiated +Agent uses the built-in Inherit
+            // profile. Real Provider/Model selection happens through the
+            // `claude-fleet.newAgent` Launch Flow (T009).
+            folderPath: message.folderPath as string | undefined,
+            bypassPermissions: message.bypassPermissions as boolean | undefined,
+            launchConfig: { providerProfileId: 'claude-fleet.inherit' },
+            providerProfileStore: this.providerProfileStore,
+            secretStorageProvider: this.secretStorageProvider,
+          },
         );
         // Register newly created agent(s) with hook handler
         for (const [id, agent] of this.store) {
@@ -478,9 +546,14 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
             this.runtime.jsonlPollTimers,
             this.runtime.projectScanTimer,
             () => this.store.persist(),
-            undefined,
-            undefined,
-            autoShowPanel,
+            {
+              // Spec 002 — auto-spawn uses the built-in "Inherit" profile
+              // (no override; user keeps their existing Claude Code login).
+              launchConfig: { cwd: '', providerProfileId: 'claude-fleet.inherit' },
+              suppressShow: autoShowPanel,
+              providerProfileStore: this.providerProfileStore,
+              secretStorageProvider: this.secretStorageProvider,
+            },
           );
           for (const [id, agent] of this.store) {
             if (!prevAgentIds.has(id)) {

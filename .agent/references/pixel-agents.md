@@ -7,16 +7,16 @@
 
 ## Repository
 
-| 字段 | 值 |
-|---|---|
-| **名称** | Pixel Agents |
-| **上游 URL** | https://github.com/pixel-agents-hq/pixel-agents |
-| **本地克隆路径（sibling）** | `../pixel-agents-upstream`（仓库根目录外部） |
-| **Commit SHA** | `9794e075d3cf1a1407766a93d3cac87813393705` |
-| **Branch** | `main` |
-| **Version** | `1.4.0`（来自 upstream `package.json`） |
-| **License** | MIT — Copyright (c) 2026 Pablo De Lucca |
-| **Publisher（upstream）** | `pablodelucca`（**不**沿用，Claude Fleet 留 TBD） |
+| 字段                        | 值                                                |
+| --------------------------- | ------------------------------------------------- |
+| **名称**                    | Pixel Agents                                      |
+| **上游 URL**                | https://github.com/pixel-agents-hq/pixel-agents   |
+| **本地克隆路径（sibling）** | `../pixel-agents-upstream`（仓库根目录外部）      |
+| **Commit SHA**              | `9794e075d3cf1a1407766a93d3cac87813393705`        |
+| **Branch**                  | `main`                                            |
+| **Version**                 | `1.4.0`（来自 upstream `package.json`）           |
+| **License**                 | MIT — Copyright (c) 2026 Pablo De Lucca           |
+| **Publisher（upstream）**   | `pablodelucca`（**不**沿用，Claude Fleet 留 TBD） |
 
 > ⚠️ 每次 Claude Fleet 仓库"重新同步 upstream"时，必须**更新本文件**的 Commit SHA
 > 与"复用的模块列表"，并**保留** License 与原作者版权。
@@ -42,24 +42,29 @@ MIT attribution。
 
 > 这是 001 / Phase 2 这一轮的复用清单。后续 Spec 可能会新增或替换某些模块。
 
-| 模块 | 上游路径 | 用途 |
-|---|---|---|
-| Extension Host (activate) | `adapters/vscode/extension.ts` | VS Code Extension 入口 |
-| Multi-instance launch | `adapters/vscode/agentManager.ts` 中的 `launchNewTerminal` | 创建新 Claude Code Instance |
-| View Provider | `adapters/vscode/PixelAgentsViewProvider.ts` | Webview Panel 宿主 |
-| Terminal Adapter | `adapters/vscode/vscodeTerminalAdapter.ts` | 与 `vscode.window.createTerminal` 交互 |
-| State Migration | `adapters/vscode/migrateVsCodeState.ts` | 上游已有迁移逻辑；保留兼容 |
-| Constants / 命令 ID | `adapters/vscode/constants.ts` | 命令 / 配置 / 持久化 key 常量（**重命名**见 design） |
-| Server Runtime | `server/src/` | Hook / AgentState / Persistence / HTTP / WebSocket |
-| AgentState / Store | `server/src/agentStateStore.ts`、`server/src/types.ts` | Instance 状态管理（**直接复用**，不平行抽象） |
-| Hook Runtime | `server/src/hookEventHandler.ts`、`server/src/providers/hook/claude/` | Claude Code hook 事件处理 |
-| Claude Provider | `server/src/providers/hook/claude/claude.ts` | `buildLaunchCommand` 等 Provider 接口 |
-| Layout / Config Persistence | `server/src/{layoutPersistence,configPersistence}.ts` | 用户级布局 / 配置 |
-| File Watcher | `server/src/fileWatcher.ts` | JSONL / transcript 监听 |
-| Webview UI | `webview-ui/src/` | Pixel Canvas + 组件 |
-| Shared Core | `core/src/` | Provider 接口 / Adapter / Message / Asset Loader |
-| Assets | `webview-ui/public/assets/` | Pixel sprite / tiles / 字体（必须保留） |
-| Build | `esbuild.js` + `tsconfig.json` + `eslint.config.mjs` | 构建工具链 |
+| 模块                                     | 上游路径                                                              | 用途                                                                                                           |
+| ---------------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Extension Host (activate)                | `adapters/vscode/extension.ts`                                        | VS Code Extension 入口                                                                                         |
+| Multi-instance launch                    | `adapters/vscode/agentManager.ts` 中的 `launchNewTerminal`            | 创建新 Claude Code Instance；**Spec 002** 扩展其接受 `InstanceLaunchConfig` 并按 Provider Profile 解析 env     |
+| View Provider                            | `adapters/vscode/PixelAgentsViewProvider.ts`                          | Webview Panel 宿主；**Spec 002** 持有 `ProviderProfileStore` / `SecretStorageProvider`                         |
+| Terminal Adapter                         | `adapters/vscode/vscodeTerminalAdapter.ts`                            | 与 `vscode.window.createTerminal` 交互                                                                         |
+| State Migration                          | `adapters/vscode/migrateVsCodeState.ts`                               | 上游已有迁移逻辑；保留兼容                                                                                     |
+| Constants / 命令 ID                      | `adapters/vscode/constants.ts`                                        | 命令 / 配置 / 持久化 key 常量（**重命名**见 design）                                                           |
+| Server Runtime                           | `server/src/`                                                         | Hook / AgentState / Persistence / HTTP / WebSocket                                                             |
+| AgentState / Store                       | `server/src/agentStateStore.ts`、`server/src/types.ts`                | Instance 状态管理；**Spec 002** 增加 `providerProfileId` / `providerDisplayName` / `modelId` 字段（非 secret） |
+| Hook Runtime                             | `server/src/hookEventHandler.ts`、`server/src/providers/hook/claude/` | Claude Code hook 事件处理                                                                                      |
+| Claude Provider                          | `server/src/providers/hook/claude/claude.ts`                          | `buildLaunchCommand` **Spec 002** 扩展接受 `modelId`，输出 `--model <id>`                                      |
+| Layout / Config Persistence              | `server/src/{layoutPersistence,configPersistence}.ts`                 | 用户级布局 / 配置                                                                                              |
+| File Watcher                             | `server/src/fileWatcher.ts`                                           | JSONL / transcript 监听                                                                                        |
+| Webview UI                               | `webview-ui/src/`                                                     | Pixel Canvas + 组件                                                                                            |
+| Shared Core                              | `core/src/`                                                           | Provider 接口 / Adapter / Message / Asset Loader                                                               |
+| **Spec 002 新增** ProviderProfile types  | `core/src/providerProfiles.ts`                                        | Agent-neutral Profile types + validator                                                                        |
+| **Spec 002 新增** Launch Config Resolver | `server/src/launchConfig.ts`                                          | 纯函数 `resolveClaudeLaunchConfig` → env + args + safeMetadata                                                 |
+| **Spec 002 新增** SecretStorage Provider | `adapters/vscode/secretStorageProvider.ts`                            | 包装 `vscode.SecretStorage`，**仅**存储 Provider secrets                                                       |
+| **Spec 002 新增** ProviderProfileStore   | `adapters/vscode/providerProfileStore.ts`                             | 用 VS Code globalState 存储 non-secret Profile                                                                 |
+| **Spec 002 新增** Launch Flow            | `adapters/vscode/launchAgentFlow.ts`                                  | `+ Agent` QuickPick / InputBox 流程                                                                            |
+| Assets                                   | `webview-ui/public/assets/`                                           | Pixel sprite / tiles / 字体（必须保留）                                                                        |
+| Build                                    | `esbuild.js` + `tsconfig.json` + `eslint.config.mjs`                  | 构建工具链                                                                                                     |
 
 ---
 
@@ -91,17 +96,17 @@ MIT attribution。
 参见 [`docs/specs/001-multi-instance-runtime/design.md`](../../docs/specs/001-multi-instance-runtime/design.md)
 中的"命名空间策略"表。简述：
 
-| 类别 | 策略 |
-|---|---|
-| `package.json` name / displayName | 替换为 Claude Fleet |
-| `package.json` publisher | **留 TBD**（不擅自发布） |
-| Command ID（`pixel-agents.*`） | 替换为 `claude-fleet.*` |
-| 内部 namespace（变量 / 文件夹） | 替换为 `claude-fleet.*` |
-| Persistence namespace | **保留上游 key** 作为 fallback，避免破坏已有用户状态 |
-| Config keys | 替换为 `claudeFleet.*`，**保留**旧 key 作为 fallback |
-| Logs / Debug channel | 替换为 `Claude Fleet` |
-| LICENSE 文本 / 原作者版权 | **不可改** |
-| THIRD_PARTY_NOTICES | 新增 |
+| 类别                              | 策略                                                 |
+| --------------------------------- | ---------------------------------------------------- |
+| `package.json` name / displayName | 替换为 Claude Fleet                                  |
+| `package.json` publisher          | **留 TBD**（不擅自发布）                             |
+| Command ID（`pixel-agents.*`）    | 替换为 `claude-fleet.*`                              |
+| 内部 namespace（变量 / 文件夹）   | 替换为 `claude-fleet.*`                              |
+| Persistence namespace             | **保留上游 key** 作为 fallback，避免破坏已有用户状态 |
+| Config keys                       | 替换为 `claudeFleet.*`，**保留**旧 key 作为 fallback |
+| Logs / Debug channel              | 替换为 `Claude Fleet`                                |
+| LICENSE 文本 / 原作者版权         | **不可改**                                           |
+| THIRD_PARTY_NOTICES               | 新增                                                 |
 
 ---
 

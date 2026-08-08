@@ -53,3 +53,7 @@ export const CONFIG_KEY_AUTO_SPAWN_AGENT = 'claudeFleet.autoSpawnAgent';
 export const VIEW_ID = 'claude-fleet.panelView';
 export const COMMAND_SHOW_PANEL = 'claude-fleet.showPanel';
 export const COMMAND_EXPORT_DEFAULT_LAYOUT = 'claude-fleet.exportDefaultLayout';
+
+// Spec 002 — commands introduced with Provider / Model isolation.
+export const COMMAND_NEW_AGENT = 'claude-fleet.newAgent';
+export const COMMAND_MANAGE_PROVIDERS = 'claude-fleet.manageProviders';

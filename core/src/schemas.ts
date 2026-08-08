@@ -34,6 +34,13 @@ export interface PersistedAgent {
   palette?: number;
   /** Hue shift in degrees (0-360). Persisted alongside palette. */
   hueShift?: number;
+
+  // -- Spec 002: Provider / Model --
+  /** Provider profile id at launch. NOT a secret. */
+  providerProfileId?: string;
+  providerDisplayName?: string;
+  /** Model id passed as `claude --model <id>` at launch. */
+  modelId?: string;
 }
 
 /** Agent seat assignment with visual identity
