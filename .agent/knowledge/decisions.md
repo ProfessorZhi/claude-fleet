@@ -126,4 +126,114 @@ _(none)_
 
 ---
 
+## ADR-002: Claude Code Instance Provider / Model Isolation Strategy
+
+### Status
+
+Accepted（2026-08-08，Spec 002 落地）
+
+### Context
+
+002 的目标是为每个 Claude Code Instance 提供**独立的 Provider / Model 配置**，并保证
+并行 Instance 之间互不污染。
+
+调研 Claude Code 官方文档后（[Settings](https://code.claude.com/docs/en/settings)、
+[env-vars](https://code.claude.com/docs/en/env-vars)、[CLI usage](https://code.claude.com/docs/en/cli-usage)），
+影响隔离的关键事实是：
+
+1. `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL`
+   都是 **process-scope**，在 `claude` 启动时被读取一次。
+2. `claude --model <id>` **覆盖** `ANTHROPIC_MODEL` env；`--session-id <uuid>` 是合法
+   flag；`--dangerously-skip-permissions` 仍然可用（也可用 `--permission-mode bypassPermissions`）。
+3. **`~/.claude/settings.json` 的 `env` block 会覆盖 shell env**（counter-intuitive 但
+   是官方行为）。这意味着：用户如果在 `~/.claude/settings.json` 设了
+   `env.ANTHROPIC_API_KEY`，会**覆盖** per-terminal 注入的 env。
+4. `CLAUDE_CONFIG_DIR` env 改变 `~/.claude/` 的解析路径，影响 **settings / hooks /
+   credentials / transcript / skills**。它不是"只换 settings 文件"，是"换整套 Claude
+   数据根目录"。
+
+候选方案：
+
+- **方案 A**：仅 per-terminal env + `--model`；
+- **方案 B**：per-terminal env + 独立 `CLAUDE_CONFIG_DIR`；
+- **方案 C**：共享基础 config + instance overlay。
+
+### Decision
+
+**002 MVP 采用方案 A —— 仅 per-terminal env + `claude --model` / `--session-id`。**
+
+具体落地（详见 [`docs/specs/002-provider-model-isolation/`](../../docs/specs/002-provider-model-isolation/)）：
+
+1. 把 `ProviderProfile` / `ModelProfile` / `InstanceLaunchConfig` 设计成 Agent-neutral
+   types（参见 [`core/src/providerProfiles.ts`](../../core/src/providerProfiles.ts)）。
+2. 实现纯函数 [`resolveClaudeLaunchConfig`](../../server/src/launchConfig.ts)，把
+   Profile + Secret 解析为 `{ env, args, safeMetadata }`。
+3. `vscode.window.createTerminal({ env })` 接收 resolve 出来的 env，**每实例独立对象**。
+4. `claude --model <id>` 由 `buildLaunchCommand` 透传。
+5. Provider secrets 走 **VS Code SecretStorage**，**绝不**进入
+   AgentState / globalState / log / Webview。
+6. **不**为每个 Instance 创建独立 `CLAUDE_CONFIG_DIR`。
+
+### Reasons
+
+#### 方案 A 的优点
+
+- **简单且可测**：`resolveClaudeLaunchConfig` 是纯函数，所有隔离行为可以离线单测。
+- **与 001 完全兼容**：001 已建立的 `~/.claude/settings.json` hooks 安装 / transcript
+  检测在方案 A 下继续工作（多个 Instance 共享同一份 hooks 是期望行为，因为 hooks
+  上报的目标 Extension 是同一个）。
+- **不需要做凭证 / login 隔离**：登录态由用户级 Claude Code 登录处理，per-instance
+  不需要重新登录。
+- **与上游未来演进更兼容**：Claude Code 后续如果增加 env 变量，方案 A 直接受益；
+  方案 B 可能因为新变量走 `CLAUDE_CONFIG_DIR` 而漏掉。
+
+#### 方案 B（CLAUDE_CONFIG_DIR）的代价
+
+- 强制独立 config dir 会同时隔离 **hooks、credentials、transcript 路径、skills**；
+- hooks 必须**每个 dir 装一份**（当前实现是写一份到 `~/.claude/settings.json`）；
+- transcript detection 当前基于 `~/.claude/projects/<workspace>/<sessionId>.jsonl`，
+  per-instance dir 会让 transcript 散落到不同位置，上游的 `getSessionDirs` 与
+  `getAllSessionRoots` 都需要改；
+- 当前**没有任何具体 case**证明方案 A 不够用；过早采用方案 B 是过度工程。
+
+#### 方案 C 的代价
+
+- 实现成本最高；
+- 需要定义 "base config" vs "instance overlay" 的 merge 语义；
+- 与 001 已有 globalState migration 路径纠缠。
+
+### Consequences
+
+#### 接受（已记录）
+
+- 如果用户在 `~/.claude/settings.json` 的 `env` block 设了 `ANTHROPIC_*`，会**覆盖**
+  per-terminal env。这是 Claude Code 官方语义（"settings file value applies"），
+  不是 Claude Fleet 的 bug。002 在 `docs/specs/002-provider-model-isolation/design.md`
+  显式记录此限制；后续用户文档需要告知。
+- hooks / transcript 跨 Instance 共享是设计如此；hooks 写一次即可。
+
+#### 未来如果遇到方案 A 不够用的情况
+
+- 在用户级 settings.json env 与 per-terminal env 冲突的具体场景出现时，可以单独 Spec
+  升级到方案 B；
+- 但升级时必须同时处理：hooks 复制 / 重装、credentials 跨 dir 共享、
+  transcript 路径重写。
+
+#### 命名约束（被本 ADR 锁死）
+
+- `ProviderProfile` 不写死厂商（不预设 MiniMax / DeepSeek / Kimi）；
+- "Provider" 是 **Coding Agent 内部** 的概念，不同 Agent Runtime（Claude Code /
+  Codex / Gemini）各自定义 Provider 能力（参见 requirements §"Provider 与 Coding Agent
+  不要混淆"）。
+
+### Supersedes
+
+_(none)_
+
+### Superseded by
+
+_(none)_
+
+---
+
 <!-- 新 ADR 追加在下方。 -->
