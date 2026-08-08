@@ -112,7 +112,7 @@ async function ensurePanelIsLarge(window: Page): Promise<void> {
 
 /**
  * Open the Pixel Agents panel via the Command Palette and wait for the
- * "Pixel Agents: Show Panel" command to execute.
+ * "Claude Fleet: Show Panel" command to execute.
  */
 /**
  * Close the bottom panel. Triggers onDidChangeVisibility(false) on every
@@ -248,7 +248,7 @@ export async function openPixelAgentsPanel(
     }
   }
   if (!shown) {
-    await runCommand(window, 'Pixel Agents: Show Panel');
+    await runCommand(window, 'Claude Fleet: Show Panel');
   }
 
   // Wait for the panel container to appear

@@ -211,8 +211,10 @@ function isPixelAgentsHookCommand(homeDir, command) {
   }
 
   const normalizedCommand = normalizePathForMatch(command);
+  // Spec 006 state-dir migration: the product installs its hook at
+  // ~/.claude-fleet/hooks/claude-hook.js (see claudeHookInstaller.ts).
   const currentHookPath = normalizePathForMatch(
-    path.join(homeDir, '.pixel-agents', 'hooks', 'claude-hook.js'),
+    path.join(homeDir, '.claude-fleet', 'hooks', 'claude-hook.js'),
   );
 
   return (
@@ -508,7 +510,7 @@ async function main() {
   if (IS_EXTERNAL) {
     externalTag = tinySessionTag(sessionId);
     process.stdout.write(
-      `${ANSI_MAGENTA}══ EXTERNAL session ·${externalTag} — adopted by Pixel Agents, not launched ══${ANSI_RESET}\n`,
+      `${ANSI_MAGENTA}══ EXTERNAL session ·${externalTag} — adopted by Claude Fleet, not launched ══${ANSI_RESET}\n`,
     );
   }
   echo(

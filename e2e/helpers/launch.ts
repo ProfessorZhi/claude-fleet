@@ -72,10 +72,12 @@ export async function launchVSCode(
   fs.mkdirSync(mockBinDir, { recursive: true });
 
   // Pre-seed user-level config/layout under the isolated HOME, BEFORE VS Code
-  // launches — the server reads ~/.pixel-agents/{config,layout}.json on startup,
-  // so a test that needs specific areaMappings / showAreas / a known layout must
-  // write them now. layout.json must carry a high layoutRevision to survive the
-  // bundled-default reset gate (server/src/layoutPersistence.ts).
+  // launches — the server migrates ~/.pixel-agents → ~/.claude-fleet on startup
+  // (server/src/migrateStateDir.ts) and then reads {config,layout}.json from the
+  // migrated state dir, so a test that needs specific areaMappings / showAreas /
+  // a known layout must write them now. layout.json must carry a high
+  // layoutRevision to survive the bundled-default reset gate
+  // (server/src/layoutPersistence.ts).
   //
   // config.json is ALWAYS seeded: every test wants alwaysShowLabels on (overlay
   // text is only assertable when labels render without hover), so the e2e
@@ -207,9 +209,9 @@ export async function launchVSCode(
   //   Pixel Agents webview) docks left at full height, so ensurePanelIsLarge()
   //   no-ops instead of driving the flaky "View: Toggle Maximized Panel"
   //   command-palette interaction at the start of every test.
-  // - pixel-agents.autoShowPanel: the extension focuses the Pixel Agents view
+  // - claudeFleet.autoShowPanel: the extension focuses the Pixel Agents view
   //   on activation (onStartupFinished), so openPixelAgentsPanel({ autoShown })
-  //   skips the "Pixel Agents: Show Panel" palette interaction at setup.
+  //   skips the "Claude Fleet: Show Panel" palette interaction at setup.
   // - terminal.integrated.defaultLocation "editor": mock-claude terminals open
   //   as editor tabs beside the office instead of stealing the panel (the
   //   webview has no retainContextWhenHidden, so a panel-hosted terminal.show()
@@ -225,7 +227,7 @@ export async function launchVSCode(
   fs.mkdirSync(userSettingsDir, { recursive: true });
   const userSettings: Record<string, unknown> = {
     'workbench.panel.defaultLocation': 'left',
-    'pixel-agents.autoShowPanel': true,
+    'claudeFleet.autoShowPanel': true,
     'terminal.integrated.defaultLocation': 'editor',
     'workbench.activityBar.location': 'hidden',
     'workbench.startupEditor': 'none',

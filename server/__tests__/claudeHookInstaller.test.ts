@@ -94,7 +94,7 @@ describe('claudeHookInstaller', () => {
   });
 
   // 9. copyHookScript copies file
-  it('copyHookScript copies to ~/.pixel-agents/hooks/', () => {
+  it('copyHookScript copies to ~/.claude-fleet/hooks/', () => {
     // Create a mock extension path with dist/hooks/claude-hook.js
     const mockExtPath = path.join(tmpBase, 'mock-ext');
     const hookSrc = path.join(mockExtPath, 'dist', 'hooks');

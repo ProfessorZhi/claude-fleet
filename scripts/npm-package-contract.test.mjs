@@ -23,13 +23,13 @@ function validFiles() {
 }
 
 test('normalizes npm pack array and keyed-object output', () => {
-  const metadata = { filename: 'pixel-agents-1.4.0.tgz', files: validFiles() };
+  const metadata = { filename: 'claude-fleet-0.1.0.tgz', files: validFiles() };
   assert.equal(normalizePackMetadata([metadata]), metadata);
-  assert.equal(normalizePackMetadata({ 'pixel-agents@1.4.0': metadata }), metadata);
+  assert.equal(normalizePackMetadata({ 'claude-fleet@0.1.0': metadata }), metadata);
 });
 
 test('extracts pack JSON after lifecycle build output', () => {
-  const metadata = [{ filename: 'pixel-agents-1.4.0.tgz', files: validFiles() }];
+  const metadata = [{ filename: 'claude-fleet-0.1.0.tgz', files: validFiles() }];
   const output = `[generate-messages] built protocol\nHUSKY=0 skip install${JSON.stringify(metadata)}`;
   assert.deepEqual(parsePackJsonOutput(output), metadata);
 });
@@ -55,44 +55,44 @@ test('rejects source and preview files even when required files exist', () => {
 
 test('validates release tag, ref, repository, and monotonic version', () => {
   const manifest = {
-    name: 'pixel-agents',
-    version: '1.4.0',
-    repository: { url: 'https://github.com/pixel-agents-hq/pixel-agents' },
+    name: 'claude-fleet',
+    version: '0.1.0',
+    repository: { url: 'https://github.com/ProfessorZhi/claude-fleet' },
   };
   assert.doesNotThrow(() =>
     validateReleaseIdentity({
       manifest,
-      releaseTag: 'v1.4.0',
-      ref: 'refs/tags/v1.4.0',
-      latestVersion: '1.0.2',
+      releaseTag: 'v0.1.0',
+      ref: 'refs/tags/v0.1.0',
+      latestVersion: '0.0.1',
     }),
   );
   assert.throws(
     () =>
       validateReleaseIdentity({
         manifest,
-        releaseTag: 'v1.3.0',
-        ref: 'refs/tags/v1.3.0',
-        latestVersion: '1.0.2',
+        releaseTag: 'v0.0.9',
+        ref: 'refs/tags/v0.0.9',
+        latestVersion: '0.0.1',
       }),
     /does not match package version/,
   );
   assert.throws(
     () =>
       validateReleaseIdentity({
-        manifest: { ...manifest, version: '1.0.2' },
-        releaseTag: 'v1.0.2',
-        ref: 'refs/tags/v1.0.2',
-        latestVersion: '1.0.2',
+        manifest: { ...manifest, version: '0.0.1' },
+        releaseTag: 'v0.0.1',
+        ref: 'refs/tags/v0.0.1',
+        latestVersion: '0.0.1',
       }),
     /must be greater than npm latest/,
   );
   assert.doesNotThrow(() =>
     validateReleaseIdentity({
-      manifest: { ...manifest, version: '1.0.2' },
-      releaseTag: 'v1.0.2',
-      ref: 'refs/tags/v1.0.2',
-      latestVersion: '1.0.2',
+      manifest: { ...manifest, version: '0.0.1' },
+      releaseTag: 'v0.0.1',
+      ref: 'refs/tags/v0.0.1',
+      latestVersion: '0.0.1',
       exactVersionExists: true,
     }),
   );

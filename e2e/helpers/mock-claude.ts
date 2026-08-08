@@ -262,7 +262,9 @@ export async function waitForClaudeHookSetup(tmpHome: string): Promise<void> {
   await waitForHookServer(tmpHome);
 
   const settingsPath = path.join(tmpHome, '.claude', 'settings.json');
-  const hookScriptPath = path.join(tmpHome, '.pixel-agents', 'hooks', 'claude-hook.js');
+  // Spec 006 state-dir migration: the product installs its hook at
+  // ~/.claude-fleet/hooks/claude-hook.js (see claudeHookInstaller.ts).
+  const hookScriptPath = path.join(tmpHome, '.claude-fleet', 'hooks', 'claude-hook.js');
   const deadline = Date.now() + HOOK_SETUP_TIMEOUT_MS;
 
   while (Date.now() < deadline) {

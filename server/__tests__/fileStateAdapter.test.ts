@@ -122,7 +122,7 @@ describe('FileStateAdapter', () => {
     expect(adapter.loadAgents()).toEqual(agents);
   });
 
-  it('writes state at ~/.pixel-agents/<namespace>-state.json', () => {
+  it('writes state at ~/.claude-fleet/<namespace>-state.json', () => {
     const adapter = new FileStateAdapter({ namespace: 'vscode' });
     adapter.saveSeats({ '1': { palette: 2, hueShift: 45 } });
     const stateFile = path.join(tempHome, '.claude-fleet', 'vscode-state.json');

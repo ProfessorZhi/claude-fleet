@@ -44,6 +44,9 @@ async function execNpm(args, options = {}) {
     cwd: REPO_ROOT,
     env: { ...process.env, HUSKY: '0' },
     maxBuffer: 20 * 1024 * 1024,
+    // Windows: execFile cannot spawn .cmd files directly (EINVAL) — the
+    // installed-bin call below already uses the same shell bridge.
+    shell: process.platform === 'win32',
     ...options,
   });
 }
@@ -95,14 +98,14 @@ async function stopChild(child) {
 }
 
 async function verifyInstalledTarball(tarballPath) {
-  const smokeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pixel-agents-npm-smoke-'));
+  const smokeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-fleet-npm-smoke-'));
   const smokeHome = path.join(smokeRoot, 'home');
   const smokeProject = path.join(smokeRoot, 'project');
   fs.mkdirSync(smokeHome, { recursive: true });
   fs.mkdirSync(smokeProject, { recursive: true });
   fs.writeFileSync(
     path.join(smokeProject, 'package.json'),
-    JSON.stringify({ name: 'pixel-agents-package-smoke', private: true }, null, 2),
+    JSON.stringify({ name: 'claude-fleet-package-smoke', private: true }, null, 2),
   );
 
   let child = null;
@@ -112,12 +115,12 @@ async function verifyInstalledTarball(tarballPath) {
       cwd: smokeProject,
     });
 
-    const installedRoot = path.join(smokeProject, 'node_modules', 'pixel-agents');
+    const installedRoot = path.join(smokeProject, 'node_modules', 'claude-fleet');
     const installedManifest = JSON.parse(
       fs.readFileSync(path.join(installedRoot, 'package.json'), 'utf-8'),
     );
-    if (installedManifest.bin?.['pixel-agents'] !== './dist/cli.js') {
-      throw new Error('Installed package has an unexpected pixel-agents bin entry');
+    if (installedManifest.bin?.['claude-fleet'] !== './dist/cli.js') {
+      throw new Error('Installed package has an unexpected claude-fleet bin entry');
     }
 
     const installedCli = path.join(installedRoot, 'dist', 'cli.js');
@@ -130,15 +133,15 @@ async function verifyInstalledTarball(tarballPath) {
       smokeProject,
       'node_modules',
       '.bin',
-      process.platform === 'win32' ? 'pixel-agents.cmd' : 'pixel-agents',
+      process.platform === 'win32' ? 'claude-fleet.cmd' : 'claude-fleet',
     );
     const help = await execFileAsync(installedBin, ['--help'], {
       cwd: smokeProject,
       env: { ...process.env, HOME: smokeHome, USERPROFILE: smokeHome },
       shell: process.platform === 'win32',
     });
-    if (!help.stdout.includes('Usage: pixel-agents')) {
-      throw new Error('Installed pixel-agents bin did not print CLI help');
+    if (!help.stdout.includes('Usage: claude-fleet')) {
+      throw new Error('Installed claude-fleet bin did not print CLI help');
     }
 
     const port = await getFreePort();
@@ -188,7 +191,7 @@ async function verifyInstalledTarball(tarballPath) {
       throw new Error(`Installed package did not load non-empty bundled assets:\n${output}`);
     }
 
-    const installedHook = path.join(smokeHome, '.pixel-agents', 'hooks', 'claude-hook.js');
+    const installedHook = path.join(smokeHome, '.claude-fleet', 'hooks', 'claude-hook.js');
     const settingsPath = path.join(smokeHome, '.claude', 'settings.json');
     await waitFor(
       () => fs.existsSync(installedHook) && fs.existsSync(settingsPath),
@@ -216,7 +219,7 @@ async function main() {
   const ownsOutputDir = args.outputDir === null;
   const outputDir = args.outputDir
     ? path.resolve(args.outputDir)
-    : fs.mkdtempSync(path.join(os.tmpdir(), 'pixel-agents-npm-pack-'));
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'claude-fleet-npm-pack-'));
 
   if (!ownsOutputDir) {
     fs.mkdirSync(outputDir, { recursive: true });

@@ -1625,7 +1625,7 @@ test.describe('Hooks ON / lifecycle', () => {
   }) => {
     const { frame, tmpHome, narrator } = pixelAgents;
 
-    const layoutPath = path.join(tmpHome, '.pixel-agents', 'layout.json');
+    const layoutPath = path.join(tmpHome, '.claude-fleet', 'layout.json');
 
     // Initial layout — there should be one written at fixture startup since
     // the webview boots with a default layout. Record its content for the
@@ -1689,7 +1689,7 @@ test.describe('Hooks ON / lifecycle', () => {
         { timeout: 10_000 },
       )
       .toBe(true);
-    narrator.check('~/.pixel-agents/layout.json changed on disk after Save');
+    narrator.check('~/.claude-fleet/layout.json changed on disk after Save');
 
     // Exit edit mode and confirm the editor button disappears.
     narrator.step('exiting Layout mode');

@@ -218,7 +218,7 @@ test.describe('Carpet', () => {
     await saveLayout(frame);
 
     // The save round-trips through layoutPersistence to the isolated HOME.
-    const layoutPath = path.join(tmpHome, '.pixel-agents', 'layout.json');
+    const layoutPath = path.join(tmpHome, '.claude-fleet', 'layout.json');
     await expect
       .poll(
         () => {
@@ -237,7 +237,7 @@ test.describe('Carpet', () => {
         { timeout: 10_000 },
       )
       .toBe(2);
-    narrator.check('~/.pixel-agents/layout.json contains 2 carpet tiles');
+    narrator.check('~/.claude-fleet/layout.json contains 2 carpet tiles');
 
     // Reload the panel and confirm the carpet rehydrates from disk. The
     // reopen uses the same ⌘J chord closeBottomPanel used, so the reload is
