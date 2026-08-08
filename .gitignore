@@ -1,0 +1,68 @@
+# ===== 环境与密钥（绝不入库） =====
+.env
+.env.*
+*.env
+*.env.*
+
+# 任何带密钥痕迹的文件名都跳过
+*.pem
+*.key
+*id_rsa*
+*id_ed25519*
+
+# ===== 依赖与构建产物（Node / TypeScript 通用） =====
+node_modules/
+dist/
+build/
+out/
+coverage/
+
+# 包管理器锁文件按需保留/忽略 —— Phase 0 还没有 package.json,
+# 等真正引入依赖时再决定哪些锁文件入版本控制。
+
+# ===== 日志 =====
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ===== 编辑器 / IDE =====
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+
+# ===== Claude / Agent 本地缓存 =====
+.claude/cache/
+.claude/state/
+.claude/sessions/
+
+# ===== 测试与临时 =====
+*.tmp
+*.bak
+.cache/
+
+# ===== 注意：以下目录**故意**保留在仓库中 =====
+# AGENTS.md        —— 所有 Agent 的统一入口
+# CLAUDE.md        —— Claude Code 适配层
+# docs/            —— 项目信息
+# .agent/          —— Agent 工作流与知识
+# .claude/         —— Claude Code 适配层（但忽略其内部缓存 / 状态目录）
+
+# 显式 Force-Include（防止被任何上层 .gitignore 影响）
+!AGENTS.md
+!CLAUDE.md
+!README.md
+!docs/
+!.agent/
+!.claude/skills/
+!.claude/rules/
+!.claude/skills/README.md
+!.claude/rules/README.md
