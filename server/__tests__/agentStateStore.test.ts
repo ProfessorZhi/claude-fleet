@@ -170,6 +170,41 @@ describe('AgentStateStore', () => {
       expect(saved[0].isTeamLead).toBe(true);
     });
 
+    it('persist preserves the original launch cwd (Restart regression Test C)', () => {
+      const adapter = createMockAdapter();
+      store.setAdapter(adapter);
+      store.set(
+        1,
+        createTestAgent({
+          id: 1,
+          projectDir: 'C:/Users/me/.claude/projects/xyz',
+          cwd: 'D:/projects/zuno',
+        }),
+      );
+
+      store.persist();
+
+      const saved = (adapter.saveAgents as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as PersistedAgent[];
+      expect(saved[0].cwd).toBe('D:/projects/zuno');
+      expect(saved[0].projectDir).toBe('C:/Users/me/.claude/projects/xyz');
+    });
+
+    it('persist keeps each agent its own cwd (Restart regression Test B)', () => {
+      const adapter = createMockAdapter();
+      store.setAdapter(adapter);
+      store.set(1, createTestAgent({ id: 1, projectDir: '/t1', cwd: '/repo-a' }));
+      store.set(2, createTestAgent({ id: 2, projectDir: '/t2', cwd: '/repo-b' }));
+
+      store.persist();
+
+      const saved = (adapter.saveAgents as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as PersistedAgent[];
+      const cwds = new Map(saved.map((a) => [a.id, a.cwd]));
+      expect(cwds.get(1)).toBe('/repo-a');
+      expect(cwds.get(2)).toBe('/repo-b');
+    });
+
     it('persist without adapter is a no-op', () => {
       store.set(1, createTestAgent({ id: 1 }));
       // Should not throw

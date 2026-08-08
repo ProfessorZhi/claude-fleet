@@ -8,6 +8,11 @@ export interface AgentState {
   /** Whether this agent was detected from an external source (VS Code extension panel, etc.) */
   isExternal: boolean;
   projectDir: string;
+  /** Original repo cwd at launch (Spec: Restart uses THIS, not projectDir).
+   *  projectDir is the Claude transcript directory derived from cwd and is NOT
+   *  guaranteed to equal the user's chosen repo. Absent on legacy (001-era)
+   *  and scan-discovered agents — Restart falls back to projectDir only then. */
+  cwd?: string;
   jsonlFile: string;
   fileOffset: number;
   lineBuffer: string;
@@ -112,6 +117,10 @@ export interface PersistedAgent {
   isExternal?: boolean;
   jsonlFile: string;
   projectDir: string;
+  /** Original repo cwd at launch. Persisted so Restart reuses the exact repo
+   *  instead of re-deriving it from projectDir. Absent on legacy persisted
+   *  state (cwd added in 0.1.0). */
+  cwd?: string;
   /** Workspace folder name (only set for multi-root workspaces) */
   folderName?: string;
 

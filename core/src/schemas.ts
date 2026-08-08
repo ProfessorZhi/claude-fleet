@@ -19,6 +19,9 @@ export interface PersistedAgent {
   isExternal?: boolean;
   jsonlFile: string;
   projectDir: string;
+  /** Original repo cwd at launch. Persisted so Restart reuses the exact repo
+   *  instead of re-deriving it from projectDir. Absent on legacy state. */
+  cwd?: string;
   folderName?: string;
   teamName?: string;
   agentName?: string;

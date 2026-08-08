@@ -163,6 +163,9 @@ export class AgentStateStore {
         isExternal: agent.isExternal || undefined,
         jsonlFile: agent.jsonlFile,
         projectDir: agent.projectDir,
+        // Original launch cwd — persisted so Restart reuses the exact repo
+        // (absent on legacy state; restore keeps it undefined).
+        cwd: agent.cwd,
         folderName: agent.folderName,
         teamName: agent.teamName,
         agentName: agent.agentName,

@@ -221,6 +221,9 @@ export async function launchNewTerminal(
     terminalRef: terminal,
     isExternal: false,
     projectDir,
+    // Exact repo the user picked at launch — Restart must reuse THIS, not the
+    // derived transcript projectDir (Spec: preserve repo cwd across restart).
+    cwd,
     jsonlFile: expectedFile,
     fileOffset: 0,
     lineBuffer: '',
@@ -414,6 +417,9 @@ export function persistAgents(agents: AgentStateStore, adapter: StateAdapter): v
       isExternal: agent.isExternal || undefined,
       jsonlFile: agent.jsonlFile,
       projectDir: agent.projectDir,
+      // Original launch cwd — persists the exact repo for Restart (legacy
+      // agents have none; restore keeps it undefined).
+      cwd: agent.cwd,
       folderName: agent.folderName,
       teamName: agent.teamName,
       agentName: agent.agentName,
@@ -496,6 +502,8 @@ export function restoreAgents(
       terminalRef: terminal,
       isExternal,
       projectDir: p.projectDir,
+      // Restore the original launch cwd for Restart; undefined on legacy state.
+      cwd: p.cwd,
       jsonlFile: p.jsonlFile,
       fileOffset: 0,
       lineBuffer: '',

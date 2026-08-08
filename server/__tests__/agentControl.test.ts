@@ -58,9 +58,24 @@ function makeAgent(id: number, overrides: Partial<AgentState> = {}): AgentState 
 }
 
 describe('restartConfigFromAgent — Spec 004 FR-006', () => {
-  it('preserves Repo (cwd) / Provider / Model', () => {
+  it('Restart uses the original launch cwd, NOT the transcript projectDir (Test A)', () => {
+    const agent = makeAgent(1, {
+      projectDir: 'C:/Users/me/.claude/projects/xyz',
+      cwd: 'D:/projects/zuno',
+      providerProfileId: 'custom.xyz',
+      modelId: 'my-model-1',
+    });
+    expect(restartConfigFromAgent(agent)).toEqual({
+      cwd: 'D:/projects/zuno',
+      providerProfileId: 'custom.xyz',
+      modelId: 'my-model-1',
+    });
+  });
+
+  it('preserves Repo (cwd) / Provider / Model when cwd equals projectDir', () => {
     const agent = makeAgent(1, {
       projectDir: '/workspace/repo-a',
+      cwd: '/workspace/repo-a',
       providerProfileId: 'custom.xyz',
       modelId: 'my-model-1',
     });
@@ -71,9 +86,24 @@ describe('restartConfigFromAgent — Spec 004 FR-006', () => {
     });
   });
 
+  it('legacy agent without cwd falls back to projectDir, no crash (Test D)', () => {
+    const agent = makeAgent(1, {
+      projectDir: '/old/repo',
+      cwd: undefined,
+      providerProfileId: undefined,
+      modelId: undefined,
+    });
+    expect(restartConfigFromAgent(agent)).toEqual({
+      cwd: '/old/repo',
+      providerProfileId: INHERIT_PROVIDER_PROFILE_ID,
+      modelId: undefined,
+    });
+  });
+
   it('legacy agent without provider/model falls back to Inherit', () => {
     const agent = makeAgent(1, {
       projectDir: '/old/repo',
+      cwd: undefined,
       providerProfileId: undefined,
       modelId: undefined,
     });
@@ -119,9 +149,10 @@ describe('runRestartAgentCommand — Spec 004 FR-006 ~ FR-008', () => {
     return { store, runtime, launcher, showError };
   }
 
-  it('stops the old instance and relaunches with the SAME Repo/Provider/Model', async () => {
+  it('stops the old instance and relaunches with the SAME Repo/Provider/Model (Test A, end-to-end)', async () => {
     const agent = makeAgent(1, {
-      projectDir: '/workspace/repo-a',
+      projectDir: 'C:/Users/me/.claude/projects/xyz',
+      cwd: 'D:/projects/zuno',
       providerProfileId: 'custom.xyz',
       modelId: 'model-a',
       terminalRef: { dispose: vi.fn() } as never,
@@ -141,11 +172,12 @@ describe('runRestartAgentCommand — Spec 004 FR-006 ~ FR-008', () => {
 
     // Old instance fully stopped (removed from store)
     expect(store.get(1)).toBeUndefined();
-    // New launch carries the preserved config
+    // New launch carries the preserved config — cwd is the ORIGINAL repo,
+    // not the transcript projectDir.
     expect(launcher).toHaveBeenCalledTimes(1);
     expect(launcher.mock.calls[0][0]).toMatchObject({
       launchConfig: {
-        cwd: '/workspace/repo-a',
+        cwd: 'D:/projects/zuno',
         providerProfileId: 'custom.xyz',
         modelId: 'model-a',
       },

@@ -26,14 +26,19 @@ import {
  * Project the launch intent of a running agent for Restart (Spec 004
  * FR-006). Pure — no vscode / fs — unit-tested.
  *
- * `cwd` approximation: AgentState has no original cwd; `projectDir` is the
- * Claude transcript directory, which for a single-workspace launch matches
- * the cwd Claude derives from it. Legacy agents (001-era, no provider/model)
- * fall back to the built-in Inherit profile.
+ * `cwd` is the exact repo the user picked at launch (AgentState.cwd,
+ * persisted via PersistedAgent.cwd). `projectDir` is the Claude transcript
+ * directory derived from cwd and is NOT guaranteed to equal it — using it as
+ * cwd would restart the agent in the wrong directory. The projectDir
+ * fallback applies ONLY to legacy agents persisted before `cwd` existed
+ * (001-era) and scan-discovered agents that never went through a launch.
+ * Legacy agents (no provider/model) also fall back to the built-in Inherit
+ * profile.
  */
 export function restartConfigFromAgent(agent: AgentState): InstanceLaunchConfig {
   return {
-    cwd: agent.projectDir,
+    // New agents always carry the original launch cwd; legacy fallback only.
+    cwd: agent.cwd ?? agent.projectDir,
     providerProfileId: agent.providerProfileId ?? INHERIT_PROVIDER_PROFILE_ID,
     modelId: agent.modelId,
   };
