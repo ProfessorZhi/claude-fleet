@@ -3,7 +3,7 @@
 > 本文同时描述 **当前实现** 与已经确定的 **v1 目标架构**。  
 > 当前代码名仍为 **Claude Fleet**；当 Codex CLI 与 Claude Code CLI 都成为一等 Runtime 后，产品品牌计划迁移为 **Agent Fleet**。
 >
-> 产品定位见 [`PROJECT.md`](./PROJECT.md)；阶段规划见 [`ROADMAP.md`](./ROADMAP.md)；Codex + Claude Code 协作方式见 [`WORKFLOW_CODEX_CLAUDE.md`](./WORKFLOW_CODEX_CLAUDE.md)。
+> 产品定位见 [`PROJECT.md`](./PROJECT.md)；阶段规划见 [`ROADMAP.md`](./ROADMAP.md)；Codex + Claude Code 协作方式见 [`WORKFLOW_CODEX_CLAUDE.md`](./WORKFLOW_CODEX_CLAUDE.md)；长期 Ledger / 资源 / 调度设计见 [`FLEET_LEDGER_AND_SCHEDULING.md`](./FLEET_LEDGER_AND_SCHEDULING.md)。
 
 ---
 
@@ -864,7 +864,7 @@ fleet.get_recent_events()
 fleet.stop_instance()
 ```
 
-这属于 v1 之后的自动编排能力，不是当前多实例管理的前置条件。
+自动执行必须受 Mission Policy、成本/额度上限和审批模式约束，不能让 Coordinator 绕过 Fleet 直接无限 spawn 进程。
 
 ---
 
@@ -874,18 +874,19 @@ fleet.stop_instance()
 
 - 云端分布式 Agent Orchestrator；
 - Agent-to-Agent 实时 Chat Bus；
-- 自动 DAG 任务分解系统；
 - 自动合并所有 Agent 输出；
 - 嵌入 Codex Desktop 私有 UI；
 - 把 Codex Desktop 所有 Thread 自动纳管；
-- 支持所有 Coding Agent；
+- 一次支持所有 Coding Agent；
 - Three.js / 重型 3D Fleet Scene；
 - 完整分布式 tracing 平台；
 - 用 Fleet 替代 Claude Code / Codex 的原生 Session 机制。
 
 v1 核心是：
 
-> **Claude Code CLI + Codex CLI 的可靠多实例管理、角色组织、可观测与可视化。**
+> **Claude Code CLI + Codex CLI 的可靠多实例管理、角色组织、可观测、资源记录与可视化。**
+
+自动任务分解与完全自治调度不是最初实现的前置条件，但架构必须为它保留清晰接口。
 
 ---
 
@@ -950,6 +951,9 @@ v1 架构达到目标至少需要：
 [ ] Scene 切换不影响 Runtime
 [ ] Telemetry 不泄漏 Secret
 [ ] 多 writer checkout 风险可以被识别或明确无法判断
+[ ] Token / Cost / Quota 数据模型彼此分离
+[ ] Fleet Ledger 可以保存任务 / Session / PR 的长期元信息
+[ ] Assignment / Recommendation 有可解释理由与审计记录
 ```
 
 ---
@@ -964,11 +968,253 @@ v1 架构达到目标至少需要：
 3. 建立 FleetEvent / TelemetryStore
 4. 接入 Codex CLI Runtime Adapter
 5. 做 Claude + Codex 同时多实例运行验证
-6. 实现 Coordinator 可切换
-7. 抽 SceneRenderer
-8. Fleet Command Pixel Scene
-9. 可观测 Timeline / Detail Panel
-10. 完成后再进行 Agent Fleet 品牌迁移
+6. 建立 Fleet Ledger / Usage / Quota 基础模型
+7. 接 Git / PR / CI metrics
+8. 实现 Coordinator 可切换
+9. 抽 SceneRenderer
+10. Fleet Command Pixel Scene
+11. Recommendation Panel
+12. Fleet Control API / MCP + approve-mode launch/assign
+13. 完成后再进行 Agent Fleet 品牌迁移
 ```
 
-每一步必须优先保持原生 CLI 语义和已有回归测试。
+先记录事实，再做推荐；先做推荐，再做自动执行。
+
+---
+
+## 25. Fleet Ledger：长期工作履历
+
+实时 Telemetry 与长期 Ledger 必须分开：
+
+```text
+Telemetry → 当前谁在做什么
+Ledger    → 历史谁做过什么、结果如何、资源花了多少
+```
+
+Ledger 至少覆盖：
+
+```text
+MissionRecord
+WorkItemRecord
+SessionRecord
+PullRequestRecord
+UsageRecord
+QuotaSnapshot
+QualitySignal
+AssignmentDecision
+```
+
+默认只保存结构化元信息，不复制完整 Prompt / Transcript / 源文件。
+
+典型历史记录：
+
+```text
+Agent: Claude Code #2
+Task: Fleet Scene
+PR: #42
+Time to PR: 22m
+PR cycle: 45m
+Tokens: 284k
+Estimated cost: $1.73
+CI failures: 0
+Review rounds: 1
+Outcome: merged
+```
+
+PR 质量不能只由模型主观打分，应来自 CI、Review、返工、回归、Merge/Revert 等可解释信号。
+
+---
+
+## 26. Resource / Quota 模型
+
+Fleet 必须同时支持不同资源经济模型：
+
+```text
+Metered API
+Token Plan
+Credit Plan
+Subscription / Plus / Pro
+Rate Limit
+Custom Budget
+```
+
+关键原则：
+
+```text
+Token != Cost != Quota
+```
+
+例如：
+
+```text
+Claude Code + DeepSeek profile
+→ 可以按 Token / API price 计算 estimated cost
+→ Provider 有真实账单接口时可记录 actual cost
+
+Claude Code + MiniMax profile
+→ 可以关联 Token Plan / quota snapshot
+
+Codex CLI + subscription
+→ 只有 Runtime / 官方来源可靠暴露额度时才展示 remaining percent
+```
+
+不知道订阅额度时必须显示 unavailable，不能从 Token 数量伪造“剩余百分比”。
+
+Resource Account 与 Runtime 解耦：同一个 Claude Code Runtime 可以使用不同 Provider/Profile，因此资源、计费和额度逻辑不能写死进 RuntimeAdapter。
+
+---
+
+## 27. Metrics Engine：效率不是只看 Token
+
+决策层应综合：
+
+```text
+Capability match
+历史同类任务质量
+历史同类任务速度
+Time to first edit / commit / PR
+PR cycle time
+Token usage
+Estimated / actual API cost
+Current load
+Context headroom
+Remaining quota / budget
+Quota reset time
+Repo / Worktree conflict
+Task priority / deadline
+```
+
+历史指标要按任务类型 / capability 分桶，不能因为一个 Agent 前端任务快，就推导它所有任务都快。
+
+---
+
+## 28. Recommendation / Strategy Layer
+
+Strategy Engine 的候选对象既可以是现有 Instance，也可以是“新建一个 Instance 的 Launch Template”。
+
+例如：
+
+```text
+A. Existing Claude #2 / DeepSeek
+B. Launch Claude Code / MiniMax profile
+C. Existing Codex #1
+```
+
+因此 UI 可以给出可解释建议：
+
+```text
+建议：再开一个 MiniMax Claude Code Worker
+
+原因：
+- 当前有 2 个无依赖任务可并行
+- 现有 Worker 都在忙
+- MiniMax quota 充足
+- 历史同类任务耗时较短
+- 避免继续增加 DeepSeek 按量 API 成本
+```
+
+Recommendation Panel 必须显示依据、数据来源和不确定项，不能只给一个黑盒分数。
+
+Strategy 应通过可替换 `StrategyAdapter` 扩展，例如：
+
+```text
+balanced
+fastest
+lowest-cost
+highest-quality
+quota-preserving
+custom
+```
+
+---
+
+## 29. Coordinator 自动启动 / 分配 Agent
+
+目标架构允许 Coordinator 根据任务清单和规则主动启动 Agent，但必须走 Fleet Control Plane。
+
+权限模式：
+
+```text
+observe     只读
+suggest     只建议
+aapprove    请求执行，用户确认
+autonomous  在预设边界内自动执行
+```
+
+实现时正式枚举应使用 `approve`（上面 `aapprove` 仅为文档排版错误禁止进入代码）。
+
+默认推荐：
+
+```text
+suggest / approve
+```
+
+Coordinator 可以读取：
+
+```text
+Task List
+Dependencies
+Required Capabilities
+Priority
+Current Agents
+Historical Metrics
+Token / Cost / Quota
+Mission Policy
+```
+
+然后通过 Fleet API / MCP：
+
+```text
+fleet.list_candidates()
+fleet.get_resource_status()
+fleet.recommend_assignment()
+fleet.launch_instance()
+fleet.assign_work_item()
+fleet.get_metrics()
+fleet.stop_instance()
+```
+
+`autonomous` 模式必须有硬限制：最大并发 Agent、最大按量成本、额度保留、允许 Runtime/Provider/Model、Repo 范围、Worktree 隔离、Review/Merge 规则。
+
+未知额度不能视作无限额度。
+
+---
+
+## 30. 面向更多 Agent 的扩展边界
+
+v1 实现 Claude Code CLI + Codex CLI，但核心接口必须允许后续接入：
+
+```text
+Gemini CLI
+OpenCode
+Qoder CLI
+Custom Agent Runtime
+```
+
+扩展点分离：
+
+```text
+RuntimeAdapter       → CLI 生命周期 / Session / Runtime events
+ResourceAdapter      → Token / Cost / Quota / Subscription
+ObservabilityAdapter → 外部可测量工具 / runtime telemetry
+SCMAdapter           → GitHub / GitLab / local Git
+StrategyAdapter      → 任务分配策略
+```
+
+禁止让未来新增一个 Runtime 时同时重写 Mission、Ledger、Metrics、Strategy 和前端。
+
+最终数据路径：
+
+```text
+Runtime Adapters
+      ↓
+FleetEvent
+      ↓
+Telemetry ─────┐
+               ├→ Metrics Engine → Strategy → Recommendation / Coordinator
+Fleet Ledger ──┘
+      ↑
+Resource / SCM / Quality Signals
+```
+
+详细设计见 [`FLEET_LEDGER_AND_SCHEDULING.md`](./FLEET_LEDGER_AND_SCHEDULING.md)。
