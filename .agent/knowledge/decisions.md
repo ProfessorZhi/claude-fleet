@@ -413,6 +413,126 @@ legacy pixel-agents entry 并替换为 claude-fleet 路径，保留用户其他 
 - 剩余 `.pixel-agents` 命中仅限：attribution / 迁移代码 / legacy 兼容 /
   globalState 旧 key 读取。
 
+---
+
+## ADR-009: Runtime / Resource / Observability / SCM / Strategy 分离
+
+### Status
+
+Accepted（2026-08-09，目标架构）
+
+### Context
+
+Fleet 将从 Claude Code 扩展到 Codex CLI，并预留 Gemini CLI、OpenCode、Qoder CLI 与自定义 Runtime。与此同时，Claude Code 可以使用 DeepSeek、MiniMax 等不同资源账户；PR 信息又来自 Git/SCM，而不是 Runtime 本身。
+
+如果所有逻辑都放进一个 Agent Adapter，新增 Runtime 或 Provider 时会同时污染生命周期、计费、PR、策略和前端。
+
+### Decision
+
+长期扩展点拆分为：
+
+```text
+RuntimeAdapter       → CLI lifecycle / session / runtime events
+ResourceAdapter      → token / cost / quota / subscription
+ObservabilityAdapter → external measurement / telemetry source
+SCMAdapter           → GitHub / GitLab / local Git
+StrategyAdapter      → assignment / recommendation policy
+```
+
+核心 Domain 只依赖统一模型，不允许 vendor-specific `if runtime/provider === ...` 散落。
+
+### Consequences
+
+- `Claude Code + MiniMax` 与 `Claude Code + DeepSeek` 可共享同一个 RuntimeAdapter，但使用不同 ResourceAccount / ResourceAdapter。
+- PR/CI/Review 信息进入 SCM Adapter，不塞进 Claude/Codex runtime parser。
+- 新增 Runtime 不应该要求重写 Mission、Ledger、Metrics、Strategy 和前端。
+
+---
+
+## ADR-010: Telemetry ≠ Ledger；Token ≠ Cost ≠ Quota
+
+### Status
+
+Accepted（2026-08-09，目标架构）
+
+### Context
+
+Fleet 不只需要实时显示 Agent 状态，还要长期评估 Session、Task、PR 的时间、Token、费用、额度和质量。不同资源模式包括按量 API、Token Plan、Credit、Plus/Pro/Subscription，不能统一为一个虚假的“剩余百分比”。
+
+### Decision
+
+建立两套数据边界：
+
+```text
+FleetTelemetryStore → bounded realtime state
+Fleet Ledger         → durable work metadata
+```
+
+并把资源维度明确拆成：
+
+```text
+Token Usage
+Estimated / Actual Cost
+Quota / Plan / Subscription Snapshot
+```
+
+所有数据必须带来源；可靠来源缺失时使用 `unknown/unavailable`，不猜。
+
+### Consequences
+
+- DeepSeek 等按量 API 可以有 estimated/actual cost；
+- MiniMax 等 Token Plan 可以有 quota snapshot；
+- Plus/Pro/Subscription 只有官方/Runtime 可靠暴露时才显示剩余额度；
+- Ledger 默认不保存完整 Prompt / Transcript / Secret，只记录 Mission/Task/Session/PR/Usage/Quality/Decision 元信息。
+
+---
+
+## ADR-011: Coordinator 的自动 Launch / Assign 必须经过 Fleet Policy
+
+### Status
+
+Accepted（2026-08-09，目标架构）
+
+### Context
+
+目标工作流允许用户给出 Task List、依赖、能力要求、预算和规则，然后由 Coordinator 根据 Agent 能力、历史质量、时间成本、Token/API 成本、当前负载和剩余额度决定是否使用现有 Agent 或新开 Agent。
+
+如果 Coordinator 可以绕开 Fleet 直接无限 spawn，会造成费用失控、资源耗尽、同 checkout 冲突和不可审计的任务分配。
+
+### Decision
+
+Coordinator 只能通过 Fleet Control API / MCP 请求控制动作，并受以下权限模式约束：
+
+```text
+observe
+suggest
+approve
+autonomous
+```
+
+默认从 `suggest / approve` 开始。`autonomous` 必须有硬 Guardrails：
+
+```text
+max concurrent agents
+max agents per mission
+metered API budget
+quota reserve
+allowed runtime/provider/model
+allowed repos
+worktree isolation
+review-before-merge
+approval for destructive actions
+```
+
+每次 Assignment / Launch 决策写入 `AssignmentDecision`，保存 selected target、候选、理由、估算成本/耗时和执行模式。
+
+### Consequences
+
+- Recommendation 与 Execution 分离；
+- Strategy 可以建议“再开一个 MiniMax-backed Claude Code Worker”，但是否直接执行取决于 Mission Policy；
+- Unknown quota 不等于 unlimited；
+- 所有自动调度可以回溯并评估推荐是否有效。
+
 <!-- 新 ADR 追加在下方。 -->
 
 ## ADR-009: agentmetrics 合并进 Claude Fleet 单仓库

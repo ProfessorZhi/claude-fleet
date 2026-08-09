@@ -1,826 +1,707 @@
-# FLEET_LEDGER_AND_SCHEDULING.md — Agent Fleet
+# Fleet Ledger & Scheduling Architecture
 
-This document defines the durable evidence and decision layer for Agent Fleet. It is a target
-architecture for local-first coordination; it does not implement a database, scheduler, or
-autonomous dispatch loop by itself.
-
----
-
-## 1. Purpose
-
-Agent Fleet needs more than a live status panel. It needs to answer, after a Mission finishes:
-
-- what was requested;
-- which WorkItems were assigned;
-- which native runtime, ProviderProfile, Model, host, workspace, worktree, terminal, and
-  Session executed them;
-- how long the work took;
-- how many tokens were observed;
-- what cost or quota evidence exists;
-- what tests, reviews, PRs, and quality signals resulted;
-- why an assignment was selected;
-- whether the original estimate was accurate;
-- whether a new instance should have been recommended.
-
-The data flow is:
-
-```text
-native signals
-  -> FleetEvent
-  -> FleetTelemetryStore
-  -> Fleet Ledger
-  -> Metrics / Performance Profiles
-  -> Strategy Recommendation
-  -> policy-controlled execution
-```
-
-The layers are intentionally separate:
-
-- Telemetry: current and recent observable state.
-- Ledger: durable records and evidence references.
-- Metrics: derived measurements.
-- Strategy: explainable recommendations.
-- Execution: a separate Control API and FleetRuntimeHost operation.
+> 本文定义 Claude Fleet / future Agent Fleet 的长期工作记录、资源/额度建模、效率指标、推荐与调度边界。
+> 它是 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 的专项设计文档。
 
 ---
 
-## 2. Core identity
+## 1. 目标
 
-### 2.1 Mission
+Agent Fleet 不只回答“现在谁在工作”，还要回答：
 
-Mission is the top-level unit of work. It may span repositories, hosts, runtimes, Sessions,
-WorkItems, Pull Requests, and review cycles.
+- 过去每个 Agent 做过哪些任务、提交了哪些 PR；
+- 每个任务/PR 花了多少时间；
+- 消耗了多少 Token、API 成本或订阅额度；
+- PR 质量如何、返工多少、CI/Review 表现如何；
+- 哪个 Agent / Runtime / Provider 更适合下一项任务；
+- 当前资源是否足够，是否应该新开一个 Agent；
+- Coordinator 在用户授权范围内，能否直接启动新的 Worker 并分配任务。
 
-A Mission should identify:
-
-```text
-missionId
-title
-objective
-requester
-coordinatorRef
-repoScope
-createdAt
-startedAt
-completedAt
-status
-policyMode
-budget
-reviewPolicy
-resultSummary
-```
-
-A Mission is not a single CLI session. One Mission may contain a managed Claude Code
-Coordinator, a Codex CLI reviewer, several Claude workers, and external evidence.
-
-### 2.2 WorkItem
-
-A WorkItem is a bounded assignment within a Mission:
+因此分为四个明确层次：
 
 ```text
-workItemId
-missionId
-parentWorkItemId
-title
-objective
-inputs
-acceptanceCriteria
-dependencies
-repo
-branch
-worktree
-allowedRuntimeTypes
-allowedRoles
-providerModelConstraints
-budgetConstraints
-reviewPolicy
-assignedInstanceId
-status
-createdAt
-startedAt
-completedAt
-resultReferences
+Telemetry  →  现在发生什么
+Ledger     →  历史发生过什么
+Metrics    →  谁更快 / 更省 / 质量更好
+Strategy   →  下一步任务应该给谁、是否应该新开 Agent
 ```
-
-WorkItems should be small enough to review and independently retry. A new runtime should be
-requested through a new AssignmentDecision rather than silently expanding an existing WorkItem.
-
-### 2.3 FleetInstance and Session
-
-FleetInstance is the managed identity of a native runtime process/session binding. Session is the
-native runtime conversation identity. They are related but not interchangeable.
-
-An Instance record should preserve:
-
-```text
-instanceId
-runtimeType
-role
-managedByFleet
-missionId
-workItemId
-sessionId
-providerProfileId
-providerDisplayName
-modelId
-status
-parentAgentId
-leadAgentId
-hostId
-workspaceId
-repo
-worktree
-branch
-terminalId
-terminalName
-launchSource
-requestedBy
-createdAt
-lastActivityAt
-endedAt
-```
-
-Runtime is not Role. A Claude Code CLI or Codex CLI instance may be a coordinator, worker,
-reviewer, debugger, or researcher according to the Mission and policy.
-
-### 2.4 Host, workspace, and terminal identity
-
-A Ledger record must distinguish where the runtime is managed:
-
-```text
-FleetHost
-  hostId, hostType, hostDisplayName, controllerVersion
-
-WorkspaceHost
-  workspaceId, hostId, workspacePath, repo, worktree, branch
-
-Terminal
-  terminalId, terminalName, terminalKind, ownerInstanceId
-
-Launch metadata
-  launchSource, requestedBy, policyMode, controlRequestId
-```
-
-The preferred execution surface is the VS Code Integrated Terminal. Terminal identity is not
-just a display label; it is needed to route Focus Terminal, detect duplicate launches, diagnose
-host failures, and explain how a Session was created.
-
-launchSource examples include Fleet UI, Control API, MCP, external adoption, restart, resume,
-or manual discovery. requestedBy identifies the Coordinator, user, or system policy that
-requested the action. These values must not contain secrets.
 
 ---
 
-## 3. Ledger records
+## 2. Fleet Ledger：长期元信息账本
 
-The first local implementation may use a file-backed or in-memory boundary, but the logical
-records are stable.
+Fleet Ledger 是本地、结构化、可查询的长期工作记录。
 
-### 3.1 MissionRecord
+默认只保存元信息，不保存完整 Prompt、完整聊天 Transcript 或 Secret。
+
+建议一等记录：
 
 ```text
 MissionRecord
-  missionId
-  objective
-  coordinatorRef
-  policyMode
-  status
-  timestamps
-  budget
-  repoScope
-  resultSummary
-```
-
-### 3.2 WorkItemRecord
-
-```text
 WorkItemRecord
-  workItemId
-  missionId
-  assignment
-  acceptanceCriteria
-  dependencyIds
-  estimated
-  actual
-  status
-  resultReferences
-```
-
-### 3.3 SessionRecord
-
-```text
 SessionRecord
-  sessionId
-  instanceId
-  runtimeType
-  role
-  managedByFleet
-  providerProfileId
-  modelId
-  hostId
-  workspaceId
-  repo
-  worktree
-  terminalId
-  launchSource
-  requestedBy
-  startedAt
-  endedAt
-  resumeCount
-  status
-```
-
-### 3.4 LaunchRecord
-
-LaunchRecord makes process creation auditable without storing a transcript:
-
-```text
-LaunchRecord
-  controlRequestId
-  missionId
-  workItemId
-  instanceId
-  sessionId
-  runtimeType
-  role
-  hostId
-  workspaceId
-  terminalId
-  launchSource
-  requestedBy
-  policyMode
-  providerProfileId
-  modelId
-  decisionId
-  createdAt
-  outcome
-  error
-```
-
-### 3.5 PullRequestRecord
-
-```text
 PullRequestRecord
-  pullRequestId
-  missionId
-  workItemIds
-  repo
-  branch
-  baseBranch
-  commitIds
-  reviewStatus
-  checks
-  mergeStatus
-  createdAt
-  mergedAt
-```
-
-Automatic merge is not implied. Merge status is evidence for review and policy.
-
-### 3.6 UsageRecord
-
-UsageRecord captures a real usage observation:
-
-```text
 UsageRecord
-  usageId
-  missionId
-  workItemId
-  instanceId
-  sessionId
-  resourceAccountId
-  runtimeType
-  providerProfileId
-  modelId
-  source
-  inputTokens
-  cachedInputTokens
-  outputTokens
-  totalTokens
-  durationMs
-  costAmount
-  costCurrency
-  quotaUnits
-  observedAt
-  availability
-  confidence
-  estimateOrActual
-  evidenceRef
-```
-
-A record may contain only a subset of fields. Missing values are unavailable. Never derive a
-cost or quota value merely because token counts or a model name exist.
-
-### 3.7 QuotaSnapshot
-
-```text
 QuotaSnapshot
-  quotaSnapshotId
-  resourceAccountId
-  provider
-  plan
-  window
-  limit
-  remaining
-  resetAt
-  used
-  unit
-  source
-  availability
-  confidence
-  observedAt
-```
-
-Subscription quota, metered API cost, token-based credits, and local capacity are different
-resources. Do not combine them into one percentage without a defined ResourceAdapter.
-
-### 3.8 QualitySignal
-
-Quality is evidence, not a single subjective score:
-
-```text
 QualitySignal
-  qualityId
-  missionId
-  workItemId
-  instanceId
-  source
-  signalType
-  value
-  confidence
-  evidenceRef
-  observedAt
-```
-
-Examples:
-
-- acceptance criteria passed;
-- tests passed or failed;
-- review finding count and severity;
-- regression introduced;
-- rework required;
-- PR accepted, rejected, or merged;
-- user correction required;
-- behavior remained within scope.
-
-### 3.9 AssignmentDecision
-
-Every assignment or recommendation should be explainable:
-
-```text
 AssignmentDecision
-  decisionId
-  missionId
-  workItemId
-  requestedBy
-  decidedBy
-  mode
-  selectedInstanceId
-  proposedLaunch
-  candidates
-  factors
-  constraints
-  expected
-  actual
-  decision
-  createdAt
-  completedAt
-```
-
-decision may be recommend, approved, rejected, deferred, executed, failed, or cancelled.
-proposedLaunch may contain a RuntimeAdapter, role, provider/model, host, workspace, worktree,
-terminal, and budget template for a new instance. It is not itself a launch command.
-
----
-
-## 4. Time and performance measurements
-
-Keep at least these time dimensions separate:
-
-```text
-queueTime
-startupTime
-activeTime
-waitingTime
-blockedTime
-reviewTime
-reworkTime
-wallClockTime
-```
-
-A worker may have high wall-clock time but low active time because it was waiting for a user,
-quota window, test environment, or another WorkItem. Strategy must not treat all elapsed time
-as model speed.
-
-Where possible, record estimated and actual values:
-
-```text
-Estimated:
-  expectedActiveMs
-  expectedWallClockMs
-  expectedTokens
-  expectedCost
-  expectedQuotaUnits
-
-Actual:
-  activeMs
-  wallClockMs
-  totalTokens
-  costAmount
-  quotaUnits
-```
-
-This supports strategy accuracy:
-
-```text
-timeAccuracy = compare(expectedTime, actualTime)
-tokenAccuracy = compare(expectedTokens, actualTokens)
-costAccuracy = compare(expectedCost, actualCost)
-quotaAccuracy = compare(expectedQuota, actualQuota)
-qualityAccuracy = compare(expectedQuality, observedQuality)
-```
-
-Accuracy metrics must include source and confidence. A missing actual value cannot be scored as
-zero.
-
----
-
-## 5. Token, Cost, Quota, and ResourceAccount
-
-### Token
-
-Token is model input/output accounting when a native signal exposes it. Cached input tokens
-should remain distinguishable when available.
-
-### Cost
-
-Cost is billed or estimated monetary amount. API-equivalent cost may be useful for comparison,
-but it must be labeled as estimated or equivalent rather than confused with a subscription bill.
-
-### Quota
-
-Quota is a provider, plan, credit, rate-limit, or capacity constraint. It may be a rolling
-window, weekly budget, subscription limit, or local concurrency reserve.
-
-### ResourceAccount
-
-ResourceAccount identifies the resource authority used by an instance:
-
-```text
-ResourceAccount
-  resourceAccountId
-  provider
-  accountType
-  profileId
-  plan
-  currency
-  quotaPolicy
-  costPolicy
-  privacyClass
-  enabled
-```
-
-ResourceAdapter is responsible for obtaining evidence. Examples:
-
-- metered API account;
-- token/credit plan;
-- Claude subscription usage if a reliable source exists;
-- local capacity/concurrency;
-- optional Cockpit or other external quota source, if explicitly selected later.
-
-The Ledger stores source, timestamp, availability, confidence, and estimateOrActual. It never
-stores API keys, authorization headers, SecretStorage values, complete environment variables,
-or raw credentials.
-
----
-
-## 6. Agent performance profile
-
-A performance profile is a derived view, not a second source of truth:
-
-```text
 AgentPerformanceAggregate
-  profileId
-  runtimeType
-  providerProfileId
-  modelId
-  role
-  sampleCount
-  capabilityEvidence
-  medianActiveTime
-  medianWallClockTime
-  qualityRate
-  reviewReworkRate
-  tokenEfficiency
-  costEfficiency
-  quotaEfficiency
-  contextPressure
-  failureRate
-  strategyAccuracy
-  confidence
-  updatedAt
 ```
 
-The profile may be keyed by runtime, provider, model, role, or a controlled combination. It must
-not claim that one agent is universally better from a small or biased sample.
+### WorkItemRecord
 
-Performance input should distinguish:
+```ts
+interface WorkItemRecord {
+  id: string;
+  missionId: string;
+  title: string;
+  status: 'pending' | 'running' | 'review' | 'done' | 'failed' | 'cancelled';
+  assignedInstanceId?: string;
+  requiredCapabilities?: string[];
+  priority?: number;
+  dependsOn?: string[];
 
-- what the agent can do;
-- how quickly it did it;
-- how much it consumed;
-- how often it required rework;
-- how reviewers evaluated the result;
-- how much confidence the evidence deserves.
+  assignedAt?: string;
+  startedAt?: string;
+  firstEditAt?: string;
+  firstCommitAt?: string;
+  completedAt?: string;
+}
+```
+
+### PullRequestRecord
+
+```ts
+interface PullRequestRecord {
+  id: string;
+  missionId?: string;
+  workItemId?: string;
+  instanceId?: string;
+
+  repository: string;
+  number?: number;
+  branch?: string;
+  url?: string;
+
+  openedAt?: string;
+  reviewStartedAt?: string;
+  approvedAt?: string;
+  mergedAt?: string;
+  closedAt?: string;
+
+  commitCount?: number;
+  filesChanged?: number;
+  additions?: number;
+  deletions?: number;
+
+  ciRuns?: number;
+  ciFailures?: number;
+  reviewRounds?: number;
+  reviewFindingCount?: number;
+  reworkCount?: number;
+
+  outcome?: 'merged' | 'closed' | 'rejected' | 'reverted' | 'open';
+}
+```
+
+Ledger 应允许从 Git / GitHub / GitLab 等 SCM Adapter 补充这些字段，而不是让 Runtime Adapter 自己理解 PR。
 
 ---
 
-## 7. Strategy and recommendation
+## 3. 时间指标
 
-StrategyAdapter consumes evidence and policy. It does not own process creation.
-
-Inputs include:
+Fleet 需要区分：
 
 ```text
-Mission objective and constraints
-WorkItem dependencies and acceptance criteria
-runtime capabilities
-role fit
-historical quality
-time and queue pressure
-token and context pressure
-cost and quota
-current load and concurrency
-provider/model availability
-host/workspace/worktree risk
-review and merge policy
-user preference
+Wall-clock time
+Agent active time
+Waiting time
+Review time
+PR cycle time
 ```
 
-The result should contain:
+可派生指标包括：
 
 ```text
-Recommendation
-  recommendationId
-  workItemId
-  selectedCandidate
-  alternatives
-  proposedLaunchTemplate
-  expectedTime
-  expectedQuality
-  expectedTokens
-  expectedCost
-  expectedQuota
-  factors
-  constraints
-  confidence
-  expiresAt
+Time to first tool
+Time to first edit
+Time to first commit
+Time to PR
+Time to CI green
+Time to review
+Time to merge
+Total work-item cycle time
 ```
 
-A recommendation may say:
+并行 Mission 还可以计算：
 
 ```text
-Reuse instance A
-Start a new Claude Code instance with profile P
-Start a new Codex CLI reviewer
-Delay until quota window reset
-Split WorkItem into two isolated worktrees
-Require human approval
+Total Agent Time
+Wall Clock Time
+Parallelism / Parallel Gain
 ```
 
-A launch template is data, not a direct shell command:
-
-```text
-LaunchTemplate
-  runtimeType
-  role
-  providerProfileId
-  modelId
-  resourceAccountId
-  hostId
-  workspaceId
-  repo
-  worktree
-  terminalPolicy
-  sessionMode
-  budget
-  reviewPolicy
-```
-
-Strategy should account for an overloaded or context-heavy instance. Starting another instance
-can be better than extending a degraded Session, but only when concurrency, quota, worktree,
-review, and budget policy permit it.
-
-Strategy accuracy is evaluated later against the actual Ledger records. A recommendation that
-was not executed must not be scored as an execution failure.
+所有指标都必须有真实时间戳来源；没有可靠信号时显示 unavailable。
 
 ---
 
-## 8. Control modes and scheduling guardrails
+## 4. Token、Cost 与 Quota 必须分开
 
-The control plane supports four conceptual modes:
+不同 Provider / Account 的资源模式不同，不能用一个 `remainingPercent` 粗暴统一。
 
-```text
-observe
-  collect/display only
+统一抽象建议：
 
-suggest
-  recommend but never execute
+```ts
+interface UsageRecord {
+  instanceId: string;
+  sessionId?: string;
+  runtimeType: string;
+  resourceAccountId?: string;
+  modelId?: string;
 
-approve
-  execute after explicit approval
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  reasoningTokens?: number;
 
-autonomous
-  execute within an approved policy envelope
+  estimatedCost?: number;
+  actualCost?: number;
+  currency?: string;
+  source: 'runtime' | 'provider-api' | 'derived' | 'manual';
+}
 ```
 
-The default is suggest or approve.
+### 4.1 Metered API
 
-### Coordinator resource directives
+例如按量 API 类资源账户。
 
-The primary Coordinator may issue a time-bounded resource directive when the
-user deliberately changes the optimization objective. Examples include:
-
-- a Codex or Claude quota window is close to reset, so throughput may be
-  increased for approved work;
-- a provider/model price changes, so that provider should be throttled or
-  avoided;
-- a model has temporary capacity, so the StrategyAdapter may prefer it while
-  still respecting role, quality, review, and worktree constraints.
-
-These are policy inputs, not hidden instructions injected into a runtime. A
-directive must identify its requester, target runtime/provider/model/resource
-account, objective, priority, reason, and expiry. It is evaluated together
-with current quota, cost, quality, concurrency, context, and repository risk.
-It may change a recommendation or an approved policy envelope, but it cannot
-silently bypass approval, launch an unregistered runtime, or fabricate quota.
-
-Conceptually:
+Fleet 可以记录：
 
 ```text
-Coordinator message
-  -> ResourceDirective
-  -> StrategyAdapter evaluates candidates
-  -> recommendation / policy patch
-  -> approve or bounded autonomous execution
-  -> Ledger records directive, decision, and actual outcome
+Token usage
+Estimated cost
+Actual billed cost（如果 Provider API 可靠提供）
+Budget remaining
 ```
 
-The current implementation now includes a runtime-neutral `ResourceDirective`,
-an in-memory `FleetStrategyAdapter`, and a `recommend_assignment` Control API
-action. This slice ranks eligible existing instances, can propose a compatible
-new launch template, records the recommendation in the Ledger, and never starts
-a process. Durable directive history, provider-specific ResourceAdapters,
-strategy accuracy evaluation, and autonomous scheduling remain deferred.
+`estimatedCost` 与 `actualCost` 必须分开。
 
-Autonomous mode is not a general “let agents do anything” switch. It requires:
-
-- maximum concurrent instances;
-- token, cost, and wall-clock budget;
-- quota reserve and reset behavior;
-- approved runtime/provider/model/resource account;
-- allowed host, workspace, repository, branch, and worktree rules;
-- required tests and review policy;
-- stop conditions for errors, budget exhaustion, quota exhaustion, or repeated rework;
-- audit of requestedBy, decidedBy, launchSource, and policy decision;
-- a clear cancellation and recovery path.
-
-A scheduler, when eventually implemented, should operate on WorkItems and AssignmentDecisions.
-It should not inspect animation or guess progress from file timestamps.
-
-The first scheduling loop should be bounded and explainable:
+如果只有 Token 和价格表：
 
 ```text
-load Mission / WorkItems
-  -> read current Telemetry
-  -> read Ledger history and ResourceAccounts
-  -> produce Recommendation
-  -> request approval or apply an approved policy
-  -> launch through Fleet Control API / FleetRuntimeHost
-  -> observe FleetEvents
-  -> record actual outcome
-  -> compare estimate versus actual
+source = derived
 ```
 
-This is a target flow, not an implementation claim.
+如果 Provider 官方接口返回真实费用：
+
+```text
+source = provider-api
+```
+
+### 4.2 Token Plan / Credit Plan
+
+某些 Provider 不是纯按量费用，而是 Token Plan / Credit Plan / 周期额度。
+
+统一为：
+
+```ts
+interface QuotaSnapshot {
+  resourceAccountId: string;
+  kind: 'token-plan' | 'subscription' | 'credit' | 'rate-limit' | 'budget' | 'unknown';
+
+  used?: number;
+  remaining?: number;
+  limit?: number;
+  unit?: 'tokens' | 'credits' | 'requests' | 'currency' | 'percent';
+
+  usedPercent?: number;
+  remainingPercent?: number;
+  resetAt?: string;
+  window?: string;
+
+  source: 'provider-api' | 'runtime' | 'manual' | 'derived';
+  capturedAt: string;
+  confidence: 'authoritative' | 'estimated' | 'manual';
+}
+```
+
+例如 MiniMax Token Plan 可以通过对应 Resource Adapter 提供额度信息；拿不到可靠信息时就显示 unavailable，不猜。
+
+### 4.3 Plus / Pro / Subscription
+
+Plus / Pro 等订阅制使用上限可能不是简单 Token Billing。
+
+原则：
+
+- 官方 / Runtime 能可靠给出剩余额度或百分比时才记录；
+- 无可靠接口时显示 unknown / unavailable；
+- 不允许仅根据已用 Token 伪造“剩余 37%”；
+- Subscription quota 与 API cost 是两套不同指标。
 
 ---
 
-## 9. Adapter boundaries
+## 5. ResourceAccount：把资源与 Runtime 解耦
 
-Keep adapter families independent:
+Runtime 和计费资源不是同一概念。
+
+例如：
+
+```text
+Claude Code Runtime + DeepSeek API profile
+Claude Code Runtime + MiniMax Token Plan profile
+Codex CLI Runtime + subscription/account
+```
+
+因此建议增加：
+
+```ts
+interface ResourceAccount {
+  id: string;
+  displayName: string;
+  ownerType: 'runtime-account' | 'provider-profile' | 'custom';
+  ownerRef: string;
+  billingMode: 'metered-api' | 'token-plan' | 'subscription' | 'credit' | 'unknown';
+  enabled: boolean;
+}
+```
+
+Resource Adapter 负责：
+
+```text
+readUsage()
+readQuota()
+estimateCost()
+```
+
+不要把 DeepSeek / MiniMax / Subscription 判断散落在 Strategy Engine 内。
+
+---
+
+## 6. Quality：质量必须可解释
+
+Fleet 不应让模型凭感觉给 PR 打一个神秘分数。
+
+Quality 由可解释 Signal 组成：
+
+```text
+CI first-pass result
+Tests added / changed
+Review finding count
+Review severity
+Review rounds
+Rework count
+Regression introduced
+PR merged / rejected / reverted
+Human rating
+Coordinator rating
+```
+
+可以存在可选 Composite Score，但必须保留 breakdown：
+
+```text
+Quality 86/100
++ CI passed first attempt
++ Review approved
++ Tests added
+- 2 minor findings
+- 1 follow-up fix
+```
+
+历史比较优先使用原始指标，不依赖单个总分。
+
+---
+
+## 7. Agent Performance Profile
+
+Metrics Engine 可以从 Ledger 聚合每个 Runtime / Model / Provider / Agent Template 的历史表现：
+
+```text
+Task count
+PR count
+Merge rate
+First-pass CI rate
+First-pass review rate
+Median task time
+Median time-to-PR
+Median PR cycle time
+Median token usage
+Median API cost
+Rework rate
+Failure rate
+Capability-specific history
+```
+
+需要按任务类型 / capability 分桶，避免“前端做得快”被错误推导成“任何任务都快”。
+
+---
+
+## 8. Strategy Engine：决策层输入
+
+Strategy Engine 不是单纯比较模型排行榜。
+
+对一个 Work Item 的候选对象，至少考虑：
+
+```text
+Capability match
+Historical task quality
+Historical speed
+Estimated wall-clock time
+Estimated token usage
+Estimated API cost
+Current workload
+Current context headroom
+Remaining quota / budget
+Quota reset time
+Provider / Runtime availability
+Repo / Worktree conflict risk
+User policy
+Task priority / deadline
+```
+
+候选不仅可以是“现有 Agent”，还可以是“新建一个 Agent 的 Launch Template”。
+
+例如：
+
+```text
+Candidate A
+Existing Claude #2 / DeepSeek
+
+Candidate B
+Launch new Claude Code / MiniMax profile
+
+Candidate C
+Existing Codex #1
+```
+
+这允许 Recommendation Engine 给出：
+
+> 建议再开一个 MiniMax-backed Claude Code Worker：当前 Claude #2 正忙，MiniMax 额度充足，历史同类前端任务中位耗时更短，且不会增加按量 API 成本。
+
+必须同时展示依据和不确定性。
+
+---
+
+## 9. Recommendation Panel
+
+Fleet UI 应有独立建议栏，而不是把策略藏在后台。
+
+示例：
+
+```text
+SUGGESTIONS
+
+Launch Claude Worker · MiniMax
+Reason:
+- 2 independent tasks are ready
+- existing workers are busy
+- MiniMax quota is healthy
+- similar tasks historically complete faster
+
+Expected:
+- ~18–25 min
+- subscription/token-plan usage
+- no DeepSeek API spend
+
+[Launch] [Dismiss] [Details]
+```
+
+也可以建议：
+
+```text
+Use existing Codex Reviewer
+Delay low-priority task until quota reset
+Switch new worker from DeepSeek to MiniMax
+Do not parallelize: same checkout conflict
+Stop idle Agent
+```
+
+Recommendation 不是强制执行。
+
+---
+
+## 10. Coordinator 是否可以自己开启 Agent
+
+可以，但必须通过 Fleet Control Plane，并受 Policy 约束。
+
+建议四种权限模式：
+
+```text
+observe       只能读状态 / Ledger
+suggest       可以生成建议，但不能执行
+approve       可以请求 launch / assign，用户确认后执行
+autonomous    在用户预先定义的边界内直接执行
+```
+
+默认建议：
+
+```text
+suggest 或 approve
+```
+
+`autonomous` 只有在用户明确配置预算和规则后启用。
+
+Coordinator 不直接自己 `spawn` 随意进程；它调用 Fleet 的统一 Control API / MCP：
+
+```text
+fleet.list_candidates()
+fleet.get_resource_status()
+fleet.recommend_assignment()
+fleet.launch_instance()
+fleet.assign_work_item()
+fleet.stop_instance()
+fleet.get_metrics()
+```
+
+这样所有自动启动都有统一 Ledger、预算和审计记录。
+
+---
+
+## 11. 只给任务清单和规则，能否让主线程自己调度
+
+目标上可以。
+
+用户提供：
+
+```text
+Task List
++ Dependencies
++ Capabilities
++ Priority
++ Resource / Cost Rules
++ Concurrency Rules
++ Approval Policy
+```
+
+Coordinator 可以循环：
+
+```text
+Read ready tasks
+→ query Fleet candidates/resources
+→ select existing instance or launch template
+→ assign task
+→ observe status / PR / metrics
+→ review results
+→ update task state
+→ repeat
+```
+
+建议任务策略文件概念：
+
+```yaml
+mission:
+  max_concurrent_agents: 4
+  coordinator_mode: approve
+
+resources:
+  max_metered_api_cost_usd: 10
+  reserve_quota_percent: 15
+
+allowed:
+  runtimes: [claude-code, codex-cli]
+  provider_profiles: [deepseek-main, minimax-main]
+
+git:
+  require_separate_worktree_for_parallel_writers: true
+
+review:
+  require_review_before_merge: true
+```
+
+这只是目标 Schema 示例；具体字段由后续 Spec 定义。
+
+---
+
+## 12. Guardrails：防止自动 Agent 无限扩张
+
+自动调度必须有硬边界：
+
+```text
+max concurrent agents
+max agents per mission
+metered API budget
+quota reserve
+allowed runtime / provider / model
+allowed repos
+allowed commands / actions
+worktree isolation
+require review before merge
+require approval for destructive actions
+```
+
+如果资源数据未知：
+
+```text
+unknown quota != unlimited quota
+```
+
+Strategy 必须保守处理未知资源。
+
+---
+
+## 13. AssignmentDecision 也要进入 Ledger
+
+每次人工或自动任务分配都记录简要决策元信息：
+
+```ts
+interface AssignmentDecision {
+  id: string;
+  missionId: string;
+  workItemId: string;
+  selectedTarget: string;
+  mode: 'manual' | 'recommended' | 'coordinator-auto';
+  consideredTargets?: string[];
+  reasons: string[];
+  estimatedCost?: number;
+  estimatedDurationMs?: number;
+  createdAt: string;
+}
+```
+
+这样后面可以评估：
+
+```text
+推荐是否准确
+自动分配是否真的更快
+是否因为省 Token 导致更多返工
+哪个 Strategy 更适合当前项目
+```
+
+---
+
+## 14. Adapter 架构
+
+为长期扩展到 Gemini CLI、OpenCode、Qoder CLI、自定义 Agent，扩展点拆成：
 
 ```text
 RuntimeAdapter
-  launches, resumes, stops, focuses, discovers, and normalizes a native runtime
+  Claude Code / Codex / Gemini CLI / OpenCode / Qoder / Custom
 
 ResourceAdapter
-  reads account, usage, cost, quota, capacity, and rate-limit evidence
+  metered API / token plan / subscription / custom account
 
 ObservabilityAdapter
-  converts hooks, JSONL, traces, and external metrics to FleetEvent
+  runtime events / external observability tools
 
 SCMAdapter
-  reads repo, worktree, branch, commit, diff, PR, review, and merge evidence
+  GitHub / GitLab / local Git / future SCM
 
 StrategyAdapter
-  scores candidates, explains recommendations, and evaluates strategy accuracy
+  balanced / speed / quality / cost / custom
 ```
 
-An external observability or quota tool must be integrated through an adapter. Do not make the
-UI or Ledger depend on a vendor-specific schema.
-
----
-
-## 10. Telemetry versus Ledger
-
-Telemetry is bounded and live:
+核心 Domain 不允许出现：
 
 ```text
-FleetEvent
-  -> FleetTelemetryStore
-  -> InstanceSnapshot
-  -> recent events
-  -> Scene Model
+if runtime === claude ...
+if provider === minimax ...
 ```
 
-Ledger is durable and historical:
+这类 vendor-specific 逻辑应被 Adapter 吸收。
+
+---
+
+## 15. 建议的最终数据流
 
 ```text
-FleetEvent / runtime metadata / ResourceAdapter / SCMAdapter / review evidence
-  -> normalized records
-  -> Mission / WorkItem / Session / Usage / Quality / Assignment history
+Claude / Codex / Gemini / OpenCode / Qoder / Custom
+                         │
+                   RuntimeAdapter
+                         │
+                         ▼
+                    FleetEvent
+                         │
+             ┌───────────┴────────────┐
+             ▼                        ▼
+      FleetTelemetryStore         Fleet Ledger
+        realtime state           durable metadata
+             │                        │
+             └───────────┬────────────┘
+                         ▼
+                    Metrics Engine
+                         │
+          Resource / SCM / Quality Signals
+                         │
+                         ▼
+                    Strategy Engine
+                         │
+             ┌───────────┴───────────┐
+             ▼                       ▼
+     Recommendation Panel       Coordinator API/MCP
+                                     │
+                                     ▼
+                           Launch / Assign / Stop
 ```
 
-Telemetry may be discarded or compacted. Ledger records need retention and privacy policy.
-Neither layer should store a full transcript by default.
+---
+
+## 16. Privacy / Storage
+
+默认长期保存：
+
+```text
+IDs
+Runtime / model / provider display metadata
+Task metadata
+timestamps
+Token / cost / quota snapshots
+Git commit / PR metadata
+CI / review outcome
+quality signals
+assignment decisions
+```
+
+默认不保存：
+
+```text
+API keys
+Auth tokens
+SecretStorage values
+full environment
+full prompts
+full conversations
+full source files
+```
+
+原生 Session / Transcript 仍由对应 Runtime 管理。
+
+Ledger 的具体持久化实现（JSON / SQLite / other local store）由后续实现 Spec 决定，但 Domain API 必须先与存储实现解耦。
 
 ---
 
-## 11. Privacy and storage
+## 17. 开发顺序
 
-Local-first storage should be sufficient for the first implementation.
+不要一次做全自动调度。
 
-Persist:
+建议顺序：
 
-- stable IDs;
-- timestamps;
-- runtime/provider/model display metadata;
-- repo/worktree/host/workspace/terminal identity;
-- safe status, error, usage, quality, and assignment evidence;
-- source, confidence, and estimate/actual markers;
-- references to commits, tests, PRs, and external evidence.
+```text
+1. FleetEvent / Telemetry
+2. Fleet Ledger 元信息
+3. Usage / ResourceAccount / QuotaSnapshot
+4. Git / PR / CI metrics
+5. Metrics Engine
+6. Recommendation Panel（只建议）
+7. Mission task list + policy
+8. Fleet Control API / MCP
+9. Coordinator approve-mode launch / assign
+10. bounded autonomous scheduling
+11. Strategy plugins / historical optimization
+```
 
-Do not persist by default:
-
-- API keys;
-- OAuth or auth tokens;
-- SecretStorage values;
-- Authorization headers;
-- complete environment variables;
-- full prompts or transcripts;
-- unrelated user files;
-- raw provider responses containing credentials.
-
-Retention, redaction, and export rules should be explicit before a cloud sync or shared service is
-considered.
+先记录事实，再做推荐；先做推荐，再做自动执行。
 
 ---
 
-## 12. Development order
+## 18. 核心原则
 
-Implement in this order:
-
-1. stabilize ClaudeCodeRuntimeAdapter and executable resolution;
-2. finish runtime-neutral FleetInstance, Mission, WorkItem, Role, and host identities;
-3. implement FleetRuntimeHost and VS Code terminal ownership;
-4. normalize Claude and then Codex events through FleetEvent;
-5. add CodexRuntimeAdapter;
-6. add Mission/WorkItem Control API extension point;
-7. add local Ledger records and ResourceAdapters;
-8. add SCM/PR and quality evidence;
-9. add StrategyAdapter and explainable recommendations;
-10. add Instance Detail, Terminal Dock, and shared Scene Model projections;
-11. add policy-controlled scheduling only after evidence and guardrails are reliable.
-
-Do not implement a full Scheduler before stable identities, reliable usage evidence, worktree
-ownership, and review records exist.
-
----
-
-## 13. Current non-goals
-
-This document does not authorize:
-
-- a database or cloud telemetry backend;
-- a distributed tracing platform;
-- a generic agent chat bus;
-- direct unrestricted process spawning;
-- automatic PR merge;
-- quota estimation from token counts alone;
-- cost estimation from model name alone;
-- a new observability vendor dependency;
-- Codex Desktop as a Fleet-managed runtime;
-- VSIX packaging or release.
-
-Related architecture decisions are appended to [.agent/knowledge/decisions.md](../.agent/knowledge/decisions.md).
+```text
+事实和估算分开
+Token / Cost / Quota 分开
+Runtime 和 Resource Account 分开
+Telemetry 和 Ledger 分开
+Ledger 和 Strategy 分开
+Recommendation 和 Execution 分开
+Runtime 和 Role 分开
+Unknown 不等于 Unlimited
+所有自动执行必须可审计
+```

@@ -1,438 +1,503 @@
-# WORKFLOW_CODEX_CLAUDE.md — Agent Fleet
+# WORKFLOW_CODEX_CLAUDE.md — Codex + Claude Code Multi-Agent Workflow
 
-This document defines how Codex and Claude Code cooperate around Agent Fleet. It describes the
-current workflow and the v1 control-plane target separately.
-
----
-
-## 1. Invariants
-
-- Agent Fleet manages native Coding Agent runtimes; it does not replace them.
-- Runtime is not Role. Claude Code or Codex CLI may eventually be Coordinator, Worker, Reviewer,
-  Debugger, or Researcher.
-- Git, Specs, Tasks, Tests, Commits, PRs, and safe .agent knowledge are the shared durable state.
-- Do not copy complete conversations between agents.
-- Do not introduce an Agent-to-Agent Chat Bus for the current workflow.
-- A runtime instance must have an auditable Repo/Worktree, Host, Workspace, Terminal, Session,
-  ProviderProfile, Model, and Managed/External identity when those values are available.
-- Unknown Token, Cost, Quota, Task, Provider, or Context values are reported as unavailable.
-- A UI animation is a projection of a real FleetEvent, never a source of telemetry truth.
+> 本文定义 Claude Fleet / future Agent Fleet 的推荐多 Agent 工作方式。  
+> 它描述**协作协议与职责边界**，不是自动 Orchestrator 实现说明。
 
 ---
 
-## 2. Current workflow
+## 1. 当前推荐工作方式
 
-The current reliable topology is:
+当前最成熟的实际组合：
 
 ```text
-Codex Desktop / external primary thread
-  planning, decomposition, assignment, review
-        |
-        v
-Git / Specs / Tasks / Commits / Tests
-        |
-        v
-Agent Fleet in VS Code
-  Claude Code CLI Worker A -> terminal / worktree A
-  Claude Code CLI Worker B -> terminal / worktree B
-  Claude Code CLI Worker N -> terminal / worktree N
+Codex Desktop / Client
+→ External Coordinator / primary thread
+
+VS Code + Claude Fleet
+→ Claude Code CLI Workers
 ```
 
-Codex Desktop is currently an external Coordinator. Agent Fleet does not launch, stop, monitor,
-or visualize the Codex Desktop client as a Fleet-managed runtime.
+当前 Codex Desktop 负责：
 
-Claude Code CLI remains the native execution engine. Agent Fleet manages its VS Code terminal,
-repository binding, ProviderProfile, Model, Session, lifecycle, discovery, status, and focus
-routing. Existing Claude subagents and teams remain native Claude behavior.
+- 需求澄清；
+- 架构讨论；
+- Spec / Plan；
+- Review；
+- 汇总各 Worker 结果。
 
-The current handoff is primarily repository-based:
+Claude Code CLI Workers 负责：
+
+- 按 Spec 实现；
+- Debug；
+- Tests；
+- 小范围重构；
+- 提交 Git commits。
+
+---
+
+## 2. v1 目标工作方式
+
+v1 中 Codex CLI 也成为 Fleet-managed Runtime：
 
 ```text
-Codex understands the request
-  -> writes or updates requirements/design/tasks
-  -> assigns a bounded WorkItem to a Claude Code terminal
-  -> Claude Code implements and validates
-  -> Claude Code leaves commits, diffs, tests, and notes
-  -> Codex reviews evidence
-  -> Claude Code fixes findings
-  -> Codex proposes merge after validation
+Mission
+│
+├── Coordinator
+│   └── Claude Code CLI or Codex CLI
+│
+├── Worker
+│   └── Claude Code CLI or Codex CLI
+│
+├── Reviewer
+│   └── Claude Code CLI or Codex CLI
+│
+└── Debugger
+    └── Claude Code CLI or Codex CLI
+```
+
+Runtime 与 Role 解耦。
+
+不要预设：
+
+```text
+Codex 永远是主线程
+Claude 永远是 Worker
 ```
 
 ---
 
-## 3. Target mode A — External Coordinator
+## 3. Mission
 
-The v1 target allows an external Codex Desktop Coordinator to call Agent Fleet through a
-controlled interface:
+一次相对独立的开发目标建议对应一个 Mission。
+
+例如：
 
 ```text
-Codex Desktop
-   |
-   | Fleet Control API or MCP
-   v
-Control Policy
-   |
-   +--> Resource / quota checks
-   +--> Worktree / SCM checks
-   +--> Strategy recommendation
-   v
-FleetRuntimeHost
-   |
-   v
-VS Code Integrated Terminal
-   |
-   v
-RuntimeAdapter
-   |
-   +--> Claude Code CLI
-   +--> Codex CLI
-   +--> future runtime
+Mission: Add Codex Runtime Adapter
+
+Coordinator
+└── Codex CLI #1
+
+Workers
+├── Claude Code #1 — Runtime abstraction
+├── Claude Code #2 — Codex adapter
+└── Codex CLI #2 — Review / tests
 ```
 
-The target API is an extension point, not an excuse to start processes through arbitrary shell
-commands. A request should identify:
+Mission 应关联：
 
-- missionId;
-- workItemId;
-- requested runtime and role;
-- repo, workspace, worktree, and branch constraints;
-- provider profile and model constraints;
-- resource account or quota constraints;
-- requestedBy and launchSource;
-- policy mode and review requirements.
-
-The host resolves the request, records ownership, launches the native CLI, and returns a stable
-FleetInstance/Session/Terminal identity. The Coordinator receives status and result references,
-not an uncontrolled copy of the worker's full transcript.
-
-Current state: runtime-neutral Control API contracts, an in-memory ControlService, the registered
-RuntimeAdapter/FleetRuntimeHost execution boundary, and a side-effect-free FleetStrategyAdapter
-are implemented for fake-tested management flows. `recommend_assignment` records an explainable
-AssignmentDecision and can propose a new Claude/Codex launch template without starting it. MCP
-transport and a real Codex terminal/process bridge remain deferred.
-
-### Local Control API quick start
-
-Open the Claude Fleet panel in VS Code first so its embedded server and managed Claude host are
-ready. The primary Codex thread can then use the bundled local CLI bridge:
-
-```powershell
-npx claude-fleet control --request '{"requestId":"mission-001","action":"create_mission","mode":"suggest","requestedBy":"codex-primary","createdAt":1,"mission":{"missionId":"mission-001","title":"Telemetry","objective":"Normalize runtime signals","policyMode":"suggest"}}'
+```text
+Goal
+Repo
+Coordinator
+Instances
+Roles
+Spec
+Branches / Worktrees
 ```
 
-To request a managed Claude launch after explicit approval:
-
-```powershell
-npx claude-fleet control --request '{"requestId":"launch-001","action":"launch_instance","mode":"approve","requestedBy":"codex-primary","missionId":"mission-001","createdAt":2,"launch":{"runtime":"claude-code","role":"worker","repo":"F:/repo","cwd":"F:/repo","requestedBy":"codex-primary","policy":{"mode":"approve"}}}'
-```
-
-The CLI discovers the local authenticated server record; it never prints or accepts the bearer
-token as part of the request payload. `suggest` returns `approval_required` without launching.
-The current VS Code bridge manages Claude Code only. Codex Desktop remains the external
-Coordinator, and Codex CLI process/terminal execution is still a separate integration slice.
-
-### Coordinator resource directives and recommendations
-
-The primary Codex thread may change the optimization objective with a time-bounded
-`ResourceDirective`, for example “increase throughput before the Codex quota reset” or “avoid
-the expensive DeepSeek profile”. The directive is evidence for Strategy, not an instruction
-injected into a worker and not permission to bypass policy.
-
-The recommendation request has the following shape:
-
-```json
-{
-  "requestId": "recommend-001",
-  "action": "recommend_assignment",
-  "mode": "suggest",
-  "requestedBy": "codex-primary",
-  "missionId": "mission-001",
-  "workItemId": "work-001",
-  "createdAt": 2,
-  "strategy": {
-    "now": 2,
-    "workItem": {
-      "workItemId": "work-001",
-      "missionId": "mission-001",
-      "title": "Review",
-      "objective": "Review the diff",
-      "acceptanceCriteria": ["review recorded"],
-      "status": "queued",
-      "createdAt": 1
-    },
-    "candidates": [],
-    "launchTemplates": [],
-    "policy": { "mode": "suggest" },
-    "directive": {
-      "directiveId": "directive-001",
-      "requestedBy": "codex-primary",
-      "target": { "runtime": "codex-cli" },
-      "objective": "throughput",
-      "priority": 10,
-      "reason": "Quota window is about to reset.",
-      "createdAt": 1,
-      "expiresAt": 360000
-    }
-  }
-}
-```
-
-The result is a recommendation with selected candidates or a launch template, factors,
-constraints, confidence, and expiry. A missing quota snapshot produces an explicit constraint;
-token counts are never converted into quota or cost.
+第一版不要自动拆任务。
 
 ---
 
-## 4. Target mode B — Managed Coordinator
+## 4. Repository as Source of Truth
 
-The v1 model also permits a Fleet-managed Coordinator:
+Agent 之间的共享状态优先落在仓库，而不是聊天上下文。
+
+核心共享载体：
 
 ```text
-Managed Codex CLI or Claude Code CLI instance
-        |
-        v
-Fleet Control API
-        |
-        +--> Claude Code CLI worker
-        +--> Codex CLI worker
-        +--> reviewer / debugger / researcher
+AGENTS.md
+CLAUDE.md / runtime-specific thin adapters
+.agent/
+docs/specs/<feature>/requirements.md
+docs/specs/<feature>/design.md
+docs/specs/<feature>/tasks.md
+Git branches / worktrees
+commits
+diffs
+tests
+review notes
 ```
 
-The Coordinator is a normal FleetInstance with role=coordinator. It uses the same Control API,
-policy, resource checks, host resolution, RuntimeAdapter, telemetry, Ledger, and SCM boundaries
-as every other managed instance.
+推荐原则：
 
-There is no separate Coordinator Runtime implementation. Coordinator is a Role plus policy.
+> Chat 用于当前 Agent 思考；Repository artifacts 用于跨 Agent 协作。
 
-Current state: managed Coordinator execution is not implemented. Codex Desktop remains the
-external Coordinator in the current workflow.
+不要默认把 Worker A 的全部聊天历史复制给 Worker B。
 
 ---
 
-## 5. Work decomposition
-
-Use a Mission as the top-level unit and WorkItems as bounded assignments.
-
-A useful WorkItem includes:
-
-```text
-missionId
-workItemId
-objective
-inputs
-acceptanceCriteria
-dependencies
-repo / worktree
-allowedRuntimeTypes
-allowedRoles
-provider/model constraints
-budget and quota constraints
-review policy
-status
-result references
-```
-
-Recommended decomposition:
-
-1. Understand the request and identify the actual problem.
-2. Write or update the relevant requirements and design.
-3. Split independent WorkItems by ownership boundary.
-4. Allocate one worktree per concurrent writer when possible.
-5. Assign runtime and role according to evidence and policy.
-6. Implement and validate in the assigned terminal.
-7. Record commit, diff, test, error, and review evidence.
-8. Review against acceptance criteria.
-9. Fix findings in the owning WorkItem.
-10. Produce a merge proposal; merge remains an explicit policy decision.
-
-A worker should not silently expand its WorkItem into a new runtime, scheduler, provider
-framework, or unrelated refactor. Request a new WorkItem when scope changes.
-
----
-
-## 6. Roles
-
-Roles describe responsibility, not executable technology:
-
-| Role        | Responsibility                                                |
-| ----------- | ------------------------------------------------------------- |
-| Coordinator | decomposes Mission, assigns WorkItems, reviews evidence       |
-| Implementer | changes code or docs within an accepted WorkItem              |
-| Debugger    | isolates root cause and supplies a reproducible fix           |
-| Reviewer    | checks design, diff, tests, security, and acceptance criteria |
-| Researcher  | gathers bounded evidence and records sources/uncertainty      |
-
-Current convention:
-
-```text
-Codex Desktop -> external Coordinator
-Claude Code CLI -> Fleet-managed Worker / Implementer / Debugger / Reviewer
-```
-
-This is a workflow convention, not a permanent type constraint.
-
----
-
-## 7. Control modes and permissions
-
-Every control request has an explicit mode:
-
-```text
-observe
-  read state and evidence only
-
-suggest
-  return an assignment or launch recommendation
-
-approve
-  execute only after explicit approval
-
-autonomous
-  execute within a pre-approved policy envelope
-```
-
-Default mode is suggest or approve. Autonomous mode is deferred and must be bounded by:
-
-- maximum concurrent instances;
-- token/cost budget;
-- quota reserve;
-- approved runtime/provider/model list;
-- allowed repositories and worktrees;
-- review/test/merge policy;
-- stop conditions and failure handling;
-- audit fields for requestedBy, launchSource, policy, and resulting AssignmentDecision.
-
-A recommendation may suggest launching another Claude or Codex instance when this improves
-time, quality, or quota safety. It must not directly launch a process. Execution goes through
-Fleet Control API and FleetRuntimeHost.
-
----
-
-## 8. Repository artifacts are the handoff protocol
-
-Prefer these artifacts over chat forwarding:
-
-```text
-requirements.md
-design.md
-tasks.md
-AGENTS.md / CLAUDE.md / CODEX.md
-source changes
-tests and scripts
-commit and diff
-PR and review findings
-.agent/knowledge and history
-FleetEvent / Telemetry snapshot references
-```
-
-A concise handoff should contain:
-
-- WorkItem and Mission identifiers;
-- current status and blocking condition;
-- files changed;
-- commit or diff reference;
-- tests run and results;
-- known risks and unavailable evidence;
-- next action or review request.
-
-Do not place API keys, access tokens, authorization headers, full environment variables,
-unnecessary full prompts, or full transcripts in a handoff or Ledger record.
-
----
-
-## 9. Terminal and UI behavior
-
-The runtime plane is a real VS Code Integrated Terminal. The management plane is the Fleet UI.
-
-The target interaction is:
-
-```text
-select instance
-  -> open Instance Detail
-  -> inspect actual metadata and recent telemetry
-Focus Terminal
-  -> focus the real VS Code Integrated Terminal
-```
-
-Instance Detail and Focus Terminal are different actions. A webview transcript or fake chat panel
-does not replace the real native runtime terminal.
-
-Fleet Command and Pixel Office are scene projections over the same Scene Model. Changing scenes
-must not restart, fork, or mutate a runtime Session.
-
----
-
-## 10. Telemetry and Ledger
-
-Signals are normalized before the UI or future strategy sees them:
-
-```text
-Claude Hooks / Claude JSONL / Codex JSONL / AgentState / metadata
-        |
-        v
-FleetEvent
-        |
-        +--> FleetTelemetryStore: current snapshot and bounded recent events
-        +--> Fleet Ledger: durable session, usage, quality, assignment, and PR records
-```
-
-Telemetry reports what is observable now. The Ledger records durable historical evidence. Token,
-Cost, and Quota are separate and retain source/confidence/estimated-versus-actual metadata.
-
-The detailed data model is in [FLEET_LEDGER_AND_SCHEDULING.md](./FLEET_LEDGER_AND_SCHEDULING.md).
-
----
-
-## 11. Validation loop
-
-For each WorkItem:
+## 5. 推荐工作循环
 
 ```text
 Understand
-  -> Spec
-  -> Plan
-  -> Implement
-  -> Validate
-  -> Review
-  -> Fix
-  -> Merge proposal
+→ Spec
+→ Plan
+→ Implement
+→ Validate
+→ Review
+→ Fix
+→ Merge
+→ Learn
 ```
 
-Minimum validation is proportional to risk:
+### Understand
 
-- docs: link/path consistency, diff check, Markdown structure;
-- runtime: unit tests, resolver tests, lifecycle tests, no duplicate session tests;
-- UI: scene selection, status transitions, terminal focus, responsive panel behavior;
-- integration: fake launcher/events first; real API tests are manual and opt-in;
-- merge: review findings resolved or explicitly accepted.
+Coordinator 明确：
 
-Do not burn external API quota in automated tests. Use fake launchers, fake events, and local
-fixtures. Real Claude or Codex API/CLI testing is a separate Development Host/manual test.
+- 目标；
+- 非目标；
+- 现有代码事实；
+- 风险；
+- 哪些工作可以并行。
+
+### Spec
+
+对于较大 Feature：
+
+```text
+docs/specs/XXX-feature/
+├── requirements.md
+├── design.md
+└── tasks.md
+```
+
+### Plan
+
+给不同 Worker 分配不重叠的代码区域 / Worktree。
+
+### Implement
+
+Worker：
+
+- 先读 AGENTS.md / Spec / 当前 Git；
+- 只实现自己的任务；
+- 运行相关测试；
+- 提交独立 commit。
+
+### Validate
+
+优先自动测试和确定性验证。
+
+### Review
+
+Reviewer 基于：
+
+```text
+Spec
+commit
+diff
+tests
+```
+
+而不是基于 Worker 自述。
+
+### Fix
+
+由原 Worker 或独立 Fixer 修复 Review findings。
+
+### Merge
+
+Coordinator / 人类决定集成顺序。
+
+### Learn
+
+稳定经验进入：
+
+```text
+.agent/knowledge/
+.agent/workflows/
+ADRs
+```
 
 ---
 
-## 12. Current non-goals
+## 6. 并行开发必须使用 Branch / Worktree 边界
 
-The current workflow does not implement:
+不要让两个 Coding Agent 同时修改同一个 `main` checkout。
 
-- the real Codex CLI process/terminal bridge (the adapter and thin host boundary are present);
-- MCP transport or remote Control API deployment (local HTTP/CLI control is present);
-- generic Coordinator election;
-- Agent-to-Agent Chat Bus;
-- automatic scheduler or autonomous dispatch;
-- automatic PR merge;
-- arbitrary direct shell spawning as lifecycle ownership;
-- a new observability vendor dependency;
-- a new Agent Fleet branding migration.
+推荐：
 
-These are roadmap items or extension points, not current behavior.
+```text
+main
+│
+├── worktree feat/runtime-model
+│   └── Claude Code #1
+│
+├── worktree feat/codex-adapter
+│   └── Codex CLI #1
+│
+└── worktree feat/fleet-scene
+    └── Claude Code #2
+```
+
+如果任务不可真正并行，就串行执行，不要为了“Agent 集群”强行并行。
 
 ---
 
-## Related documents
+## 7. Coordinator 的职责
 
-- [PROJECT.md](./PROJECT.md)
-- [ARCHITECTURE.md](./ARCHITECTURE.md)
-- [ROADMAP.md](./ROADMAP.md)
-- [FLEET_LEDGER_AND_SCHEDULING.md](./FLEET_LEDGER_AND_SCHEDULING.md)
-- [spec index](./specs/README.md)
+Coordinator 负责：
+
+- 保持 Mission 目标；
+- 维护 Spec 与 Task 状态；
+- 分配 Worker；
+- 避免编辑范围重叠；
+- 检查 Git 状态；
+- 汇总测试 / Review；
+- 决定是否 Merge；
+- 发现需要重新规划时更新 Spec。
+
+Coordinator 不应该：
+
+- 微观控制 Worker 的每一步工具调用；
+- 把所有 Worker 的聊天历史拼起来；
+- 在没有检查 Git diff 的情况下相信“已完成”；
+- 自动覆盖其他 Worker 的 checkout。
+
+---
+
+## 8. Worker 的职责
+
+Worker 启动后先恢复仓库事实：
+
+```bash
+git status -sb
+git diff
+git log --oneline -10
+```
+
+然后阅读：
+
+```text
+AGENTS.md
+相关 Spec
+相关代码
+相关 tests
+```
+
+完成后必须提供：
+
+```text
+Changed files
+Tests run
+Test result
+Commit SHA
+Known limitations
+```
+
+不要把“聊天记得什么”当作 source of truth。
+
+---
+
+## 9. Reviewer 的职责
+
+Reviewer 重点检查：
+
+```text
+requirements 是否满足
+design 是否被遵守
+是否破坏既有 Runtime
+错误路径
+Session continuity
+Repo / Worktree isolation
+Secret handling
+Telemetry correctness
+tests
+```
+
+Review 输出应具体到：
+
+```text
+file
+symbol / line
+problem
+impact
+recommended fix
+```
+
+---
+
+## 10. Codex Desktop 的位置
+
+Codex Desktop 可以继续作为方便的外部主线程。
+
+适合：
+
+- 长程架构讨论；
+- 人机共同决策；
+- 汇总结果；
+- 临时 research / brainstorm。
+
+但不推荐为了 Fleet Worker 数量，在 Codex Desktop 内创建大量 Worker Threads。
+
+真正需要：
+
+```text
+lifecycle
+cwd
+Repo
+Worktree
+Session
+status
+telemetry
+Focus / Stop / Restart
+```
+
+的执行线程优先使用 CLI Runtime。
+
+---
+
+## 11. Fleet UI 中的工作流映射
+
+推荐 UI：
+
+```text
+Mission
+├── Coordinator Card
+├── Fleet Scene
+│   ├── Worker Vessel
+│   ├── Reviewer Vessel
+│   └── Debugger Vessel
+├── Telemetry Detail
+└── Recent Timeline
+```
+
+Coordinator 是 managed CLI 时：
+
+```text
+[Focus Terminal]
+```
+
+Coordinator 是 Codex Desktop external thread 时：
+
+```text
+External Coordinator
+```
+
+只展示 Fleet 能可靠获取的 metadata。
+
+---
+
+## 12. Handoff
+
+Handoff 不依赖专用 Chat Bus。
+
+推荐最小 handoff package：
+
+```text
+Mission
+Task ID
+Spec path
+Branch / Worktree
+Base commit
+Worker commit
+Tests
+Remaining issues
+```
+
+例如：
+
+```text
+Task: 007-03
+Spec: docs/specs/007-runtime-control-plane/tasks.md
+Branch: feat/runtime-model
+Commit: abc1234
+Tests: npm test -- runtimeModel
+Remaining: Codex resume capability not implemented
+```
+
+另一个 Agent 可以仅凭仓库恢复工作。
+
+---
+
+## 13. v1 不实现的协作机制
+
+当前不要实现：
+
+```text
+Agent-to-Agent WebSocket Chat
+自动把聊天上下文广播给所有 Agent
+自动 DAG Scheduler
+自动 merge bot
+自动 Coordinator election
+LLM 自治集群
+```
+
+v1 重点是：
+
+> **可靠管理 + 清晰角色 + Repo source of truth + 可观测。**
+
+---
+
+## 14. 后续 Fleet MCP
+
+未来可以让 Coordinator 通过 MCP 调 Fleet Control Plane：
+
+```text
+fleet.list_instances()
+fleet.launch_instance()
+fleet.assign_task()
+fleet.get_status()
+fleet.get_recent_events()
+fleet.stop_instance()
+```
+
+届时可以形成：
+
+```text
+Coordinator Agent
+      │
+      │ MCP
+      ▼
+Agent Fleet Control Plane
+      │
+      ├── Claude Code CLI
+      ├── Codex CLI
+      └── ...
+```
+
+但这是 v1 之后的自动化增强，不阻塞当前多实例架构。
+
+---
+
+## 15. 推荐日常模板
+
+### 小任务
+
+```text
+Coordinator / Human
+└── 1 Worker
+```
+
+不要过度多 Agent。
+
+### 中等 Feature
+
+```text
+Coordinator
+├── Implementer
+└── Reviewer
+```
+
+### 可并行 Feature
+
+```text
+Coordinator
+├── Worker A — isolated worktree
+├── Worker B — isolated worktree
+└── Reviewer
+```
+
+### 复杂 Feature
+
+```text
+Coordinator
+├── Runtime Worker
+├── Frontend Worker
+├── Tests / Debug Worker
+└── Reviewer
+```
+
+只有独立边界明确时才增加 Instance。
