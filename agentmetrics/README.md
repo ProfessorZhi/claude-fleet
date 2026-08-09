@@ -1,6 +1,15 @@
-# Agent Metrics Collector (`agent-metrics-collector`)
+# agentmetrics (`agent-metrics-collector`)
 
-`agent-metrics-collector` is an independent, non-intrusive performance ledger and telemetry collector for AI Coding Agents. It measures Work Package and GitHub PR execution metrics without modifying your codebase, system proxies, or security credentials.
+> This module is integrated into the Claude Fleet monorepo. The Python package and
+> CLI keep their legacy names for compatibility: `agent_metrics` / `agent-metrics`.
+
+It is the Fleet Usage Ledger: a non-intrusive observer for Codex, Claude Code and
+other Coding Agent runs. Its summaries are linked to Fleet tasks and workers when
+`fleet_*` identity fields are supplied.
+
+`agentmetrics` is a non-intrusive performance ledger and telemetry collector for AI
+Coding Agents. It measures Work Package and GitHub PR execution metrics without
+modifying your codebase, system proxies, or security credentials.
 
 ---
 
@@ -629,7 +638,7 @@ semantics cannot be proven, the snapshot is recorded with `percentage_semantics
 
 ### Updating Model Pricing Snapshot
 
-Official provider pricing is maintained in [`config/model-pricing.json`](file:///F:/funny_project/agent-metrics-collector/config/model-pricing.json). To update:
+Official provider pricing is maintained in [`config/model-pricing.json`](./config/model-pricing.json). To update:
 1. Verify prices from official provider pricing pages (e.g. `https://www.anthropic.com/pricing`, `https://platform.deepseek.com/pricing`).
 2. Update rates in `config/model-pricing.json`.
 3. Set `"verification_status": "VERIFIED"`, `"retrieved_at"`, and `"source_url"`.

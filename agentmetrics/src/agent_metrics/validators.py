@@ -9,6 +9,44 @@ from typing import Dict, Any, List
 RE_RUN_ID = re.compile(r"^[a-zA-Z0-9_\-]+$")
 RE_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 RE_COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+RE_FLEET_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+FLEET_ID_FIELDS = (
+    "fleet_run_id",
+    "fleet_task_id",
+    "fleet_worker_id",
+    "fleet_coordinator_id",
+    "parent_worker_id",
+    "worktree_id",
+)
+
+
+def validate_fleet_identity(data: Any, field_name: str = "fleet") -> None:
+    """Validate secret-free Fleet correlation metadata.
+
+    Fleet IDs are intentionally opaque, bounded identifiers. Paths, prompts,
+    newlines, and arbitrary provider payloads do not belong in this object.
+    """
+    if data is None:
+        return
+    if not isinstance(data, dict):
+        raise ValueError(f"Field '{field_name}' must be an object or null")
+
+    allowed = set(FLEET_ID_FIELDS) | {"worker_role", "attempt"}
+    unknown = sorted(set(data) - allowed)
+    if unknown:
+        raise ValueError(f"Field '{field_name}' contains unsupported fields: {', '.join(unknown)}")
+
+    for key in FLEET_ID_FIELDS + ("worker_role",):
+        value = data.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not RE_FLEET_ID.fullmatch(value):
+            raise ValueError(f"Field '{field_name}.{key}' must be a safe identifier")
+
+    attempt = data.get("attempt")
+    if attempt is not None and (not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1):
+        raise ValueError(f"Field '{field_name}.attempt' must be a positive integer or null")
 
 
 def validate_run_id(val: str, field_name: str) -> None:
@@ -72,6 +110,7 @@ def validate_run_context(data: Dict[str, Any]) -> None:
             raise ValueError(f"Missing required field in run context: '{f}'")
 
     validate_run_id(data["run_id"], "run_id")
+    validate_fleet_identity(data.get("fleet"))
 
 
 def validate_sanitized_summary(data: Dict[str, Any]) -> None:
@@ -99,6 +138,7 @@ def validate_sanitized_summary(data: Dict[str, Any]) -> None:
             raise ValueError(f"Missing required top-level field in summary: '{f}'")
 
     validate_run_id(data["run_id"], "run_id")
+    validate_fleet_identity(data.get("fleet"))
 
     if not isinstance(data["agent"], dict) or "shell" not in data["agent"] or "provider" not in data["agent"]:
         raise ValueError("Summary 'agent' field must contain 'shell' and 'provider'")

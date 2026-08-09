@@ -51,7 +51,7 @@ from agent_metrics.collectors.cockpit_local_snapshot_collector import CockpitLoc
 from agent_metrics.collectors.cockpit_report_http_collector import CockpitReportHttpCollector
 from agent_metrics.collectors.antigravity_collector import AntigravityCollector
 from agent_metrics.redaction import sanitize_dict, scan_text_for_secret_types
-from agent_metrics.validators import validate_sanitized_summary
+from agent_metrics.validators import validate_fleet_identity, validate_sanitized_summary
 from agent_metrics.pr_aggregate import build_pr_aggregate
 
 
@@ -130,6 +130,14 @@ class CLIHandler:
         worktree: Optional[str] = None,
         session_id: Optional[str] = None,
         permission_mode: Optional[str] = None,
+        fleet_run_id: Optional[str] = None,
+        fleet_task_id: Optional[str] = None,
+        fleet_worker_id: Optional[str] = None,
+        fleet_coordinator_id: Optional[str] = None,
+        parent_worker_id: Optional[str] = None,
+        worker_role: Optional[str] = None,
+        worktree_id: Optional[str] = None,
+        attempt: Optional[int] = None,
         json_output: bool = False,
     ) -> int:
         if not agent_shell or not provider:
@@ -144,6 +152,25 @@ class CLIHandler:
                 return EXIT_INVALID_INPUT
 
         target_worktree = worktree or os.getcwd()
+        fleet = {
+            key: value
+            for key, value in {
+                "fleet_run_id": fleet_run_id,
+                "fleet_task_id": fleet_task_id,
+                "fleet_worker_id": fleet_worker_id,
+                "fleet_coordinator_id": fleet_coordinator_id,
+                "parent_worker_id": parent_worker_id,
+                "worker_role": worker_role,
+                "worktree_id": worktree_id,
+                "attempt": attempt,
+            }.items()
+            if value is not None and value != ""
+        }
+        try:
+            validate_fleet_identity(fleet or None)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return EXIT_INVALID_INPUT
         git_coll = GitCollector(worktree=target_worktree)
         git_snapshot = git_coll.collect()
 
@@ -206,6 +233,8 @@ class CLIHandler:
             "git_initial": git_snapshot,
             "claude_session_baseline": claude_baseline,
         }
+        if fleet:
+            context_data["fleet"] = fleet
 
         if is_codex_agent:
             context_data["codex_quota"] = {
@@ -638,6 +667,7 @@ class CLIHandler:
             run_id=run_id,
             work_package=ctx.get("work_package", ""),
             pr_number=ctx.get("pr_number"),
+            fleet=ctx.get("fleet") if isinstance(ctx.get("fleet"), dict) else None,
             agent=agent_dict,
             timing=timing,
             usage=usage,
@@ -953,6 +983,8 @@ class CLIHandler:
                 "git": summary.get("git"),
                 "github": summary.get("github"),
             }
+            if summary.get("fleet") is not None:
+                export_data["fleet"] = summary.get("fleet")
         else:
             export_data = summary
 
@@ -1107,6 +1139,14 @@ def main(args: Optional[List[str]] = None) -> int:
     start_p.add_argument("--worktree")
     start_p.add_argument("--session-id")
     start_p.add_argument("--permission-mode")
+    start_p.add_argument("--fleet-run-id")
+    start_p.add_argument("--fleet-task-id")
+    start_p.add_argument("--fleet-worker-id")
+    start_p.add_argument("--fleet-coordinator-id")
+    start_p.add_argument("--parent-worker-id")
+    start_p.add_argument("--worker-role")
+    start_p.add_argument("--worktree-id")
+    start_p.add_argument("--attempt", type=int)
     start_p.add_argument("--json", action="store_true")
 
     # finish
@@ -1201,6 +1241,14 @@ def main(args: Optional[List[str]] = None) -> int:
             worktree=parsed.worktree,
             session_id=parsed.session_id,
             permission_mode=parsed.permission_mode,
+            fleet_run_id=parsed.fleet_run_id,
+            fleet_task_id=parsed.fleet_task_id,
+            fleet_worker_id=parsed.fleet_worker_id,
+            fleet_coordinator_id=parsed.fleet_coordinator_id,
+            parent_worker_id=parsed.parent_worker_id,
+            worker_role=parsed.worker_role,
+            worktree_id=parsed.worktree_id,
+            attempt=parsed.attempt,
             json_output=parsed.json,
         )
     elif parsed.command == "finish":

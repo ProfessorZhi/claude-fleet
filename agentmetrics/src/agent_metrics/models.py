@@ -210,6 +210,9 @@ class SanitizedSummary:
     run_id: str = ""
     work_package: str = ""
     pr_number: Optional[int] = None
+    # Optional Fleet Control Plane correlation metadata. This is deliberately
+    # separate from provider usage so summaries remain useful outside Fleet.
+    fleet: Optional[Dict[str, Any]] = None
     agent: AgentInfo = field(default_factory=lambda: AgentInfo(shell="", provider=""))
     timing: TimingInfo = field(default_factory=lambda: TimingInfo(started_at=""))
     usage: UsageInfo = field(default_factory=UsageInfo)
@@ -222,7 +225,7 @@ class SanitizedSummary:
     integrity: IntegrityInfo = field(default_factory=IntegrityInfo)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "schema_version": self.schema_version,
             "collector_version": self.collector_version,
             "run_id": self.run_id,
@@ -239,3 +242,6 @@ class SanitizedSummary:
             "warnings": self.warnings,
             "integrity": self.integrity.to_dict() if isinstance(self.integrity, IntegrityInfo) else self.integrity,
         }
+        if self.fleet is not None:
+            result["fleet"] = self.fleet
+        return result

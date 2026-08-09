@@ -6,6 +6,15 @@ param(
 
     [string]$ConfiguredModel = "",
 
+    [string]$FleetRunId = "",
+    [string]$FleetTaskId = "",
+    [string]$FleetWorkerId = "",
+    [string]$FleetCoordinatorId = "",
+    [string]$ParentWorkerId = "",
+    [string]$WorkerRole = "",
+    [string]$WorktreeId = "",
+    [int]$Attempt = 0,
+
     [string]$ClaudeConfigDir = "",
 
     [Parameter(Mandatory = $true)]
@@ -218,6 +227,14 @@ $startArgs = @(
 if ($PRNumber -gt 0) { $startArgs += @("--pr-number", ([string]$PRNumber)) }
 if (-not [string]::IsNullOrWhiteSpace($Repository)) { $startArgs += @("--repository", $Repository) }
 if (-not [string]::IsNullOrWhiteSpace($ConfiguredModel)) { $startArgs += @("--configured-model", $ConfiguredModel) }
+if (-not [string]::IsNullOrWhiteSpace($FleetRunId)) { $startArgs += @("--fleet-run-id", $FleetRunId) }
+if (-not [string]::IsNullOrWhiteSpace($FleetTaskId)) { $startArgs += @("--fleet-task-id", $FleetTaskId) }
+if (-not [string]::IsNullOrWhiteSpace($FleetWorkerId)) { $startArgs += @("--fleet-worker-id", $FleetWorkerId) }
+if (-not [string]::IsNullOrWhiteSpace($FleetCoordinatorId)) { $startArgs += @("--fleet-coordinator-id", $FleetCoordinatorId) }
+if (-not [string]::IsNullOrWhiteSpace($ParentWorkerId)) { $startArgs += @("--parent-worker-id", $ParentWorkerId) }
+if (-not [string]::IsNullOrWhiteSpace($WorkerRole)) { $startArgs += @("--worker-role", $WorkerRole) }
+if (-not [string]::IsNullOrWhiteSpace($WorktreeId)) { $startArgs += @("--worktree-id", $WorktreeId) }
+if ($Attempt -gt 0) { $startArgs += @("--attempt", ([string]$Attempt)) }
 
 $startOutput = (Invoke-Am @startArgs) | Out-String
 $startExit = $LASTEXITCODE

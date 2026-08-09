@@ -19,6 +19,20 @@
     "worktree": { "type": "string" },
     "started_at": { "type": "string" },
     "finished_at": { "type": ["string", "null"] },
+    "fleet": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fleet_run_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "fleet_task_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "fleet_worker_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "fleet_coordinator_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "parent_worker_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "worker_role": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "worktree_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "attempt": { "type": "integer", "minimum": 1 }
+      }
+    },
     "agent": {
       "type": "object",
       "properties": {
