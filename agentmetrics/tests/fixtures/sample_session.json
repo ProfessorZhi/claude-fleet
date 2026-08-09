@@ -1,0 +1,19 @@
+{
+  "session_id": "sess-test-uuid-1234",
+  "worktree": "F:\\test\\worktree",
+  "work_package": "TEST-WP-01",
+  "started_at": "2026-08-01T10:00:00Z",
+  "finished_at": "2026-08-01T10:05:00Z",
+  "configured_model": "claude-3-5-sonnet-20241022",
+  "requested_model": "claude-3-5-sonnet-20241022",
+  "observed_model": "claude-3-5-sonnet-20241022",
+  "permission_mode": "bypass",
+  "usage": {
+    "input_tokens": 1000,
+    "output_tokens": 500,
+    "reasoning_tokens": 100,
+    "cache_read_tokens": 200,
+    "cache_write_tokens": 50,
+    "total_tokens": 1500
+  }
+}

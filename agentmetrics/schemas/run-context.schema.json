@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RunContext",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "collector_version",
+    "run_id",
+    "work_package",
+    "started_at",
+    "agent"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer" },
+    "collector_version": { "type": "string" },
+    "run_id": { "type": "string", "format": "uuid" },
+    "work_package": { "type": "string" },
+    "pr_number": { "type": ["integer", "null"] },
+    "worktree": { "type": "string" },
+    "started_at": { "type": "string" },
+    "finished_at": { "type": ["string", "null"] },
+    "fleet": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fleet_run_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "fleet_task_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "fleet_worker_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "fleet_coordinator_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "parent_worker_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "worker_role": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "worktree_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "attempt": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "shell": { "type": "string" },
+        "provider": { "type": "string" },
+        "configured_model": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
