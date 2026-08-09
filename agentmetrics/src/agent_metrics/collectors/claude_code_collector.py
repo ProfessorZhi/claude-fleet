@@ -66,11 +66,15 @@ class ClaudeCodeCollector(BaseCollector):
             "minimax": home / ".claude-minimax",
         }
 
+        # An explicit collector config is the narrowest source of truth and
+        # must win over the process environment. This keeps isolated runs and
+        # tests deterministic even when the host has CLAUDE_CONFIG_DIR set.
+        configured_dir = self.config.get("claude_config_dir")
         custom_env = os.environ.get("CLAUDE_CONFIG_DIR")
-        if custom_env:
+        if configured_dir:
+            config_dirs.append(("custom", Path(configured_dir)))
+        elif custom_env:
             config_dirs.append(("custom", Path(custom_env)))
-        elif self.config.get("claude_config_dir"):
-            config_dirs.append(("custom", Path(self.config["claude_config_dir"])))
 
         for name, dir_path in mapping.items():
             if dir_path.exists():
