@@ -21,6 +21,7 @@ import {
   type CliCheckResult,
   ensureClaudeCliAvailable,
 } from './cliCheck.js';
+import type { VscodeFleetRuntimeHost } from './fleetRuntimeHost.js';
 import { pickModel } from './launchAgentFlow.js';
 import type { ProviderProfileStore } from './providerProfileStore.js';
 
@@ -97,9 +98,17 @@ export async function pickAgent(store: AgentStateStore): Promise<number | undefi
 }
 
 /** Focus an agent: show its Terminal (a teammate focuses the lead's terminal). */
-export function focusAgent(store: AgentStateStore, id: number): void {
+export function focusAgent(
+  store: AgentStateStore,
+  id: number,
+  runtimeHost?: VscodeFleetRuntimeHost,
+): void {
   const agent = store.get(id);
   if (!agent) return;
+  if (runtimeHost && !agent.isExternal) {
+    void runtimeHost.focus(`agent-${id}`);
+    return;
+  }
   if (agent.terminalRef) {
     agent.terminalRef.show();
   } else if (agent.leadAgentId !== undefined) {
@@ -112,20 +121,27 @@ export function focusAgent(store: AgentStateStore, id: number): void {
 export async function runFocusAgentCommand(
   store: AgentStateStore,
   picker: () => Promise<number | undefined> = () => pickAgent(store),
+  runtimeHost?: VscodeFleetRuntimeHost,
 ): Promise<void> {
   const id = await picker();
   if (id === undefined) return;
-  focusAgent(store, id);
+  focusAgent(store, id, runtimeHost);
 }
 
 /** Run the `stopAgent` command: pick, then stop for real (Spec 004 FR-003). */
 export async function runStopAgentCommand(
   runtime: AgentRuntime,
   picker: () => Promise<number | undefined> = () => pickAgent(runtime.store),
+  runtimeHost?: VscodeFleetRuntimeHost,
 ): Promise<void> {
   const id = await picker();
   if (id === undefined) return;
-  runtime.stopAgent(id);
+  const agent = runtime.store.get(id);
+  if (runtimeHost && agent && !agent.isExternal) {
+    await runtimeHost.stop(`agent-${id}`);
+  } else {
+    runtime.stopAgent(id);
+  }
 }
 
 /** Dependencies of runRestartAgentCommand (injectable for tests). */
@@ -136,11 +152,25 @@ export interface RestartAgentDeps {
   launcher: (options: LaunchNewTerminalOptions) => Promise<void>;
   /** Base options for the launcher (store / secrets), minus launchConfig. */
   baseLaunchOptions: Omit<LaunchNewTerminalOptions, 'launchConfig' | 'suppressShow'>;
+  /** Optional host boundary; legacy tests and callers use runtime fallback. */
+  runtimeHost?: VscodeFleetRuntimeHost;
   /** CLI availability check; defaults to the real `claude --version` probe. */
   cliCheck?: () => Promise<CliCheckResult>;
   /** Error surfacing; defaults to vscode.window.showErrorMessage. */
   showError?: (message: string) => void;
   picker?: () => Promise<number | undefined>;
+}
+
+async function stopAgentThroughHostOrRuntime(
+  deps: Pick<RestartAgentDeps, 'runtime' | 'runtimeHost'>,
+  id: number,
+): Promise<void> {
+  const agent = deps.runtime.store.get(id);
+  if (deps.runtimeHost && agent && !agent.isExternal) {
+    await deps.runtimeHost.stop(`agent-${id}`);
+    return;
+  }
+  deps.runtime.stopAgent(id);
 }
 
 /**
@@ -153,7 +183,7 @@ export interface RestartAgentDeps {
  * A fresh Session is created — Restart never resumes the old one.
  */
 export async function runRestartAgentCommand(deps: RestartAgentDeps): Promise<void> {
-  const { store, runtime } = deps;
+  const { store } = deps;
   const picker = deps.picker ?? (() => pickAgent(store));
   const cliCheck = deps.cliCheck ?? ensureClaudeCliAvailable;
   const showError = deps.showError ?? ((m: string) => void vscode.window.showErrorMessage(m));
@@ -166,7 +196,7 @@ export async function runRestartAgentCommand(deps: RestartAgentDeps): Promise<vo
   const restartConfig = restartConfigFromAgent(agent);
 
   // Stop the old instance first (closes its terminal / process).
-  runtime.stopAgent(id);
+  await stopAgentThroughHostOrRuntime(deps, id);
 
   // Re-check the CLI before launching a fresh terminal.
   const cli = await cliCheck();
@@ -179,6 +209,8 @@ export async function runRestartAgentCommand(deps: RestartAgentDeps): Promise<vo
     ...deps.baseLaunchOptions,
     launchConfig: restartConfig,
     suppressShow: false,
+    launchSource: 'restart',
+    requestedBy: 'user',
   });
 }
 
@@ -187,7 +219,7 @@ export async function runRestartAgentCommand(deps: RestartAgentDeps): Promise<vo
  * Model, but a FRESH Claude session (new sessionId, empty conversation).
  */
 export async function runNewSessionCommand(deps: RestartAgentDeps): Promise<void> {
-  const { store, runtime } = deps;
+  const { store } = deps;
   const picker = deps.picker ?? (() => pickAgent(store));
   const cliCheck = deps.cliCheck ?? ensureClaudeCliAvailable;
   const showError = deps.showError ?? ((m: string) => void vscode.window.showErrorMessage(m));
@@ -199,7 +231,7 @@ export async function runNewSessionCommand(deps: RestartAgentDeps): Promise<void
   if (!agent) return;
   const config = newSessionConfigFromAgent(agent);
 
-  runtime.stopAgent(id);
+  await stopAgentThroughHostOrRuntime(deps, id);
 
   const cli = await cliCheck();
   if (!cli.ok) {
@@ -211,6 +243,8 @@ export async function runNewSessionCommand(deps: RestartAgentDeps): Promise<void
     ...deps.baseLaunchOptions,
     launchConfig: config,
     suppressShow: false,
+    launchSource: 'new-session',
+    requestedBy: 'user',
   });
 }
 
@@ -231,7 +265,7 @@ export interface SwitchProviderDeps extends RestartAgentDeps {
  * resume, the user is asked explicitly before starting a new session.
  */
 export async function runSwitchProviderCommand(deps: SwitchProviderDeps): Promise<void> {
-  const { store, runtime, providerProfileStore } = deps;
+  const { store, providerProfileStore } = deps;
   const picker = deps.picker ?? (() => pickAgent(store));
   const cliCheck = deps.cliCheck ?? ensureClaudeCliAvailable;
   const showError = deps.showError ?? ((m: string) => void vscode.window.showErrorMessage(m));
@@ -260,7 +294,7 @@ export async function runSwitchProviderCommand(deps: SwitchProviderDeps): Promis
     agent.lastProviderProfileId = agent.providerProfileId;
   }
 
-  runtime.stopAgent(id);
+  await stopAgentThroughHostOrRuntime(deps, id);
 
   const cli = await cliCheck();
   if (!cli.ok) {
@@ -279,6 +313,8 @@ export async function runSwitchProviderCommand(deps: SwitchProviderDeps): Promis
       sessionMode: 'resume',
     },
     suppressShow: false,
+    launchSource: 'switch-provider',
+    requestedBy: 'user',
   });
 }
 

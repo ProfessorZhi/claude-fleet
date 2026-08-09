@@ -4,8 +4,7 @@
 
 ## 阶段一：Development Host Smoke Test（F5，不依赖 VSIX）
 
-> 当前 VSIX 为 **STALE**（005/006 开发前的旧包），不要用于测试。
-> 使用 VS Code Extension Development Host 加载当前源码。
+> 当前源码已通过 Windows 自动验证与真实 Claude launch smoke；完整人工验收使用最终生成的 VSIX。
 
 ```text
 1. 打开 claude-fleet 仓库（F:\funny_project\Claude Fleet）
@@ -130,7 +129,8 @@ VS Code
 - [ ] 安装后 Panel / New Agent / Provider 流程与阶段一一致
 - [ ] Restart 后 Repo 仍然是原来的 Repo（不是 `~/.claude/projects/...`）
 - [ ] Restart 后 Provider / Model 不变
-- [ ] Restart 会生成新 Session（当用户选择 New Session 时）
+- [ ] Restart 保留同一个 Session，并进入原生 resume
+- [ ] New Session 才生成新的 Session
 - [ ] Missing Secret fail-closed（删除某 Provider Secret 后 Restart → 启动被拒绝并提示）
 - [ ] 重载窗口后 Agent 状态恢复（Persist / Restore）
 - [ ] 旧版本（无 cwd 字段）persisted state 不 crash

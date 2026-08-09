@@ -167,6 +167,11 @@ export class AgentStateStore {
         // Original launch cwd — persisted so Restart reuses the exact repo
         // (absent on legacy state; restore keeps it undefined).
         cwd: agent.cwd,
+        hostId: agent.hostId,
+        workspaceId: agent.workspaceId,
+        terminalId: agent.terminalId,
+        launchSource: agent.launchSource,
+        requestedBy: agent.requestedBy,
         folderName: agent.folderName,
         teamName: agent.teamName,
         agentName: agent.agentName,
@@ -181,6 +186,7 @@ export class AgentStateStore {
         providerProfileId: agent.providerProfileId,
         providerDisplayName: agent.providerDisplayName,
         modelId: agent.modelId,
+        fleet: agent.fleet,
         // Spec 005 — managed flag + pre-switch provider (NOT secrets).
         managedByFleet: agent.managedByFleet,
         lastProviderProfileId: agent.lastProviderProfileId,

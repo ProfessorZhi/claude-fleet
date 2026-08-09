@@ -8,6 +8,17 @@ const path = require('path');
 const DEFAULT_HOLD_OPEN_MS = 30_000;
 const SCENARIO_SCHEMA_VERSION = 1;
 
+// Resolver probe contract (Spec 005 FR-008, server/src/cliResolver.ts):
+// `claude --version` must answer instantly with a version string and exit 0 —
+// no session, no scenario-queue consumption, no invocation log, no hold.
+// Real Claude Code behaves the same way, so the mock must match it or the
+// product's launch-time CLI check rejects the mock as a broken install.
+const MOCK_CLAUDE_VERSION = '0.0.0-mock (claude-fleet e2e)';
+if (process.argv.includes('--version')) {
+  process.stdout.write(`${MOCK_CLAUDE_VERSION}\n`);
+  process.exit(0);
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

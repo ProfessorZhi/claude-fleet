@@ -15,6 +15,7 @@
  * style.
  */
 
+import type { FleetIdentity } from './fleetContracts.js';
 import type { ProviderType } from './providerRegistry.js';
 
 // ── AuthMode ─────────────────────────────────────────────────
@@ -214,6 +215,8 @@ export interface InstanceLaunchConfig {
   sessionId?: string;
   /** Advanced: caller-provided extra env merged after the resolved env. */
   envOverride?: Record<string, string>;
+  /** Secret-free Coordinator/Worker correlation metadata. */
+  fleet?: FleetIdentity;
 }
 
 /**
@@ -254,6 +257,8 @@ export interface ResolvedLaunchSafeMetadata {
   providerProfileId: string;
   providerDisplayName: string;
   modelId?: string;
+  /** Secret-free Coordinator/Worker correlation metadata. */
+  fleet?: FleetIdentity;
 }
 
 // ── Built-in profile IDs ─────────────────────────────────────

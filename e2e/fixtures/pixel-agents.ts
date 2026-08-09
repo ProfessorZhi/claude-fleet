@@ -153,7 +153,7 @@ export const test = base.extend<{
         await attachTextFileIfExists(
           testInfo,
           'server-json',
-          path.join(tmpHome, '.pixel-agents', 'server.json'),
+          path.join(tmpHome, '.claude-fleet', 'server.json'),
           'application/json',
         );
         // Diagnostic: server-side hook/broadcast log (gated by PIXEL_AGENTS_DEBUG_LOG

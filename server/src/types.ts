@@ -1,5 +1,7 @@
 import type * as vscode from 'vscode';
 
+import type { FleetIdentity } from '../../core/src/fleetContracts.js';
+
 export interface AgentState {
   id: number;
   sessionId: string;
@@ -13,6 +15,16 @@ export interface AgentState {
    *  guaranteed to equal the user's chosen repo. Absent on legacy (001-era)
    *  and scan-discovered agents — Restart falls back to projectDir only then. */
   cwd?: string;
+  /** Fleet management host that owns this runtime instance. */
+  hostId?: string;
+  /** Stable workspace identity used by Fleet ownership/accounting. */
+  workspaceId?: string;
+  /** Fleet terminal identity; distinct from the human-readable terminal name. */
+  terminalId?: string;
+  /** Safe lifecycle provenance such as fleet-ui, restart, or auto-spawn. */
+  launchSource?: string;
+  /** Safe requester identity; never a credential or transcript. */
+  requestedBy?: string;
   jsonlFile: string;
   fileOffset: number;
   lineBuffer: string;
@@ -99,6 +111,8 @@ export interface AgentState {
   providerDisplayName?: string;
   /** Model id passed as `claude --model <id>` at launch. Persisted. */
   modelId?: string;
+  /** Secret-free Coordinator/Worker correlation metadata. */
+  fleet?: FleetIdentity;
 
   // -- Spec 005 Session Continuity / Managed flag --
   /** True when this agent was launched by Fleet (vs. discovered externally).
@@ -129,6 +143,11 @@ export interface PersistedAgent {
    *  instead of re-deriving it from projectDir. Absent on legacy persisted
    *  state (cwd added in 0.1.0). */
   cwd?: string;
+  hostId?: string;
+  workspaceId?: string;
+  terminalId?: string;
+  launchSource?: string;
+  requestedBy?: string;
   /** Workspace folder name (only set for multi-root workspaces) */
   folderName?: string;
 
@@ -154,6 +173,8 @@ export interface PersistedAgent {
   providerDisplayName?: string;
   /** Model id passed as `claude --model <id>` at launch. */
   modelId?: string;
+  /** Secret-free Coordinator/Worker correlation metadata. */
+  fleet?: FleetIdentity;
 
   // -- Spec 005 Session Continuity / Managed flag --
   /** True when launched by Fleet (vs discovered externally). Persisted so

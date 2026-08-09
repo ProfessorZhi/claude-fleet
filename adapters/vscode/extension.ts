@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 
+import { validateProviderProfile } from '../../core/src/providerProfiles.js';
 import { FileStateAdapter } from '../../server/src/fileStateAdapter.js';
 import { migrateStateDir } from '../../server/src/migrateStateDir.js';
 import {
@@ -26,6 +27,39 @@ import {
 import { runLaunchAgentFlowWithLauncher } from './launchAgentFlow.js';
 import { runManageProvidersFlow } from './manageProvidersFlow.js';
 import { migrateVsCodeState } from './migrateVsCodeState.js';
+import type { ProviderProfileStore } from './providerProfileStore.js';
+
+/**
+ * E2E test support ONLY — seed ProviderProfiles from the environment. The
+ * harness sets `CLAUDE_FLEET_E2E_SEED_PROVIDERS` (JSON array) so the New
+ * Agent flow has a configured profile to pick; without it the flow stops at
+ * the empty-state "Add Provider…" picker (Spec 005 FR-003: no auto-injected
+ * Inherit profile). Malformed seeds are logged and skipped — never fatal.
+ */
+export async function seedProvidersFromEnvironment(store: ProviderProfileStore): Promise<void> {
+  const raw = process.env.CLAUDE_FLEET_E2E_SEED_PROVIDERS;
+  if (!raw) return;
+  let profiles: unknown;
+  try {
+    profiles = JSON.parse(raw);
+  } catch (e) {
+    console.warn(`[Claude Fleet] Ignoring invalid CLAUDE_FLEET_E2E_SEED_PROVIDERS: ${e}`);
+    return;
+  }
+  if (!Array.isArray(profiles)) {
+    console.warn('[Claude Fleet] Ignoring non-array CLAUDE_FLEET_E2E_SEED_PROVIDERS');
+    return;
+  }
+  for (const profile of profiles) {
+    const err = validateProviderProfile(profile);
+    if (err) {
+      console.warn(`[Claude Fleet] Skipping invalid seeded provider: ${err}`);
+      continue;
+    }
+    await store.upsert(profile);
+    console.log(`[Claude Fleet] Seeded e2e provider profile "${profile.name}"`);
+  }
+}
 
 let providerInstance: ClaudeFleetViewProvider | undefined;
 
@@ -47,6 +81,13 @@ export function activate(context: vscode.ExtensionContext) {
 
   const provider = new ClaudeFleetViewProvider(context, adapter);
   providerInstance = provider;
+
+  // E2E test support ONLY (no-op in normal use): seed provider profiles from
+  // the environment before the UI is reachable. Spec 005 (FR-003) removed the
+  // auto-injected Inherit profile, so the New Agent flow needs a configured
+  // profile to exist; the e2e harness sets CLAUDE_FLEET_E2E_SEED_PROVIDERS
+  // (JSON array of ProviderProfile) so its "+ Agent" tests can proceed.
+  void seedProvidersFromEnvironment(provider.providerProfileStore);
 
   context.subscriptions.push(vscode.window.registerWebviewViewProvider(VIEW_ID, provider));
 
@@ -99,14 +140,14 @@ export function activate(context: vscode.ExtensionContext) {
   // Spec 004 — Focus the terminal of a chosen agent.
   context.subscriptions.push(
     vscode.commands.registerCommand(COMMAND_FOCUS_AGENT, async () => {
-      await runFocusAgentCommand(provider.store);
+      await runFocusAgentCommand(provider.store, undefined, provider.runtimeHost);
     }),
   );
 
   // Spec 004 — Stop a chosen agent for real (terminal + runtime state).
   context.subscriptions.push(
     vscode.commands.registerCommand(COMMAND_STOP_AGENT, async () => {
-      await runStopAgentCommand(provider.runtime);
+      await runStopAgentCommand(provider.runtime, undefined, provider.runtimeHost);
     }),
   );
 
@@ -120,6 +161,7 @@ export function activate(context: vscode.ExtensionContext) {
           providerProfileStore: provider.providerProfileStore,
           secretStorageProvider: provider.secretStorageProvider,
         },
+        runtimeHost: provider.runtimeHost,
         launcher: async (options) => {
           await provider.launchFromFlow(options);
         },
@@ -137,6 +179,7 @@ export function activate(context: vscode.ExtensionContext) {
           providerProfileStore: provider.providerProfileStore,
           secretStorageProvider: provider.secretStorageProvider,
         },
+        runtimeHost: provider.runtimeHost,
         launcher: async (options) => {
           await provider.launchFromFlow(options);
         },
@@ -156,6 +199,7 @@ export function activate(context: vscode.ExtensionContext) {
           providerProfileStore: provider.providerProfileStore,
           secretStorageProvider: provider.secretStorageProvider,
         },
+        runtimeHost: provider.runtimeHost,
         launcher: async (options) => {
           await provider.launchFromFlow(options);
         },

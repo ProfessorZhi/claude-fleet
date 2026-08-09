@@ -310,6 +310,21 @@ export async function launchVSCode(
     ...(applyMockHomeEnv(process.env, tmpHome) as Record<string, string>),
     // Prepend mock bin so 'claude' resolves to our mock
     PATH: `${mockBinDir}${PATH_SEP}${process.env['PATH'] ?? '/usr/local/bin:/usr/bin:/bin'}`,
+    // Spec 005: the +Agent flow only offers configured provider profiles, so
+    // seed one at extension activation (see seedProvidersFromEnvironment in
+    // adapters/vscode/extension.ts). authMode 'inherit' needs no secret, and
+    // defaultModelId 'sonnet' is the first item of the model QuickPick.
+    CLAUDE_FLEET_E2E_SEED_PROVIDERS: JSON.stringify([
+      {
+        id: 'e2e.inherit',
+        name: 'E2E Inherit',
+        kind: 'anthropic-compatible',
+        providerType: 'anthropic-compatible',
+        authMode: 'inherit',
+        enabled: true,
+        defaultModelId: 'sonnet',
+      },
+    ]),
     PIXEL_AGENTS_E2E_CLAUDE_BIN: mockClaudeBinaryPath,
     PIXEL_AGENTS_E2E_LAUNCH_LOG: launchLogFile,
     PIXEL_AGENTS_NODE_BIN: process.execPath,

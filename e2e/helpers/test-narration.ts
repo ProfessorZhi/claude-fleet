@@ -104,6 +104,9 @@ export function clearNarrationContext(): void {
  */
 export async function finishNarration(window: Page): Promise<void> {
   if (!context) return;
+  // Windows does not record review video, and VS Code's xterm DOM is not a
+  // stable test surface. Keep narration entirely out of the Windows E2E path.
+  if (process.platform === 'win32') return;
 
   try {
     const visibleRows = window.locator('.xterm:visible .xterm-rows');
@@ -142,6 +145,11 @@ export async function finishNarration(window: Page): Promise<void> {
  * interaction class broke heuristic terminal↔agent tracking.
  */
 export async function openMonitorTerminal(window: Page, tmpHome: string): Promise<void> {
+  // The monitor is a cosmetic review-video surface. Windows has no video
+  // recording, so do not touch VS Code's private xterm DOM there; product E2E
+  // assertions must remain independent of `.xterm-rows` and the helper textarea.
+  if (process.platform === 'win32') return;
+
   try {
     const testLog = getTestNarrationLogPath(tmpHome);
     const externalLog = getExternalNarrationLogPath(tmpHome);

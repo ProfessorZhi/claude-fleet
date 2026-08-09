@@ -7,9 +7,12 @@
 > **当前状态：v0.1 Alpha** — 早期测试版本。
 > 在一个 VS Code 工作区里同时运行、管理多个 Claude Code 实例。
 
-Claude Fleet 是一个 VS Code 扩展：让你在一个工作区里同时驱动多个
-**Claude Code** 实例，每个实例拥有**独立的 Repo、Provider、Model 与 Session**，
-并通过 Pixel-style 可视化实时看到每个 Agent 的状态。
+Claude Fleet 是一个本地优先的 Coding Agent Control Plane：当前以 VS Code 扩展为执行
+现场，管理多个 **Claude Code** 实例，并为未来的 Codex Coordinator、Codex Worker 和
+其他 Agent 提供统一的 Repo、Worktree、Provider、Model、Session 与 Telemetry 关联。
+当前默认产品目标是 Pixel Sci-Fi Fleet Command；Pixel Office 作为正式可选 Scene 保留。
+Fleet Command / Pixel Office 共用 Agent 生命周期、Focus、Subagent 和 Auto Discovery；
+舰队视觉正在接入，不能把 Office 行为简单丢弃。
 
 基于 [Pixel Agents](https://github.com/pixel-agents-hq/pixel-agents)（MIT）二次开发。
 
@@ -25,6 +28,8 @@ Claude Fleet 是一个 VS Code 扩展：让你在一个工作区里同时驱动�
 - **SecretStorage 安全存储** — Provider Secret 保存在 VS Code SecretStorage，
   不进入配置 / 日志 / UI
 - **Pixel 状态可视化** — 实时看到每个 Agent 在做什么
+- **Fleet Telemetry** — 统一关联 Claude/Codex 事件、Session、Task 和 Usage
+- **agentmetrics** — 记录 Token、时间、API-equivalent cost 和账户级 Quota 证据
 - **Focus / Stop / Restart** — 聚焦 Terminal、真正停止、保留配置重启
 
 ## 安装
@@ -85,6 +90,7 @@ Claude Fleet 支持任何 **Anthropic-compatible** 端点：
 ## Alpha 限制
 
 - 当前主要支持 **Claude Code**；Codex / Gemini CLI / Antigravity 尚未支持
+- Coordinator / MCP / Fleet Command Scene 仍处于 v0.2 Spec / integration 阶段
 - 尚未正式发布到 VS Code Marketplace（当前通过 VSIX 分发）
 - Restart 不恢复原 Claude Session（重新开启新 Session）
 - 每个实例沿用你的 `~/.claude/settings.json`（含 hooks）；若其中设置了

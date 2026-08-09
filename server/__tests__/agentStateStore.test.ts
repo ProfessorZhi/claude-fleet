@@ -320,7 +320,7 @@ describe('AgentStateStore', () => {
 });
 
 describe('Spec 005 — managed flag persistence', () => {
-  it('persist round-trips managedByFleet and lastProviderProfileId', () => {
+  it('persist round-trips managed and host ownership metadata', () => {
     const localStore = new AgentStateStore();
     const adapter = createMockAdapter();
     localStore.setAdapter(adapter);
@@ -331,6 +331,11 @@ describe('Spec 005 — managed flag persistence', () => {
         managedByFleet: true,
         lastProviderProfileId: 'minimax.1',
         providerProfileId: 'deepseek.1',
+        hostId: 'vscode-integrated-terminal',
+        workspaceId: '/workspace',
+        terminalId: 'terminal-agent-1',
+        launchSource: 'restart',
+        requestedBy: 'user',
       }),
     );
 
@@ -341,6 +346,11 @@ describe('Spec 005 — managed flag persistence', () => {
     expect(saved[0].managedByFleet).toBe(true);
     expect(saved[0].lastProviderProfileId).toBe('minimax.1');
     expect(saved[0].providerProfileId).toBe('deepseek.1');
+    expect(saved[0].hostId).toBe('vscode-integrated-terminal');
+    expect(saved[0].workspaceId).toBe('/workspace');
+    expect(saved[0].terminalId).toBe('terminal-agent-1');
+    expect(saved[0].launchSource).toBe('restart');
+    expect(saved[0].requestedBy).toBe('user');
   });
 
   it('legacy agents persist without managed flag (undefined, no crash)', () => {

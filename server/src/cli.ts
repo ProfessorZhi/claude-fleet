@@ -9,9 +9,12 @@
  */
 
 import { spawn } from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as readline from 'readline';
 
+import type { FleetControlRequest } from '../../core/src/controlContracts.js';
 import { getProviderDefinition } from '../../core/src/providerRegistry.js';
 import { AgentRuntime } from './agentRuntime.js';
 import { AgentStateStore } from './agentStateStore.js';
@@ -25,18 +28,22 @@ import type { AssetCache, ReloadAssetsSideEffect } from './clientMessageHandler.
 import { createCliProviderStore } from './cliProviderStore.js';
 import { resolveClaudeCli } from './cliResolver.js';
 import { readConfig } from './configPersistence.js';
-import { MAX_PORT, MIN_PORT } from './constants.js';
+import { MAX_PORT, MIN_PORT, SERVER_JSON_DIR, SERVER_JSON_NAME, SERVERS_DIR } from './constants.js';
 import { FileStateAdapter } from './fileStateAdapter.js';
+import { FleetControlClient } from './fleetControlClient.js';
 import { resolveClaudeLaunchConfig } from './launchConfig.js';
 import { migrateStateDir } from './migrateStateDir.js';
 import { claudeProvider, copyHookScript } from './providers/index.js';
 import { ClaudeFleetServer } from './server.js';
+import { isServerConfig, isServerTarget, type ServerTarget } from './serverConfig.js';
 
 // ── Argument parsing ──────────────────────────────────────────
 
 export interface CliArgs {
-  /** Spec 005 subcommand: 'providers' | 'launch' | undefined (standalone server). */
-  command?: 'providers' | 'launch';
+  /** Local management subcommands or undefined (standalone server). */
+  command?: 'providers' | 'launch' | 'control';
+  /** JSON FleetControlRequest passed to `control --request`. */
+  controlRequest?: string;
   /** Unset -> ephemeral (OS-assigned) port, so multiple standalone instances
    *  can run at once without a collision. --port picks a fixed one. */
   port?: number;
@@ -54,6 +61,17 @@ export function parseArgs(argv: string[]): CliArgs {
     const arg = argv[i];
     if (arg === 'providers' || arg === 'launch') {
       args.command = arg;
+      continue;
+    }
+    if (arg === 'control') {
+      args.command = arg;
+      continue;
+    }
+    if (arg === '--request') {
+      const raw = argv[i + 1];
+      if (!raw) throw new CliArgsError('Missing value for --request.');
+      args.controlRequest = raw;
+      i++;
       continue;
     }
     if (arg === '--port' || arg === '-p') {
@@ -80,6 +98,7 @@ export function parseArgs(argv: string[]): CliArgs {
 Commands:
   providers              List configured Provider Profiles
   launch                 Interactively launch a native Claude Code session
+  control --request JSON Submit a local Fleet Control request to the running extension
 
 Options (standalone server):
   --port, -p <number>   Port to listen on (default: OS-assigned ephemeral port)
@@ -215,6 +234,65 @@ export async function runLaunchCommand(): Promise<void> {
   }
 }
 
+/** Submit one JSON control request to the newest locally discovered Fleet server. */
+export async function runControlCommand(requestText: string | undefined): Promise<void> {
+  if (!requestText) {
+    throw new CliArgsError('control requires --request <JSON>.');
+  }
+  let request: FleetControlRequest;
+  try {
+    const parsed: unknown = JSON.parse(requestText);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('request must be a JSON object');
+    }
+    request = parsed as FleetControlRequest;
+  } catch (error) {
+    throw new CliArgsError(
+      `Invalid control request JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const server = discoverControlServer();
+  if (!server) {
+    throw new Error(
+      'No running Claude Fleet server was found. Open the VS Code Fleet panel first.',
+    );
+  }
+  const response = await new FleetControlClient(server).submit(request);
+  process.stdout.write(JSON.stringify(response, null, 2) + '\n');
+}
+
+export function discoverControlServer(homeDir = os.homedir()): ServerTarget | undefined {
+  const registryDir = path.join(homeDir, SERVER_JSON_DIR, SERVERS_DIR);
+  try {
+    const entries = fs
+      .readdirSync(registryDir)
+      .filter((file) => file.endsWith('.json'))
+      .map((file) => {
+        try {
+          return JSON.parse(fs.readFileSync(path.join(registryDir, file), 'utf8')) as unknown;
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((value): value is unknown => value !== undefined)
+      .filter(isServerConfig)
+      .sort((a, b) => b.startedAt - a.startedAt);
+    if (entries[0]) return entries[0];
+  } catch {
+    // Fall through to the legacy single-server pointer.
+  }
+
+  try {
+    const legacy = JSON.parse(
+      fs.readFileSync(path.join(homeDir, SERVER_JSON_DIR, SERVER_JSON_NAME), 'utf8'),
+    ) as unknown;
+    return isServerTarget(legacy) ? legacy : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ── Main ──────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -233,6 +311,10 @@ async function main(): Promise<void> {
   }
   if (args.command === 'launch') {
     await runLaunchCommand();
+    return;
+  }
+  if (args.command === 'control') {
+    await runControlCommand(args.controlRequest);
     return;
   }
 

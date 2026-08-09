@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 
-import { CliArgsError, parseArgs } from '../src/cli.js';
+import { CliArgsError, discoverControlServer, parseArgs } from '../src/cli.js';
 
 const CLI_BUNDLE = path.join(__dirname, '../../dist/cli.js');
 const CLI_START_TIMEOUT_MS = 10_000;
@@ -226,6 +226,46 @@ describe('parseArgs — Spec 005 subcommands', () => {
 
   it('parses the launch subcommand', () => {
     expect(parseArgs(['launch']).command).toBe('launch');
+  });
+
+  it('parses the control request subcommand without printing credentials', () => {
+    const args = parseArgs(['control', '--request', '{"action":"get_status"}']);
+    expect(args.command).toBe('control');
+    expect(args.controlRequest).toBe('{"action":"get_status"}');
+  });
+
+  it('discovers the newest valid local Fleet server record', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-control-home-'));
+    const registry = path.join(home, '.claude-fleet', 'servers');
+    fs.mkdirSync(registry, { recursive: true });
+    fs.writeFileSync(
+      path.join(registry, 'old.json'),
+      JSON.stringify({
+        port: 3101,
+        pid: 1,
+        token: 'old-token',
+        startedAt: 1,
+        servesSpa: false,
+        protocol: 1,
+      }),
+    );
+    fs.writeFileSync(
+      path.join(registry, 'new.json'),
+      JSON.stringify({
+        port: 3102,
+        pid: 1,
+        token: 'new-token',
+        startedAt: 2,
+        servesSpa: false,
+        protocol: 1,
+      }),
+    );
+
+    try {
+      expect(discoverControlServer(home)).toMatchObject({ port: 3102, token: 'new-token' });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('leaves command undefined for plain server mode (backward compatible)', () => {

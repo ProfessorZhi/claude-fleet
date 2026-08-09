@@ -22,6 +22,7 @@
  *   ADR-002 in .agent/knowledge/decisions.md
  */
 
+import { validateFleetIdentity } from '../../core/src/fleetContracts.js';
 import type {
   ProviderProfile,
   ResolvedLaunchConfig,
@@ -36,6 +37,8 @@ export type SecretLookup = (ref: string) => string | undefined;
 export interface ResolveOptions {
   /** When true, append `--dangerously-skip-permissions` (legacy upstream flag). */
   bypassPermissions?: boolean;
+  /** Secret-free Coordinator/Worker correlation metadata. */
+  fleet?: import('../../core/src/fleetContracts.js').FleetIdentity;
 }
 
 /**
@@ -67,6 +70,9 @@ export function resolveClaudeLaunchConfig(
   secretLookup: SecretLookup,
   opts: ResolveOptions = {},
 ): ResolvedLaunchConfig {
+  const fleetError = validateFleetIdentity(opts.fleet);
+  if (fleetError) throw new Error(`Claude Fleet: ${fleetError}`);
+
   // ── env (fresh object every call) ─────────────────────────
   const env: Record<string, string> = {};
 
@@ -148,6 +154,7 @@ export function resolveClaudeLaunchConfig(
     providerDisplayName: profile.name,
     modelId: typeof modelId === 'string' && modelId.trim() !== '' ? modelId : undefined,
   };
+  if (opts.fleet) safeMetadata.fleet = opts.fleet;
 
   return { env, args, safeMetadata };
 }

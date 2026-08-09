@@ -529,6 +529,11 @@ export class AgentRuntime {
         terminalRef: undefined,
         isExternal: true,
         projectDir: p.projectDir,
+        hostId: p.hostId,
+        workspaceId: p.workspaceId,
+        terminalId: p.terminalId,
+        launchSource: p.launchSource,
+        requestedBy: p.requestedBy,
         jsonlFile: p.jsonlFile,
         fileOffset: 0,
         lineBuffer: '',
@@ -557,6 +562,7 @@ export class AgentRuntime {
         teamUsesTmux: p.teamUsesTmux,
         palette: p.palette,
         hueShift: p.hueShift,
+        fleet: p.fleet,
       };
 
       assignPaletteIfNeeded(agent, this.store);

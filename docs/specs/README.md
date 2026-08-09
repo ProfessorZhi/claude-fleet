@@ -1,6 +1,6 @@
 # docs/specs/ — Feature Spec 目录
 
-本目录用于存放 Claude Fleet 的 **Feature Spec**。
+本目录用于存放 Agent Fleet 的 **Feature Spec**。
 
 每个非平凡功能都应该有独立目录，遵循 `.agent/workflows/spec-coding.md` 中的流程：
 
@@ -64,11 +64,11 @@ MVP Spec Set
 
 每个 Feature Spec 仍然保持三个文件：
 
-| 文件 | 职责 |
-|---|---|
-| `requirements.md` | 这个 Feature 要做什么、为什么、范围与非范围 |
-| `design.md` | 这个 Feature 的架构 / UX 设计，包含 Component / Data / Interface / 失败模式 / 取舍 |
-| `tasks.md` | 实现这个 Feature 的具体任务列表 |
+| 文件              | 职责                                                                               |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| `requirements.md` | 这个 Feature 要做什么、为什么、范围与非范围                                        |
+| `design.md`       | 这个 Feature 的架构 / UX 设计，包含 Component / Data / Interface / 失败模式 / 取舍 |
+| `tasks.md`        | 实现这个 Feature 的具体任务列表                                                    |
 
 ---
 
@@ -94,9 +94,20 @@ MVP Spec Set
 
 ## 当前 Spec 索引
 
-| Slug | 状态 | 概要 |
-|---|---|---|
-| *(暂无)* | — | Spec 将在 Phase 1（MVP Spec Set）阶段陆续创建。 |
+Agent Fleet 是新文档和新 Spec 的 canonical brand。旧目录中的 Claude Fleet 名称仅表示
+历史迁移或兼容上下文；本索引不再规划第二轮品牌迁移。
+
+| Slug                                       | 状态   | 概要                                                      |
+| ------------------------------------------ | ------ | --------------------------------------------------------- |
+| `001-multi-instance-runtime`               | 已实现 | Claude Code 多实例 Runtime                                |
+| `002-provider-model-isolation`             | 已实现 | Provider / Model 隔离                                     |
+| `003-instance-status`                      | 已实现 | Agent 状态与事件                                          |
+| `004-minimal-control-ui`                   | 已实现 | 最小控制 UI                                               |
+| `005-provider-registry-session-continuity` | 已实现 | Provider Registry / Session Continuity                    |
+| `006-branding-discovery-migration`         | 已实现 | 品牌、迁移、Discovery upsert                              |
+| `agentmetrics-integration`                 | 进行中 | agentmetrics 合并与 Fleet identity 合同（非编号迁移基础） |
+| `007-fleet-observability-workflow`         | 进行中 | 当前 Codex Client + Claude Code Worker 拓扑与 FleetEvent  |
+| `008-fleet-command-scene`                  | 设计中 | 可切换 Fleet Command / Pixel Office Scene                 |
 
 完整 MVP Spec Index 在 Phase 1 完成后由 [`docs/ROADMAP.md`](../ROADMAP.md) 引用并
 在此处同步。

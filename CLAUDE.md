@@ -18,14 +18,14 @@
 
 ## 资料位置
 
-| 内容 | 位置 |
-|---|---|
-| 共享规则、原则、导航 | `AGENTS.md` |
-| 项目信息（背景、架构、Roadmap、Spec） | `docs/` |
-| 共享工作流（spec / implement / debug / review） | `.agent/workflows/` |
-| 经验、坑、架构决策 | `.agent/knowledge/` |
-| 外部参考资料、模板、确定性脚本 | `.agent/references/`、`.agent/templates/`、`.agent/scripts/` |
-| Claude Code 专属能力 | `.claude/skills/`、`.claude/rules/` |
+| 内容                                            | 位置                                                         |
+| ----------------------------------------------- | ------------------------------------------------------------ |
+| 共享规则、原则、导航                            | `AGENTS.md`                                                  |
+| 项目信息（背景、架构、Roadmap、Spec）           | `docs/`                                                      |
+| 共享工作流（spec / implement / debug / review） | `.agent/workflows/`                                          |
+| 经验、坑、架构决策                              | `.agent/knowledge/`                                          |
+| 外部参考资料、模板、确定性脚本                  | `.agent/references/`、`.agent/templates/`、`.agent/scripts/` |
+| Claude Code 专属能力                            | `.claude/skills/`、`.claude/rules/`                          |
 
 ---
 
@@ -41,6 +41,9 @@
 
 ## 关于本阶段
 
-- Claude Code 是当前阶段（Phase 0 / Phase 1）的主要开发 Agent。
+- Claude Code 是当前主要 Worker Runtime，也是 Fleet 的首个稳定执行适配器。
 - 公共规则以 `AGENTS.md` 为准，Claude Code 不得绕过它去"自行决定"。
-- 等公共 Workflow 稳定之后，再决定哪些能力需要 Claude-specific Adapter。
+- Coordinator / Fleet 协作流程见 `docs/COORDINATOR_WORKFLOW.md`；不要把 Claude Code
+  TUI 操作当成机器控制协议。
+- Claude-specific 能力（hooks、skills、权限、session transcript）只能通过薄 Adapter
+  接入共享 FleetEvent / Worker contract，不把 Claude 私有格式暴露给前端。

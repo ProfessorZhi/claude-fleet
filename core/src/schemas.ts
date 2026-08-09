@@ -9,6 +9,8 @@
  * the contract, hence the @public tags.
  */
 
+import type { FleetIdentity } from './fleetContracts.js';
+
 // ── Agent State ──────────────────────────────────────────────
 
 /** Persisted agent data (survives F5 reload / restart) */
@@ -22,6 +24,11 @@ export interface PersistedAgent {
   /** Original repo cwd at launch. Persisted so Restart reuses the exact repo
    *  instead of re-deriving it from projectDir. Absent on legacy state. */
   cwd?: string;
+  hostId?: string;
+  workspaceId?: string;
+  terminalId?: string;
+  launchSource?: string;
+  requestedBy?: string;
   folderName?: string;
   teamName?: string;
   agentName?: string;
@@ -51,6 +58,9 @@ export interface PersistedAgent {
   managedByFleet?: boolean;
   /** Provider profile id used before a Switch Provider. NOT a secret. */
   lastProviderProfileId?: string;
+
+  /** Secret-free Coordinator/Worker correlation metadata. */
+  fleet?: FleetIdentity;
 }
 
 /** Agent seat assignment with visual identity

@@ -24,6 +24,7 @@ import { CLAUDE_TERMINAL_NAME_PREFIX } from '../../server/src/providers/hook/cla
 import { claudeProvider } from '../../server/src/providers/index.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from '../../server/src/timerManager.js';
 import type { AgentState, PersistedAgent } from '../../server/src/types.js';
+import { detectShellKind, renderLaunchCommand } from './launchCommandRender.js';
 import type { ProviderProfileStore } from './providerProfileStore.js';
 import type { SecretStorageProvider } from './secretStorageProvider.js';
 
@@ -44,6 +45,10 @@ export interface LaunchNewTerminalOptions {
   bypassPermissions?: boolean;
   /** When true, do not call `terminal.show()` (used by auto-spawn). */
   suppressShow?: boolean;
+  /** Safe lifecycle provenance recorded with the managed instance. */
+  launchSource?: string;
+  /** Safe requester identity recorded with the managed instance. */
+  requestedBy?: string;
   providerProfileStore: ProviderProfileStore;
   secretStorageProvider: SecretStorageProvider;
 }
@@ -98,7 +103,7 @@ async function resolveLaunchConfigFromStore(args: {
     args.launchConfig.cwd ?? '',
     '00000000-0000-0000-0000-000000000000',
     (_ref) => secret,
-    { bypassPermissions: args.bypassPermissions },
+    { bypassPermissions: args.bypassPermissions, fleet: args.launchConfig.fleet },
   );
 }
 
@@ -130,7 +135,7 @@ export async function launchNewTerminal(
   projectScanTimerRef: { current: ReturnType<typeof setInterval> | null },
   persistAgents: () => void,
   options: LaunchNewTerminalOptions,
-): Promise<void> {
+): Promise<AgentState | undefined> {
   const {
     folderPath,
     launchConfig,
@@ -205,7 +210,16 @@ export async function launchNewTerminal(
   // Windows claude.cmd/claude.exe support, no env mutation (Spec 005 FR-008).
   const cliResolution = await resolveClaudeCli();
   const command = cliResolution.ok ? cliResolution.command : launch.command;
-  terminal.sendText([command, ...launch.args].join(' '));
+  // Shell-aware rendering: a resolved absolute path may contain spaces, and
+  // the integrated terminal's shell (cmd.exe / PowerShell / sh) has
+  // different quoting grammar — detect it via vscode.env.shell and render
+  // accordingly (see launchCommandRender.ts).
+  terminal.sendText(
+    renderLaunchCommand(command, launch.args, {
+      platform: process.platform,
+      shellKind: detectShellKind(vscode.env.shell, process.platform),
+    }),
+  );
 
   const projectDir = getProjectDirPath(cwd);
 
@@ -233,6 +247,11 @@ export async function launchNewTerminal(
     // Exact repo the user picked at launch — Restart must reuse THIS, not the
     // derived transcript projectDir (Spec: preserve repo cwd across restart).
     cwd,
+    hostId: 'vscode-integrated-terminal',
+    workspaceId: cwd,
+    terminalId: `terminal-agent-${id}`,
+    launchSource: options.launchSource ?? (sessionMode === 'resume' ? 'resume' : 'fleet-ui'),
+    requestedBy: options.requestedBy ?? 'user',
     jsonlFile: expectedFile,
     fileOffset: 0,
     lineBuffer: '',
@@ -256,6 +275,7 @@ export async function launchNewTerminal(
     providerProfileId: resolved.safeMetadata.providerProfileId,
     providerDisplayName: resolved.safeMetadata.providerDisplayName,
     modelId: resolved.safeMetadata.modelId,
+    fleet: resolved.safeMetadata.fleet,
     // Spec 003 — launch timestamp (transient; drives the "transcript never
     // appeared" error heuristic in agentStatus.ts).
     createdAt: Date.now(),
@@ -369,6 +389,7 @@ export async function launchNewTerminal(
     }
   }, JSONL_POLL_INTERVAL_MS);
   jsonlPollTimers.set(id, pollTimer);
+  return agent;
 }
 
 export function removeAgent(
@@ -432,6 +453,11 @@ export function persistAgents(agents: AgentStateStore, adapter: StateAdapter): v
       // Original launch cwd — persists the exact repo for Restart (legacy
       // agents have none; restore keeps it undefined).
       cwd: agent.cwd,
+      hostId: agent.hostId,
+      workspaceId: agent.workspaceId,
+      terminalId: agent.terminalId,
+      launchSource: agent.launchSource,
+      requestedBy: agent.requestedBy,
       folderName: agent.folderName,
       teamName: agent.teamName,
       agentName: agent.agentName,
@@ -445,6 +471,7 @@ export function persistAgents(agents: AgentStateStore, adapter: StateAdapter): v
       providerProfileId: agent.providerProfileId,
       providerDisplayName: agent.providerDisplayName,
       modelId: agent.modelId,
+      fleet: agent.fleet,
       // Spec 005 — managed flag + pre-switch provider (NOT secrets).
       managedByFleet: agent.managedByFleet,
       lastProviderProfileId: agent.lastProviderProfileId,
@@ -519,6 +546,11 @@ export function restoreAgents(
       projectDir: p.projectDir,
       // Restore the original launch cwd for Restart; undefined on legacy state.
       cwd: p.cwd,
+      hostId: p.hostId,
+      workspaceId: p.workspaceId,
+      terminalId: p.terminalId,
+      launchSource: p.launchSource,
+      requestedBy: p.requestedBy,
       jsonlFile: p.jsonlFile,
       fileOffset: 0,
       lineBuffer: '',
@@ -553,6 +585,7 @@ export function restoreAgents(
       providerProfileId: p.providerProfileId,
       providerDisplayName: p.providerDisplayName,
       modelId: p.modelId,
+      fleet: p.fleet,
       // Spec 005 — managed flag + pre-switch provider restored. Absent on
       // legacy / external agents.
       managedByFleet: p.managedByFleet,

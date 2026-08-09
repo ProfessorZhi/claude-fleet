@@ -5,7 +5,7 @@ import path from 'path';
 
 import { getClaudeProjectDir } from './team';
 import { narrate } from './test-narration';
-import { clickAddAgent } from './webview';
+import { acceptQuickPick, clickAddAgent } from './webview';
 
 const INTERNAL_AGENT_TIMEOUT_MS = 20_000;
 
@@ -167,6 +167,14 @@ export async function addAgentForFolder(
   const folderItem = frame.getByRole('button', { name: folderName, exact: true });
   await expect(folderItem).toBeVisible({ timeout: INTERNAL_AGENT_TIMEOUT_MS });
   await folderItem.click();
+
+  // Spec 005: the flow then shows native QuickPicks — workspace folder
+  // (multi-root), Provider, Model. Narrow the folder picker to the target
+  // folder, then accept the seeded provider profile and its default model.
+  const page = frame.page();
+  await acceptQuickPick(page, 'Claude Fleet: Choose workspace folder', folderName);
+  await acceptQuickPick(page, 'Claude Fleet: Choose Provider');
+  await acceptQuickPick(page, 'Claude Fleet: Choose Model');
 
   await expect
     .poll(() => countInvocations(readInvocationLog(mockLogFile)), {

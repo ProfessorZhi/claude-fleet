@@ -10,6 +10,71 @@ export {
   SERVER_JSON_NAME,
   TASK_DESCRIPTION_DISPLAY_MAX_LENGTH,
 } from './constants.js';
+export type {
+  FleetControlAction,
+  FleetControlApi,
+  FleetControlDecision,
+  FleetControlPolicy,
+  FleetControlRequest,
+  FleetControlResponse,
+  FleetLaunchTemplate,
+  FleetMissionInput,
+  FleetWorkItemInput,
+} from './controlContracts.js';
+export { validateFleetControlRequest, validateLaunchTemplate } from './controlContracts.js';
+export type { FleetIdentity } from './fleetContracts.js';
+export { toFleetWireIdentity, validateFleetIdentity } from './fleetContracts.js';
+export type {
+  FleetContextUsage,
+  FleetEvent,
+  FleetEventType,
+  FleetTelemetryProjection,
+  FleetTelemetrySnapshot,
+} from './fleetTelemetry.js';
+export { FleetTelemetryStore, normalizeAgentBroadcast } from './fleetTelemetry.js';
+export type {
+  AgentPerformanceAggregate,
+  AssignmentAction,
+  AssignmentApproval,
+  AssignmentDecision,
+  ControlDecisionRecord,
+  CostAmount,
+  CostBasis,
+  DataAvailability,
+  EstimateOrActual,
+  ExpectedActual,
+  ExpectedActualMetrics,
+  LaunchRecord,
+  LaunchSource,
+  LaunchTemplate,
+  LedgerEvidence,
+  LedgerMeasurement,
+  LedgerSource,
+  MissionRecord,
+  QualitySignal,
+  QualitySignalKind,
+  QuotaSnapshot,
+  QuotaUnit,
+  QuotaValue,
+  QuotaWindow,
+  ResourceAccount,
+  ResourceAccountKind,
+  ResourceMetrics,
+  SafeMetadata,
+  SafeMetadataPrimitive,
+  SafeMetadataValue,
+  SessionMode,
+  SessionRecord,
+  SessionStatus,
+  TokenUsage,
+  UsageRecord,
+  WorkItemRecord,
+} from './ledgerContracts.js';
+export {
+  isLedgerPayloadSafe,
+  normalizeSafeMetadata,
+  validateLedgerPayload,
+} from './ledgerContracts.js';
 export type { ClientMessage, FurnitureAssetMessage, ServerMessage } from './messages.js';
 export type { AgentEvent, HookProvider } from './provider.js';
 export type {
@@ -28,6 +93,22 @@ export {
   validateProviderProfile,
 } from './providerProfiles.js';
 export type {
+  AgentRole,
+  CoordinatorRef,
+  FleetControlMode,
+  FleetInstance,
+  FleetManagement,
+  FleetRuntime,
+  FleetRuntimeHost,
+  FleetStatus,
+  Mission,
+  RuntimeAdapter,
+  RuntimeCapabilities,
+  RuntimeLaunchRequest,
+  RuntimeLaunchResult,
+  WorkItem,
+} from './runtimeContracts.js';
+export type {
   AgentMeta,
   ColorValue,
   Disposable,
@@ -39,4 +120,23 @@ export type {
   PlacedFurniture,
   SpriteData,
 } from './schemas.js';
+export type {
+  ResourceDirective,
+  ResourceDirectiveTarget,
+  StrategyAdapter,
+  StrategyCandidate,
+  StrategyConstraint,
+  StrategyFactor,
+  StrategyFactorImpact,
+  StrategyInput,
+  StrategyObjective,
+  StrategyPolicy,
+  StrategyRecommendation,
+} from './strategyContracts.js';
+export {
+  costValue,
+  isDirectiveActive,
+  normalizeResourceDirective,
+  normalizeStrategyText,
+} from './strategyContracts.js';
 export type { TeamProvider } from './teamProvider.js';

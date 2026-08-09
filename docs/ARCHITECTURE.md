@@ -1,140 +1,629 @@
-# ARCHITECTURE.md — Claude Fleet
+# ARCHITECTURE.md — Agent Fleet
 
-> "系统当前长什么样"。  
-> 产品说明见 [`PROJECT.md`](./PROJECT.md)；阶段规划见 [`ROADMAP.md`](./ROADMAP.md)。
+> Agent Fleet 是本地 Coding Agent Control Plane：管理真实 Coding Agent Runtime 的实例、配置、Session、终端、遥测、历史和控制边界。它不替代任何 Coding Agent。
 >
-> 本文件在 Phase 0 故意保持轻量。架构未定型之前，不要假装它已经定型。
+> 产品范围见 [PROJECT.md](./PROJECT.md)，阶段计划见 [ROADMAP.md](./ROADMAP.md)，长期 Ledger 与调度设计见 [FLEET_LEDGER_AND_SCHEDULING.md](./FLEET_LEDGER_AND_SCHEDULING.md)。
 
 ---
 
-## 架构目标
+## 1. Canonical identity
 
-- **天生面向多 Agent。** 不应该有任何架构决策把 Claude Code 写死成唯一 Agent；
-  Codex、Gemini CLI、Antigravity 等 Coding Agent 必须可以在不重写宿主的前提下加入。
-- **强隔离。** 每个实例的 Repo / Provider / Model / 配置默认互不污染。
-- **实时可观测。** UI 反映 Agent 状态的延迟必须低到让"同时驱动多个 Agent"这件事
-  是可用的，而不是令人抓狂的。
-- **本地优先，VS Code 为锚点。** 产品形态是 VS Code Extension；核心功能不应依赖云端。
-- **可视化层可扩展。** Pixel-style 只是同一种状态的其中一种渲染，未来允许有其他渲染
-  形态而不复制状态本身。
+The canonical product and repository brand is **Agent Fleet**.
+
+The following identifiers remain compatibility or historical surfaces until a deliberate product migration is specified:
+
+- GitHub repository and npm package names containing claude-fleet.
+- VS Code command IDs, configuration keys, extension classes, debug flags, and state paths containing Claude Fleet.
+- Historical Pixel Agents / Claude Fleet migration references.
+- Existing user state and persisted metadata.
+
+New architecture documents, feature specs, UI copy, and new APIs must use Agent Fleet. This round does not perform a package, command, configuration, persisted-state, or GitHub rename.
 
 ---
 
-## 当前理解（Phase 0 → Phase 2）
+## 2. Positioning and boundaries
 
-经过对上游 [Pixel Agents](https://github.com/pixel-agents-hq/pixel-agents) 的调研
-（见 [`.agent/references/pixel-agents.md`](../.agent/references/pixel-agents.md)
-与 ADR-001），Claude Fleet 第一阶段**直接基于** Pixel Agents 上游代码进行二次开发，
-作为 VS Code Runtime 与可视化基线。
+Agent Fleet owns the management plane:
 
-### 高层形态（Spec 005/006 后）
+- runtime instance identity and lifecycle ownership;
+- provider/profile/model selection and launch metadata;
+- repository, workspace, worktree, host, and terminal binding;
+- session continuity and native resume;
+- normalized events and current telemetry;
+- durable task/session/PR/usage/quality/assignment history;
+- policy-aware recommendations and, later, approved execution;
+- presentation projections such as Fleet Command and Pixel Office.
 
-```
-Claude Fleet
-│
-├── Provider Registry          core/src/providerRegistry.ts + providerProfiles.ts
-│   ├── ProviderDefinition     （类型模板：native-anthropic / anthropic-api /
-│   │                            bedrock / vertex / foundry / anthropic-compatible
-│   │                            + presetId（deepseek / minimax / custom））
-│   └── ProviderProfileStore   （用户配置实例；globalState（VS Code）/ 文件（CLI））
-├── Secret Store               VS Code SecretStorage / CLI secrets.json
-├── Session Registry           AgentState.cwd / sessionId / provider / model /
-│                              managedByFleet / lastProviderProfileId
-├── Instance Manager           launchNewTerminal（new / resume）· Stop · Focus ·
-│                              Restart(resume) · Switch Provider · New Session
-├── Auto Discovery             global scanner / external adoption / upsert(按 sessionId)
-├── Status / Pixel UI          Agent card：Repo / Provider / Model / Session /
-│                              Status / Managed（Fleet | External）
-│
-└── Claude Code Runtime Adapter
-    ├── resolveClaudeLaunchConfig（唯一 Resolver：Profile+Secret → env/args/safeMetadata）
-    ├── buildLaunchCommand      （claude 原生参数：--session-id / --resume / --model）
-    ├── ClaudeFleetServer       （hook 事件接收）
-    └── native `claude` CLI     （永不 re-implement Claude Code）
+The native runtime owns agent behavior:
+
+- conversation and reasoning;
+- tool execution and permissions;
+- hooks, JSONL, subagents, teams, and session history;
+- native CLI semantics and provider-specific behavior.
+
+The boundary is intentionally explicit:
+
+```text
+Agent Fleet manages the runtime.
+The native CLI remains the Coding Agent.
 ```
 
-Claude Fleet **不是** Claude Code 的替代品：它只做 Provider/Account/Profile 管理、
-Model 选择、多实例管理、Repo/Session 管理、Pixel 可视化 / Auto Discovery；
-进入 Claude Code 后的所有原生能力（/help /resume /mcp / skills / hooks /
-CLAUDE.md / subagents / Agent Teams / permissions / session history）与用户
-直接运行 `claude` 一致（ADR-003）。
+Agent Fleet is not a Claude Code replacement, Codex replacement, conversation engine,
+agent-to-agent chat bus, distributed orchestration framework, or automatic merge authority.
 
-每个 Agent 实例在概念上：
+---
 
+## 3. Current implementation versus v1 target
+
+### Current implementation baseline
+
+The repository currently contains:
+
+- a VS Code Extension host under adapters/vscode;
+- TypeScript core contracts and provider/profile/session logic under core;
+- the Claude Fleet server and Claude Code hook/JSONL integration under server;
+- the existing Pixel Office webview scene under webview-ui;
+- the merged Python measurement and usage project under agentmetrics;
+- runtime-neutral Fleet identity, FleetInstance, Mission, WorkItem, and RuntimeAdapter type
+  contracts, plus a preliminary FleetEvent/Telemetry pipeline in the local worktree.
+- a side-effect-free FleetStrategyAdapter with ResourceDirective input and explainable
+  `recommend_assignment` Control API responses recorded as AssignmentDecision metadata.
+- a thin VscodeFleetRuntimeHost boundary for current Fleet-managed Claude Code launch, focus,
+  stop, restart, and resume entry points, including safe ownership metadata.
+
+The currently reliable Fleet-managed runtime is **Claude Code CLI**. Existing capabilities include
+multiple Claude instances, provider profiles, launch resolution, native session resume,
+provider switching, auto discovery, status projection, and terminal focus.
+
+Codex CLI now has a runtime adapter, a thin Codex FleetRuntimeHost boundary, and an in-memory
+ControlService path covered by fake-only tests. Its real process/terminal bridge is not yet
+connected, so Codex execution is not claimed as production-ready.
+
+The current local codebase still contains legacy Claude Fleet names. They are documented as
+compatibility surfaces; this architecture document does not claim that code-brand migration is complete.
+
+### v1 target
+
+The v1 managed runtime set is:
+
+```text
+Claude Code CLI
+Codex CLI
 ```
-┌──────────────── Claude Fleet Instance ────────────────┐
-│  Repo binding  │  Provider  │  Model  │  环境变量    │
-│  Agent Runtime (Claude Code via claudeProvider)      │
-│  Status / Progress Stream                            │
-└──────────────────────────────────────────────────────┘
+
+Both are RuntimeAdapters behind the same runtime-neutral FleetInstance model. v1 does not
+make a runtime-specific assumption in the Mission, WorkItem, Role, Ledger, Strategy, or UI layers.
+
+The following are target abstractions and are not all implemented in the current baseline:
+
+- generic FleetRuntimeHost lifecycle and multi-host resolution;
+- Fleet Control API MCP surface and remote transport beyond the local HTTP boundary;
+- managed Coordinator instances;
+- durable Mission and WorkItem orchestration;
+- durable Fleet Ledger persistence (the current store is in-memory);
+- ResourceAccount and provider-specific Quota adapters;
+- SCM and PR quality adapters;
+- strategy accuracy evaluation and durable ResourceDirective history;
+- Instance Detail and Terminal Dock management UI;
+- policy-controlled autonomous execution and scheduling.
+
+---
+
+## 4. Target system topology
+
+```text
+External Coordinator
+  Codex Desktop or another approved client
+        |
+        | Fleet Control API / MCP
+        v
+Control Plane
+  Mission / WorkItem / Role / Policy / Strategy
+        |
+        v
+FleetRuntimeHost
+  FleetHost -> WorkspaceHost -> VS Code Integrated Terminal
+        |
+        v
+RuntimeAdapter
+  Claude Code CLI | Codex CLI | future runtime
+        |
+        +--> Native runtime process and session
+        +--> FleetEvent Normalizer
+        +--> Resource / usage evidence
+        +--> SCM / worktree evidence
+        |
+        v
+Telemetry Store -> UI projections
+Fleet Ledger    -> history, metrics, recommendations, audit
 ```
 
----
-
-## 核心模块候选
-
-> 表中**当前选择**列基于 ADR-001，已经从 TBD 推进为"复用上游"。
-
-| 模块                     | 职责                                                                                | 状态                                                                                  |
-| ------------------------ | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| VS Code Extension Host   | `adapters/vscode/extension.ts`                                                      | **当前选择**：复用上游                                                                |
-| Instance Manager         | `adapters/vscode/agentManager.ts` 的 `launchNewTerminal` + `AgentStateStore`        | **当前选择**：复用上游；已扩展 `InstanceLaunchConfig`（sessionMode/sessionId）        |
-| Provider Registry        | `core/src/providerRegistry.ts` + `providerProfiles.ts`                              | **当前选择**：Spec 005 新增（Definition≠Profile，ADR-004）                            |
-| Claude Provider          | `server/src/providers/hook/claude/`                                                 | **当前选择**：复用上游；`buildLaunchCommand` 支持 `modelId` + `sessionMode`           |
-| Launch Config Resolver   | `server/src/launchConfig.ts` `resolveClaudeLaunchConfig`                            | **当前选择**：Spec 005 扩展（按 providerType 分派 + preset env；唯一真相）            |
-| SecretStorage 适配       | `adapters/vscode/secretStorageProvider.ts`（VS Code）/ `cliProviderStore.ts`（CLI） | **当前选择**：Spec 005 新增 CLI 文件版（alpha 限制：未加密）                          |
-| ProviderProfileStore     | `adapters/vscode/providerProfileStore.ts` / `server/src/cliProviderStore.ts`        | **当前选择**：Spec 005 扩展（enabled/modelIds/presetId；不再默认 Inherit）            |
-| Launch Flow              | `adapters/vscode/launchAgentFlow.ts`                                                | **当前选择**：Spec 005 改造（只显示 configured profiles；Add Provider 按 definition） |
-| Manage Providers         | `adapters/vscode/manageProvidersFlow.ts`                                            | **当前选择**：Spec 005 扩展（Add/Edit/Delete；secret 不回显）                         |
-| Session Continuity       | `agentControl.ts` Restart(resume)/Switch/NewSession；native `--resume`              | **当前选择**：Spec 005 新增（ADR-006）                                                |
-| Repo Binder              | `getProjectDirPath` + Claude session dir 映射                                       | **当前选择**：复用上游                                                                |
-| Status / Event Stream    | `AgentStateStore` + `hookEventHandler` + Webview transport                          | **当前选择**：复用上游                                                                |
-| Auto Discovery           | global scanner / external adoption / upsert（按 sessionId 去重）                    | **当前选择**：复用上游 + Spec 006 增强（ADR-007）                                     |
-| Pixel-style 可视化       | `webview-ui/src/office/`                                                            | **当前选择**：复用上游；不在 001 重做 UI                                              |
-| Provider / Model 隔离    | per-terminal env + `claude --model`                                                 | **当前选择**：方案 A（ADR-002 保留，不强制 CLAUDE_CONFIG_DIR）                        |
-| 持久化策略（State 放哪） | `~/.claude-fleet/`（从 `~/.pixel-agents` 迁移，ADR-008）                            | **当前选择**：Spec 006 迁移完成（旧目录保留）                                         |
-| Branding                 | `ClaudeFleetViewProvider` / `CLAUDE_FLEET_DEBUG` / `assets/branding/`               | **当前选择**：Spec 006 完成（attribution 保留）                                       |
-| 跨 Coding Agent 接入     | Provider subdirectory 抽象                                                          | TBD（Phase 5）                                                                        |
+The UI is a management projection. The terminal remains the runtime interaction surface. A
+scene must never parse provider-specific raw logs directly.
 
 ---
 
-## 外部项目依赖 / 参考
+## 5. Runtime-neutral domain model
 
-> 当前阶段会重点研究以下项目 / 方向，但尚未正式引入依赖。
+The domain layer uses runtime-neutral concepts. A simplified FleetInstance contains:
 
-- **Pixel Agents** —— Pixel-style 多人多 Agent 房间的视觉与交互参考。
-- **Claude Code** —— 第一阶段被管理的 Coding Agent 运行时。
-- **Provider / Model 隔离** —— 每个实例独立的 Provider / Model 配置策略。
-- **VS Code Extension** —— 宿主能力来源（Webview、命令、TreeView、状态栏、Workspace APIs）。
-- **多 Session 管理** —— 同时维护多个独立 Session 的生命周期与隔离。
+```text
+instanceId
+missionId
+workItemId
+runtimeType
+role
+hostId
+workspaceId
+repo
+worktree
+sessionId
+terminalId
+managedByFleet
+providerProfileId
+providerDisplayName
+modelId
+resourceAccountId
+status
+parentAgentId
+leadAgentId
+createdAt
+lastActivityAt
+```
 
-> 不在 Phase 0 阶段执行具体实现，也不引入 npm 依赖；以上只是研究方向。
+The domain separates:
+
+- Runtime: the native executable and its adapter.
+- Role: coordinator, worker, reviewer, debugger, researcher, or another assigned function.
+- ProviderProfile: a configured connection/account profile.
+- Model: the selected runtime model identifier.
+- Session: a native conversation/session identity.
+- Mission: the top-level unit of work.
+- WorkItem: an assignable unit within a Mission.
+- Host: the process/terminal/workspace location that owns execution.
+- Telemetry: current and recent observable state.
+- Ledger: long-lived historical facts and derived records.
+- Recommendation: a proposed decision, not an executed action.
+
+Runtime is not Role. Any managed Claude or Codex instance may eventually hold any role. The
+current implementation may still use Claude workers in the existing workflow, but the target
+model must not encode Claude equals worker or Codex equals coordinator.
 
 ---
 
-## 关键技术问题（Open Questions）
+## 6. RuntimeAdapter boundary
 
-这些是 Phase 1（MVP Spec Set）阶段必须给出方向的问题：
+Each native runtime is integrated through a RuntimeAdapter rather than reimplemented inside
+the control plane.
 
-- Agent Runtime 进程模型：child process？VS Code workspace 连接？SDK 嵌入？各自的
-  隔离 / 可观测性 / 性能 trade-off 是什么？
-- 持久化状态放哪里：VS Code `globalState`、磁盘 JSON / SQLite、或者干脆不持久化。
-- Provider / Model / 环境隔离如何强制：独立进程 / 独立配置上下文 / 独立容器。
-- Pixel-style 可视化的形态：渲染技术栈、布局模型、交互模型，以及它如何映射 Agent 状态。
-- Coding Agent 调用方式：CLI、SDK，还是两者都支持。
-- Codex / Gemini CLI / Antigravity 接入策略：仅 Provider 抽象，还是更通用的 Agent Adapter。
+The target adapter boundary includes:
+
+```text
+id
+displayName
+runtimeType
+capabilities
+detect()
+getVersion()
+buildLaunchSpec()
+launch()
+stop()
+focus()
+restart()
+resume()
+discover()
+observe()
+normalizeEvent()
+```
+
+A capability is explicit and testable. Unsupported operations return unavailable or a clear
+capability error; they are not simulated by guessing from UI state.
+
+The v1 adapters are:
+
+- ClaudeCodeRuntimeAdapter for claude or its platform-specific launcher.
+- CodexRuntimeAdapter for codex or its platform-specific launcher.
+
+Future adapters are deferred but fit the same boundary:
+
+- Gemini CLI;
+- OpenCode;
+- Qoder CLI;
+- Custom Agent Runtime.
+
+All Claude executable discovery and launch checks must use one resolver. On Windows the resolver
+may resolve claude.cmd or claude.exe; on macOS/Linux it may resolve claude. It must use PATH
+and supported installation discovery without hardcoding a user name or changing the system PATH.
 
 ---
 
-## 已确认架构决策
+## 7. Fleet host and terminal ownership
 
-ADRs 集中记录在 [`.agent/knowledge/decisions.md`](../.agent/knowledge/decisions.md)。
+A FleetRuntimeHost is the target owner of managed runtime creation. It is intentionally
+separate from RuntimeAdapter:
 
-| ADR     | 标题                                                                    | 状态     |
-| ------- | ----------------------------------------------------------------------- | -------- |
-| ADR-001 | 以 Pixel Agents 作为 Claude Fleet 第一阶段 VS Code Runtime 与可视化基础 | Accepted |
-| ADR-002 | Claude Code Instance Provider / Model Isolation Strategy                | Accepted |
+- FleetHost identifies the Fleet controller and host process.
+- WorkspaceHost resolves repository, workspace, worktree, and workspace path.
+- FleetRuntimeHost owns the launch request, terminal binding, process identity, and lifecycle
+  handoff to the RuntimeAdapter.
+- RuntimeAdapter knows how to describe and operate the native CLI.
+- The VS Code Integrated Terminal is the preferred human-visible execution surface.
 
-- ADR-001 已记录：Claude Fleet 第一阶段直接复用 Pixel Agents 上游代码作为基线。
-- ADR-002 已记录：002 MVP 采用方案 A —— 仅 per-terminal env + `claude --model`，
-  **不**为每个 Instance 强制独立的 `CLAUDE_CONFIG_DIR`。
+The target launch flow is atomic from the control plane perspective:
+
+```text
+Mission / WorkItem
+  -> resolve FleetHost
+  -> resolve WorkspaceHost and worktree
+  -> resolve RuntimeAdapter
+  -> resolve provider/profile/model/resource
+  -> create or bind VS Code Integrated Terminal
+  -> launch native CLI
+  -> record instance/session/terminal identity
+  -> consume normalized events
+```
+
+A direct arbitrary shell spawn from a Coordinator is not the target lifecycle path. A
+Coordinator requests a launch through the Fleet Control API; the host enforces policy and
+records ownership before or together with process creation.
+
+Default UX requirements:
+
+- launch in a new integrated terminal without stealing focus;
+- allow the user to focus that real terminal explicitly;
+- preserve terminal identity across status updates;
+- stop/restart the managed process without pretending the terminal is a chat panel;
+- never create a duplicate instance on native session resume.
+
+Mission resolution must support multiple hosts:
+
+```text
+Mission
+  -> FleetHost
+  -> WorkspaceHost
+  -> Repo / Worktree
+  -> Terminal
+  -> RuntimeAdapter
+```
+
+The same Mission may contain instances on different workspaces or hosts. Cross-host support is
+a resolution and accounting problem, not permission to share a checkout unsafely.
+
+---
+
+## 8. Coordinator topologies
+
+### External Coordinator
+
+The current workflow commonly starts with Codex Desktop as an external Coordinator:
+
+```text
+Codex Desktop primary thread
+        |
+        | planning, task assignment, review
+        v
+Git / Specs / Tasks / Commits / Tests
+        |
+        v
+Agent Fleet in VS Code
+        |
+        +--> Claude Code CLI workers
+        +--> future Codex CLI workers
+```
+
+Codex Desktop is not currently a Fleet-managed runtime instance. The current extension does
+not launch, stop, monitor, or visualize the Codex Desktop client.
+
+The target external path is:
+
+```text
+Codex Desktop
+  -> Fleet Control API or MCP
+  -> policy and resource checks
+  -> FleetRuntimeHost
+  -> native Claude/Codex CLI
+```
+
+### Managed Coordinator
+
+The v1 target also permits a managed Coordinator:
+
+```text
+Managed Codex CLI or Claude Code CLI instance
+        |
+        v
+Fleet Control API
+        |
+        v
+FleetRuntimeHost
+        |
+        +--> managed worker instances
+```
+
+A managed Coordinator is still a normal FleetInstance. It is distinguished by Role and Policy,
+not by a second orchestration implementation. Generic Coordinator election and agent-to-agent
+chat are deferred.
+
+---
+
+## 9. Repository, worktree, and shared state
+
+Repository artifacts are the default source of truth between agents:
+
+- Git commits and diffs;
+- requirements, design, and tasks documents;
+- AGENTS.md, CLAUDE.md, and runtime-specific instruction files;
+- tests, scripts, build output, review findings, and PR metadata;
+- .agent knowledge and history.
+
+Do not copy complete agent conversations between workers. A future message or handoff API may
+carry a concise task reference, but the durable truth remains in repository artifacts.
+
+Multiple agents must not write the same checkout concurrently unless explicit ownership is
+known and policy allows it. Prefer a dedicated worktree per active WorkItem. If worktree state
+cannot be verified, surface the risk rather than inventing isolation.
+
+The target identity records include repo, checkout, worktree, branch, host, workspace, terminal,
+session, and launch source so that an assignment can be audited later.
+
+---
+
+## 10. Observability boundary
+
+All runtime-specific signals are normalized before presentation or strategy:
+
+```text
+Claude Hooks
+Claude JSONL
+Codex JSONL
+AgentState
+Provider/session metadata
+Resource evidence
+SCM evidence
+        |
+        v
+FleetEvent
+        |
+        v
+FleetTelemetryStore
+        |
+        +--> per-instance Snapshot
+        +--> bounded recent event history
+        +--> Scene Model / UI projections
+        +--> Ledger ingestion references
+```
+
+FleetEvent is the observability normalization boundary. It may describe session lifecycle,
+agent lifecycle, tool activity, task status, waiting/idle/working/error, subagent relations,
+provider changes, handoffs, and safe resource evidence when a real source provides it.
+
+Telemetry answers “what is true now and what happened recently.” It must not pretend to know
+fields that the signal cannot supply. Unknown context, cost, quota, task, or error data is
+unavailable.
+
+FleetTelemetryStore is intentionally lightweight: in-memory current state plus bounded recent
+events and necessary metadata. It is not a cloud backend, distributed tracing platform, or
+database requirement for the first implementation.
+
+---
+
+## 11. Ledger, resources, and strategy boundaries
+
+Telemetry and Ledger are different layers.
+
+- Telemetry is current and event-oriented.
+- Ledger is durable and record-oriented.
+- Metrics are derived views over ledger evidence.
+- Strategy consumes metrics, resource state, policy, and risk.
+- Recommendation proposes an assignment or launch; execution is a separate policy-controlled step.
+
+Token, Cost, and Quota are different facts:
+
+```text
+Token = model input/output accounting when available
+Cost  = billed or estimated monetary amount
+Quota = subscription, credit, rate-limit, or capacity availability
+```
+
+A token count must not be converted into a cost or remaining quota without a provider/resource
+policy and evidence source. A missing quota endpoint is unavailable, not unlimited.
+
+ResourceAdapter supplies ResourceAccount and quota/usage evidence. The Ledger must preserve source,
+confidence, availability, and whether a value is estimated or actual. Strategy may consider:
+
+- capabilities and role fit;
+- historical quality and review outcomes;
+- elapsed time and speed;
+- token use and context pressure;
+- metered cost or subscription budget;
+- quota reserve and rate limits;
+- current load and concurrency;
+- provider/model availability;
+- repo/worktree conflict risk;
+- review and merge policy.
+
+Strategy may recommend launching a new Claude or Codex instance when an existing assignment
+cannot satisfy the Mission within policy. The recommendation must record why, expected impact,
+budget, and constraints. It must not launch a process directly.
+
+The detailed record types, formulas, adapters, permissions, and guardrails are in
+[FLEET_LEDGER_AND_SCHEDULING.md](./FLEET_LEDGER_AND_SCHEDULING.md).
+
+---
+
+## 12. Adapter separation
+
+The target control plane keeps these adapter families separate:
+
+```text
+RuntimeAdapter
+  native runtime lifecycle and event normalization
+
+ResourceAdapter
+  account, token, cost, quota, rate-limit, and capacity evidence
+
+ObservabilityAdapter
+  external traces, hooks, logs, or metrics into FleetEvent
+
+SCMAdapter
+  repository, branch, worktree, diff, commit, PR, review, and merge evidence
+
+StrategyAdapter
+  scoring, candidate selection, recommendation, and strategy evaluation
+```
+
+No adapter should smuggle provider secrets or provider-specific assumptions into the UI. External
+observability tools are extension points only; no concrete third-party observability dependency
+is selected by this document.
+
+---
+
+## 13. Policy and execution modes
+
+Control is explicit and auditable:
+
+```text
+observe
+  collect and display state only
+
+suggest
+  produce a recommendation; do not execute
+
+approve
+  execute only after a human or approved Coordinator accepts
+
+autonomous
+  execute within an explicit policy envelope
+```
+
+The default product modes are suggest and approve. Autonomous mode is a later capability and
+requires, at minimum:
+
+- token/cost budget;
+- concurrency limit;
+- quota reserve;
+- approved runtime/provider/model;
+- repo/worktree isolation;
+- review and merge policy;
+- stop conditions and rollback/abort behavior;
+- audit records for requestedBy, launchSource, and policy decision.
+
+Permissions are not inferred from a UI label such as Plan Mode. Fleet policy is the actual
+boundary.
+
+---
+
+## 14. Presentation and scene architecture
+
+Runtime and Telemetry produce a shared Scene Model. Scene renderers consume that model and share
+selection and commands:
+
+```text
+Runtime / Telemetry
+        |
+        v
+Scene Model
+   +----+----------------+
+   |                     |
+Pixel Office       Fleet Command
+```
+
+Pixel Office remains a supported scene, not a discarded legacy product. Fleet Command is the
+default target scene. Both must preserve the existing Pixel Agents behavior semantics:
+
+- spawn and removal;
+- working, waiting, idle, starting, stopped, error;
+- completion feedback;
+- selection and terminal focus;
+- auto discovery and external adoption;
+- subagent and team relationships;
+- stable identity across resume/restart/provider switch.
+
+Fleet Command maps an Agent to an original pixel vessel:
+
+- lead or future coordinator: flagship;
+- worker: frigate;
+- reviewer: recon vessel;
+- subagent: drone;
+- discovered external instance: external vessel.
+
+The text status remains normal engineering language. Animation is a projection of a real
+state/event; it may not invent token use, task progress, cost, or agent relationships.
+
+The management layout may include Fleet List, Scene, Telemetry/Instance Detail, and Recent
+Events. Selecting an instance opens Instance Detail. Focus Terminal routes to the real VS Code
+integrated terminal. These are separate actions. The first implementation remains React/Canvas 2D
+and responsive to VS Code panel size; no Three.js, WebGL, 3D battle scene, or TUI clone is
+required.
+
+---
+
+## 15. Auto Discovery and external adoption
+
+Auto Discovery is a compatibility and adoption path, not lifecycle ownership.
+
+A manually started claude process may be discovered and represented as:
+
+```text
+managedByFleet = External
+provider = Unknown when not proven
+session = discovered native session
+```
+
+A Fleet-launched process is managed by Fleet and carries launch/session/terminal identity. Discovery
+must upsert by stable native identity, especially session ID, so restart, resume, and provider
+switch do not create duplicate vessels.
+
+Provider, model, quota, cost, and task metadata must not be inferred from an unknown process or
+from visual state. Unknown values remain unavailable.
+
+---
+
+## 16. Explicit non-goals for this documentation round
+
+This round updates architecture documentation only. It does not implement:
+
+- Codex RuntimeAdapter;
+- FleetRuntimeHost or FleetRuntimeHost process creation;
+- Fleet Control API or MCP server;
+- Mission/WorkItem durable orchestration;
+- Ledger database or automatic scheduler;
+- Strategy Engine or autonomous dispatch;
+- Instance Detail UI or Terminal Dock;
+- generic coordinator election;
+- Agent-to-agent chat bus;
+- automatic PR merge;
+- new external observability library;
+- package/repository/command brand migration;
+- VSIX packaging or release.
+
+---
+
+## 17. Architecture acceptance checklist
+
+Before claiming the target architecture is implemented, verify:
+
+- Claude Code CLI and Codex CLI are the only v1 managed runtime types;
+- Runtime and Role remain independent;
+- every managed launch is owned by FleetRuntimeHost;
+- Mission resolution identifies host, workspace, worktree, terminal, runtime, and session;
+- FleetEvent is the only presentation/strategy event boundary;
+- Telemetry, Ledger, Token, Cost, and Quota remain separate;
+- every recommendation is explainable and distinct from execution;
+- default permissions are suggest/approve;
+- no secret, transcript, or raw authorization data enters telemetry or the Ledger;
+- Pixel Office and Fleet Command consume the same Scene Model;
+- selection and terminal focus remain real runtime actions;
+- discovery, resume, restart, subagent, and team identities remain deduplicated;
+- current implementation gaps are represented as deferred work, not silently simulated.
+
+---
+
+## Related documents
+
+- [PROJECT.md](./PROJECT.md)
+- [ROADMAP.md](./ROADMAP.md)
+- [FLEET_LEDGER_AND_SCHEDULING.md](./FLEET_LEDGER_AND_SCHEDULING.md)
+- [WORKFLOW_CODEX_CLAUDE.md](./WORKFLOW_CODEX_CLAUDE.md)
+- [.agent/knowledge/decisions.md](../.agent/knowledge/decisions.md)
+- [spec index](./specs/README.md)

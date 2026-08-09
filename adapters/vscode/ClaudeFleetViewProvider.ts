@@ -4,10 +4,24 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import type { StateAdapter } from '../../core/src/adapter.js';
+import {
+  type FleetTelemetrySnapshot,
+  FleetTelemetryStore,
+  normalizeAgentBroadcast,
+} from '../../core/src/fleetTelemetry.js';
+import { INHERIT_PROVIDER_PROFILE_ID } from '../../core/src/providerProfiles.js';
+import type {
+  FleetInstance,
+  FleetRuntimeHost,
+  RuntimeLaunchRequest,
+} from '../../core/src/runtimeContracts.js';
 import { buildAgentDiagnostics } from '../../server/src/agentDiagnostics.js';
 import { AgentRuntime } from '../../server/src/agentRuntime.js';
 import { AgentStateStore } from '../../server/src/agentStateStore.js';
-import { agentStateToUserStatusWithError } from '../../server/src/agentStatus.js';
+import {
+  agentStateToUserStatus,
+  agentStateToUserStatusWithError,
+} from '../../server/src/agentStatus.js';
 import type {
   LoadedAssets,
   LoadedCharacterSprites,
@@ -28,6 +42,7 @@ import {
 import { loadAllCharacters, loadAllFurniture, loadAllPets } from '../../server/src/assetReload.js';
 import { readConfig, writeConfig } from '../../server/src/configPersistence.js';
 import { setFolderNameResolver, setTerminalAdapter } from '../../server/src/fileWatcher.js';
+import { FleetControlService } from '../../server/src/fleetControlService.js';
 import type { LayoutWatcher } from '../../server/src/layoutPersistence.js';
 import {
   readLayoutFromFile,
@@ -37,6 +52,7 @@ import {
 import { PathSet } from '../../server/src/pathKey.js';
 import { claudeProvider, copyHookScript } from '../../server/src/providers/index.js';
 import { ClaudeFleetServer } from '../../server/src/server.js';
+import type { AgentState } from '../../server/src/types.js';
 import { runRestartAgentCommand, runSwitchProviderCommand } from './agentControl.js';
 import type { LaunchNewTerminalOptions } from './agentManager.js';
 import {
@@ -47,6 +63,7 @@ import {
   sendExistingAgents,
   sendLayout,
 } from './agentManager.js';
+import { ClaudeCodeRuntimeAdapter } from './claudeRuntimeAdapter.js';
 import {
   COMMAND_NEW_AGENT,
   CONFIG_KEY_AUTO_SHOW_PANEL,
@@ -61,6 +78,11 @@ import {
   GLOBAL_KEY_WATCH_ALL_SESSIONS,
   LAYOUT_REVISION_KEY,
 } from './constants.js';
+import {
+  makeClaudeFleetInstance,
+  VscodeFleetRuntimeHost,
+  type VscodeRuntimeLaunchRequest,
+} from './fleetRuntimeHost.js';
 import { createProviderProfileStore, type ProviderProfileStore } from './providerProfileStore.js';
 import {
   createSecretStorageProvider,
@@ -72,8 +94,16 @@ import { VscodeTerminalAdapter } from './vscodeTerminalAdapter.js';
  *  wrong (webviewReady never arriving) — log and drop the oldest. */
 const MAX_PENDING_BROADCASTS = 1_000;
 
+function parseAgentInstanceId(instanceId: string): number {
+  const match = /^agent-(\\d+)$/.exec(instanceId);
+  if (!match) throw new Error(`Invalid Claude Code instance id: ${instanceId}`);
+  return Number(match[1]);
+}
+
 export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
   store = new AgentStateStore();
+  /** Bounded, normalized telemetry projection shared by future scenes. */
+  readonly telemetryStore = new FleetTelemetryStore(50);
   webviewView: vscode.WebviewView | undefined;
 
   // Webview iframe takes ~hundreds of ms to load the React app and attach
@@ -88,6 +118,11 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
   // Shared agent lifecycle core (timer Maps, scanners, hook handler, dismissal tracker).
   // Public so the Spec 004 control commands (extension.ts) can stop / focus agents.
   runtime: AgentRuntime;
+  /** Managed launch boundary; initialized when the webview/terminal context is ready. */
+  runtimeHost: VscodeFleetRuntimeHost | undefined;
+  /** Local management API used by the primary Coordinator through the embedded server. */
+  readonly controlService = new FleetControlService();
+  private readonly claudeRuntimeAdapter = new ClaudeCodeRuntimeAdapter();
 
   // Global session scanning dismissal tracking
   private globalDismissedFiles = new Set<string>();
@@ -134,7 +169,8 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     this.providerProfileStore = createProviderProfileStore(this.context);
     this.secretStorageProvider = createSecretStorageProvider(this.context);
     this.store.on('agentAdded', (id, agent) => {
-      this.sendOrBuffer({
+      this.syncControlInstance(agent);
+      const message = {
         type: 'agentCreated',
         id,
         folderName: agent.folderName,
@@ -151,12 +187,23 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
         providerProfileId: agent.providerProfileId,
         providerDisplayName: agent.providerDisplayName,
         modelId: agent.modelId,
-      });
+      };
+      this.consumeTelemetry(message, this.telemetrySeed(agent));
+      this.sendOrBuffer(message);
     });
     this.store.on('agentRemoved', (id) => {
-      this.sendOrBuffer({ type: 'agentClosed', id });
+      this.controlService.markInstanceStopped(`agent-${id}`);
+      const message = { type: 'agentClosed', id };
+      this.consumeTelemetry(message, { instanceId: `agent-${id}`, agentId: id });
+      this.sendOrBuffer(message);
     });
     this.store.on('broadcast', (message) => {
+      const id = typeof message.id === 'number' ? message.id : undefined;
+      if (id !== undefined) this.syncControlInstance(this.store.get(id));
+      this.consumeTelemetry(
+        message,
+        id === undefined ? {} : this.telemetrySeed(this.store.get(id)),
+      );
       this.sendOrBuffer(message);
     });
 
@@ -229,6 +276,74 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     this.pendingBroadcasts.push(message);
   }
 
+  private telemetrySeed(agent?: AgentState): Partial<FleetTelemetrySnapshot> {
+    if (!agent) return {};
+    return {
+      instanceId: `agent-${agent.id}`,
+      agentId: agent.id,
+      runtime: 'claude-code',
+      managedByFleet: agent.managedByFleet,
+      repo: agent.cwd ?? agent.projectDir,
+      cwd: agent.cwd,
+      hostId: agent.hostId,
+      workspaceId: agent.workspaceId,
+      terminalId: agent.terminalId,
+      terminalName: agent.terminalRef?.name,
+      launchSource: agent.launchSource,
+      requestedBy: agent.requestedBy,
+      sessionId: agent.sessionId,
+      providerProfileId: agent.providerProfileId,
+      providerDisplayName: agent.providerDisplayName,
+      modelId: agent.modelId,
+      fleet: agent.fleet,
+      // Current topology: every Fleet-managed Claude Code instance is a worker;
+      // the external Codex client remains the coordinator.
+      role: 'worker',
+      parentAgentId: agent.leadAgentId === undefined ? undefined : String(agent.leadAgentId),
+      leadAgentId: agent.leadAgentId === undefined ? undefined : String(agent.leadAgentId),
+    };
+  }
+
+  /** Keep the local ControlService candidate pool aligned with real AgentState. */
+  private syncControlInstance(agent?: AgentState): void {
+    if (!agent) return;
+    const status = agentStateToUserStatus(agent);
+    const instance: FleetInstance = {
+      instanceId: `agent-${agent.id}`,
+      runtime: 'claude-code',
+      role: agent.leadAgentId === undefined ? 'worker' : 'subagent',
+      managedByFleet: agent.managedByFleet ?? !agent.isExternal,
+      sessionId: agent.sessionId,
+      hostId: agent.hostId,
+      workspaceId: agent.workspaceId,
+      repo: agent.cwd ?? agent.projectDir,
+      terminalId: agent.terminalId,
+      terminalName: agent.terminalRef?.name,
+      launchSource: agent.launchSource,
+      requestedBy: agent.requestedBy,
+      providerProfileId: agent.providerProfileId,
+      providerDisplayName: agent.providerDisplayName,
+      modelId: agent.modelId,
+      fleet: agent.fleet,
+      status,
+      parentAgentId: agent.leadAgentId === undefined ? undefined : `agent-${agent.leadAgentId}`,
+      leadAgentId: agent.leadAgentId === undefined ? undefined : `agent-${agent.leadAgentId}`,
+      createdAt: agent.createdAt ?? agent.lastDataAt ?? Date.now(),
+      lastActivityAt: agent.lastDataAt || undefined,
+    };
+    this.controlService.upsertInstance(instance);
+  }
+
+  private consumeTelemetry(
+    message: Record<string, unknown>,
+    seed: Partial<FleetTelemetrySnapshot>,
+  ): void {
+    const event = normalizeAgentBroadcast(message, seed);
+    if (!event) return;
+    this.telemetryStore.consume(event);
+    this.sendOrBuffer({ type: 'fleetTelemetry', projection: this.telemetryStore.getProjection() });
+  }
+
   private initServer(): void {
     this.claudeFleetServer = new ClaudeFleetServer();
     this.claudeFleetServer.onHookEvent((providerId, event) => {
@@ -236,7 +351,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     });
 
     this.claudeFleetServer
-      .start({ store: this.store, embedded: true })
+      .start({ store: this.store, embedded: true, controlApi: this.controlService })
       .then((config) => {
         // Server always starts regardless of hooks-enabled state.
         // It's the foundation for WebSocket transport and health monitoring.
@@ -268,33 +383,89 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
 
     /**
      * Spec 002 — entry point invoked by the `claude-fleet.newAgent` Launch
-     * Flow (QuickPick / InputBox). Wires the resolved options through to
-     * `launchNewTerminal` with the runtime args this provider owns.
+     * Flow (QuickPick / InputBox). All Fleet-managed launches now cross the
+     * VS Code Integrated Terminal host boundary before reaching the existing
+     * Agent Manager implementation.
      */
-    this.launchFromFlow = async (options: LaunchNewTerminalOptions): Promise<void> => {
-      const prevAgentIds = new Set(this.store.keys());
-      await launchNewTerminal(
-        this.store.nextAgentId,
-        this.store.nextTerminalIndex,
-        this.store,
-        this.runtime.activeAgentId,
-        this.runtime.knownJsonlFiles,
-        this.runtime.fileWatchers,
-        this.runtime.pollingTimers,
-        this.runtime.waitingTimers,
-        this.runtime.permissionTimers,
-        this.runtime.jsonlPollTimers,
-        this.runtime.projectScanTimer,
-        () => this.store.persist(),
-        options,
-      );
-      // Register newly created agent(s) with the hook handler, mirroring
-      // the legacy webview `launchAgent` path above.
-      for (const [id, agent] of this.store) {
-        if (!prevAgentIds.has(id)) {
-          this.runtime.registerAgent(agent.sessionId, id);
+    this.runtimeHost = new VscodeFleetRuntimeHost({
+      launch: async (request) => {
+        const agent = await launchNewTerminal(
+          this.store.nextAgentId,
+          this.store.nextTerminalIndex,
+          this.store,
+          this.runtime.activeAgentId,
+          this.runtime.knownJsonlFiles,
+          this.runtime.fileWatchers,
+          this.runtime.pollingTimers,
+          this.runtime.waitingTimers,
+          this.runtime.permissionTimers,
+          this.runtime.jsonlPollTimers,
+          this.runtime.projectScanTimer,
+          () => this.store.persist(),
+          request.launchOptions,
+        );
+        if (!agent) {
+          throw new Error('Fleet runtime launch did not create a Claude Code instance.');
         }
-      }
+        this.runtime.registerAgent(agent.sessionId, agent.id);
+        return {
+          instanceId: `agent-${agent.id}`,
+          sessionId: agent.sessionId,
+          terminalName: agent.terminalRef?.name,
+          hostId: agent.hostId,
+          workspaceId: agent.workspaceId,
+          launchSource: agent.launchSource,
+          requestedBy: agent.requestedBy,
+          startedAt: agent.createdAt ?? Date.now(),
+        };
+      },
+      focus: async (instanceId) => {
+        const agent = this.store.get(parseAgentInstanceId(instanceId));
+        if (agent?.terminalRef) {
+          agent.terminalRef.show();
+        }
+      },
+      stop: async (instanceId) => {
+        const id = parseAgentInstanceId(instanceId);
+        if (this.store.has(id)) this.runtime.stopAgent(id);
+      },
+    });
+    this.controlService.registerRuntime({
+      adapter: this.claudeRuntimeAdapter,
+      host: this.makeControlHost(this.runtimeHost),
+    });
+
+    this.launchFromFlow = async (options: LaunchNewTerminalOptions): Promise<void> => {
+      const cwd =
+        options.folderPath ||
+        options.launchConfig?.cwd ||
+        vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ||
+        os.homedir();
+      const instanceId = `agent-${this.store.nextAgentId.current}`;
+      const request: VscodeRuntimeLaunchRequest = {
+        runtime: 'claude-code',
+        cwd,
+        sessionMode: options.launchConfig?.sessionMode ?? 'new',
+        sessionId: options.launchConfig?.sessionId,
+        providerProfileId: options.launchConfig?.providerProfileId,
+        modelId: options.launchConfig?.modelId,
+        launchSource: options.launchSource ?? 'fleet-ui',
+        requestedBy: options.requestedBy ?? 'user',
+        instance: makeClaudeFleetInstance({
+          instanceId,
+          cwd,
+          sessionId: options.launchConfig?.sessionId,
+          providerProfileId: options.launchConfig?.providerProfileId,
+          modelId: options.launchConfig?.modelId,
+          launchSource: options.launchSource ?? 'fleet-ui',
+          requestedBy: options.requestedBy ?? 'user',
+          fleet: options.launchConfig?.fleet,
+        }),
+        launchOptions: options,
+      };
+      const runtimeHost = this.runtimeHost;
+      if (!runtimeHost) throw new Error('Fleet runtime host is not initialized.');
+      await runtimeHost.launch(request);
     };
 
     webviewView.webview.onDidReceiveMessage(async (message) => {
@@ -306,7 +477,9 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
       } else if (message.type === 'focusAgent') {
         const agent = this.store.get(message.id);
         if (agent) {
-          if (agent.terminalRef) {
+          if (!agent.isExternal && this.runtimeHost) {
+            await this.runtimeHost.focus(`agent-${agent.id}`);
+          } else if (agent.terminalRef) {
             agent.terminalRef.show();
           } else if (agent.leadAgentId !== undefined) {
             // Teammate (tmux): focus the lead's terminal instead
@@ -320,7 +493,12 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
         // Spec 004 — the webview ✕ button and the Stop command share ONE
         // cleanup path: stopAgent really closes the terminal/process and
         // clears runtime state (dismissal / unregister / watchers / store).
-        this.runtime.stopAgent(message.id as number);
+        const agent = this.store.get(message.id as number);
+        if (agent && !agent.isExternal && this.runtimeHost) {
+          await this.runtimeHost.stop(`agent-${agent.id}`);
+        } else {
+          this.runtime.stopAgent(message.id as number);
+        }
       } else if (message.type === 'newAgent') {
         // Spec 004 — empty-state [+ New Agent] button.
         await vscode.commands.executeCommand(COMMAND_NEW_AGENT);
@@ -336,6 +514,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
             providerProfileStore: this.providerProfileStore,
             secretStorageProvider: this.secretStorageProvider,
           },
+          runtimeHost: this.runtimeHost,
           launcher: async (options) => {
             await this.launchFromFlow(options);
           },
@@ -352,6 +531,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
             providerProfileStore: this.providerProfileStore,
             secretStorageProvider: this.secretStorageProvider,
           },
+          runtimeHost: this.runtimeHost,
           launcher: async (options) => {
             await this.launchFromFlow(options);
           },
@@ -522,6 +702,10 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
         for (const agent of this.store.values()) {
           this.runtime.registerAgent(agent.sessionId, agent.id);
         }
+        this.sendOrBuffer({
+          type: 'fleetTelemetry',
+          projection: this.telemetryStore.getProjection(),
+        });
 
         // Auto-spawn: launch one agent on first webviewReady if the setting is
         // enabled and no agents are currently running.
@@ -544,32 +728,14 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
           if (autoProfiles.length === 0) {
             console.warn('[Claude Fleet] Auto-spawn skipped: no Provider Profiles configured.');
           } else {
-            const prevAgentIds = new Set(this.store.keys());
-            await launchNewTerminal(
-              this.store.nextAgentId,
-              this.store.nextTerminalIndex,
-              this.store,
-              this.runtime.activeAgentId,
-              this.runtime.knownJsonlFiles,
-              this.runtime.fileWatchers,
-              this.runtime.pollingTimers,
-              this.runtime.waitingTimers,
-              this.runtime.permissionTimers,
-              this.runtime.jsonlPollTimers,
-              this.runtime.projectScanTimer,
-              () => this.store.persist(),
-              {
-                launchConfig: { cwd: '', providerProfileId: autoProfiles[0].id },
-                suppressShow: autoShowPanel,
-                providerProfileStore: this.providerProfileStore,
-                secretStorageProvider: this.secretStorageProvider,
-              },
-            );
-            for (const [id, agent] of this.store) {
-              if (!prevAgentIds.has(id)) {
-                this.runtime.registerAgent(agent.sessionId, id);
-              }
-            }
+            await this.launchFromFlow({
+              launchConfig: { cwd: '', providerProfileId: autoProfiles[0].id },
+              suppressShow: autoShowPanel,
+              launchSource: 'auto-spawn',
+              requestedBy: 'agent-fleet',
+              providerProfileStore: this.providerProfileStore,
+              secretStorageProvider: this.secretStorageProvider,
+            });
           }
         } else {
           // Mark as attempted even when skipping, so subsequent panel focuses
@@ -724,7 +890,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
           } catch {
             /* treat as missing */
           }
-          this.webview?.postMessage({
+          const statusMessage = {
             type: 'agentStatus',
             id,
             status: agentStateToUserStatusWithError(agent, {
@@ -732,7 +898,9 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
               createdAt: agent.createdAt,
               now,
             }),
-          });
+          };
+          this.consumeTelemetry(statusMessage, this.telemetrySeed(agent));
+          this.webview?.postMessage(statusMessage);
         }
       } else if (message.type === 'openSessionsFolder') {
         const projectDir = getProjectDirPath();
@@ -839,6 +1007,38 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
         }
       }
     });
+  }
+
+  private makeControlHost(host: VscodeFleetRuntimeHost): FleetRuntimeHost {
+    return {
+      hostId: host.hostId,
+      hostType: host.hostType,
+      launch: (request: RuntimeLaunchRequest) => {
+        const providerProfileId = request.providerProfileId ?? INHERIT_PROVIDER_PROFILE_ID;
+        const launchOptions: LaunchNewTerminalOptions = {
+          folderPath: request.cwd,
+          launchConfig: {
+            cwd: request.cwd,
+            providerProfileId,
+            modelId: request.modelId,
+            sessionMode: request.sessionMode,
+            sessionId: request.sessionId,
+            fleet: request.instance.fleet,
+          },
+          launchSource: request.launchSource ?? 'fleet-control-api',
+          requestedBy: request.requestedBy ?? 'control-api',
+          providerProfileStore: this.providerProfileStore,
+          secretStorageProvider: this.secretStorageProvider,
+        };
+        return host.launch({
+          ...request,
+          runtime: 'claude-code',
+          launchOptions,
+        });
+      },
+      stop: (instanceId) => host.stop(instanceId),
+      focus: (instanceId) => host.focus(instanceId),
+    };
   }
 
   /** Export current saved layout as a versioned default-layout-{N}.json (dev utility) */

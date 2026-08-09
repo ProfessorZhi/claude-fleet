@@ -19,6 +19,18 @@ out/
 coverage/
 *.tsbuildinfo
 
+# ===== agentmetrics Python runtime =====
+agentmetrics/.local/*
+!agentmetrics/.local/.gitkeep
+agentmetrics/**/__pycache__/
+agentmetrics/**/*.py[cod]
+agentmetrics/**/*.egg-info/
+agentmetrics/.venv/
+agentmetrics/venv/
+agentmetrics/.pytest_cache/
+agentmetrics/htmlcov/
+agentmetrics/.coverage
+
 # ===== 日志 =====
 *.log
 npm-debug.log*

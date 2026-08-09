@@ -63,9 +63,9 @@ exports.run = async () => {
   if (!extension) throw new Error('Packaged extension was not discoverable: ${extensionId}');
   await extension.activate();
   if (!extension.isActive) throw new Error('Packaged extension did not activate');
-  await vscode.commands.executeCommand('pixel-agents.showPanel');
+  await vscode.commands.executeCommand('claude-fleet.showPanel');
 
-  const registryDir = path.join(os.homedir(), '.pixel-agents', 'servers');
+  const registryDir = path.join(os.homedir(), '.claude-fleet', 'servers');
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     try {
@@ -111,10 +111,13 @@ async function verifyExtensionHost(extensionRoot, smokeRoot) {
 async function main() {
   const vsixPath = parseArgs(process.argv.slice(2));
   if (!fs.existsSync(vsixPath)) throw new Error(`VSIX does not exist: ${vsixPath}`);
-  const { stdout } = await execFileAsync('unzip', ['-Z1', vsixPath], {
+  const { stdout } = await execFileAsync('unzip', ['-l', vsixPath], {
     maxBuffer: 20 * 1024 * 1024,
   });
-  const inventory = stdout.split(/\r?\n/).filter(Boolean);
+  const inventory = stdout
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*\d+\s+\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}\s{2,}(.+)$/)?.[1])
+    .filter((file) => file !== undefined);
   validateInventory(inventory);
 
   const smokeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pixel-agents-vsix-smoke-'));

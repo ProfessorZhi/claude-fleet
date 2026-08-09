@@ -414,3 +414,167 @@ legacy pixel-agents entry 并替换为 claude-fleet 路径，保留用户其他 
   globalState 旧 key 读取。
 
 <!-- 新 ADR 追加在下方。 -->
+
+## ADR-009: agentmetrics 合并进 Claude Fleet 单仓库
+
+### Status
+
+Accepted（2026-08-09，Spec 007）
+
+### Context
+
+Coordinator、Worker、Session、Worktree 和 Usage 如果分属两个仓库，容易出现两套
+版本、两套 identity contract 和两套发布流程。metrics 的核心消费者就是 Fleet
+Controller 工作流，但 Python collector 仍需要独立测试和 CLI 入口。
+
+### Decision
+
+将原 `agent-metrics-collector` 的产品源码合入 Claude Fleet 顶层 `agentmetrics/`；
+保留 Python 包 `agent_metrics`、CLI `agent-metrics` 和内部目录结构。原 GitHub 仓库
+作为迁移源保留，直到主仓库验证完成后再 archive。`agent-metrics-workspace` 中的
+worktrees、smoke target、缓存和运行数据不进入产品仓库。
+
+### Consequences
+
+- 单仓库拥有 TypeScript Runtime、Python Usage Ledger 和共享 Spec。
+- 不强制把 Python 重写成 TypeScript。
+- 共享边界使用 JSON/identity contract，而不是跨语言 import。
+
+## ADR-010: FleetEvent 是遥测与可视化的规范化边界
+
+### Status
+
+Accepted（2026-08-09，Spec 008/009）
+
+### Context
+
+Claude Hook、Claude JSONL、Codex JSONL 和 agentmetrics 的事件格式不同。让 UI 直接
+理解这些格式会把 Provider 细节泄漏到前端，并阻碍后续加入新 Agent。
+
+### Decision
+
+所有输入先经过 Normalizer 生成 FleetEvent；Controller 负责幂等、排序、状态转移和
+持久化；OfficeScene、FleetScene、Codex View 和 Scheduler 只消费 FleetProjection。
+
+### Consequences
+
+- 原有 Pixel Office 可以保留为一个 Projection。
+- Fleet Command Scene 可以独立迭代，不改 Runtime。
+- 原始日志不进入 UI；Usage 仍由 agentmetrics 以证据状态提供。
+
+## ADR-011: Fleet-managed runtime creation goes through FleetRuntimeHost
+
+### Status
+
+Accepted (2026-08-09, target architecture; implementation deferred)
+
+### Context
+
+A Coordinator needs to start native Claude Code or Codex CLI instances without taking ownership
+of process, terminal, workspace, and session lifecycle in an ad hoc way. Direct shell spawning
+would make requestedBy, launchSource, terminal identity, policy checks, and duplicate prevention
+difficult to audit.
+
+### Decision
+
+Fleet-managed runtime creation will go through FleetRuntimeHost. The host resolves FleetHost,
+WorkspaceHost, repository/worktree, terminal, RuntimeAdapter, ProviderProfile, Model, resource
+constraints, and policy before handing execution to the native CLI. The VS Code Integrated
+Terminal remains the preferred human-visible execution surface.
+
+RuntimeAdapter owns native CLI semantics. FleetRuntimeHost owns management-plane launch,
+ownership, terminal/session identity, and lifecycle handoff.
+
+### Consequences
+
+- External and future managed Coordinators use the same control boundary.
+- Native runtimes remain the source of conversation and tool behavior.
+- A direct arbitrary shell command is not a managed lifecycle record.
+- FleetRuntimeHost is a target abstraction; it is not implemented by this documentation change.
+
+## ADR-012: Instance Detail and Terminal Focus are separate UX actions
+
+### Status
+
+Accepted (2026-08-09, target architecture; implementation deferred)
+
+### Context
+
+A management webview can show metadata and telemetry, but the native Coding Agent still runs
+in a real VS Code terminal. Treating a webview detail panel as a terminal replacement would
+hide the actual runtime and make Focus behavior ambiguous.
+
+### Decision
+
+Selecting an instance opens Instance Detail. Focus Terminal is a separate action that routes to
+the real VS Code Integrated Terminal identified by terminal identity. Instance Detail may show
+status, provider, model, session, host, workspace, worktree, recent events, and safe resource
+evidence, but it is not a fake Coding Agent chat panel.
+
+### Consequences
+
+- Scene renderers can share selection and commands without owning runtime conversations.
+- Terminal focus remains testable and provider-neutral.
+- Fleet Command and Pixel Office can change scenes without restarting a Session.
+- Instance Detail and Terminal Dock remain deferred UI work.
+
+## ADR-013: Mission resolves the runtime host
+
+### Status
+
+Accepted (2026-08-09, target architecture; implementation deferred)
+
+### Context
+
+A Mission may contain WorkItems assigned to different repositories, worktrees, VS Code
+workspaces, terminals, hosts, runtimes, and roles. Resolving only a runtime executable is not
+enough to establish safe ownership.
+
+### Decision
+
+Managed execution resolves through the chain:
+
+Mission -> WorkItem -> FleetHost -> WorkspaceHost -> repository/worktree -> terminal ->
+RuntimeAdapter -> native runtime session.
+
+Mission and WorkItem identity are recorded with hostId, workspaceId, worktree, terminalId,
+sessionId, launchSource, and requestedBy whenever those values are available. A Mission can
+contain multiple hosts; that does not permit concurrent writes to the same checkout without an
+explicit policy decision.
+
+### Consequences
+
+- Host and workspace resolution are part of assignment correctness, not UI decoration.
+- Assignment and launch records can explain where and why an instance was created.
+- Cross-host scheduling can be added without changing RuntimeAdapter semantics.
+- Mission orchestration and FleetRuntimeHost are documented targets, not current implementation.
+
+## ADR-014: Agent Fleet is the canonical brand
+
+### Status
+
+Accepted (2026-08-09)
+
+### Context
+
+The product has grown from a Claude-specific VS Code extension into a runtime-neutral
+management plane whose v1 managed runtime set includes Claude Code CLI and Codex CLI. Continuing
+to describe new architecture as Claude Fleet would encode the current implementation as the
+permanent product boundary.
+
+### Decision
+
+Agent Fleet is the canonical brand for new architecture, documentation, UI terminology, specs,
+and future APIs. Existing Claude Fleet package/repository names, command IDs, configuration keys,
+state paths, class names, and migration references remain compatibility or historical surfaces
+until a separately approved migration is executed.
+
+No second brand migration phase is planned. This round does not rename package metadata,
+commands, persisted state, GitHub repositories, or source symbols.
+
+### Consequences
+
+- New documents must use Agent Fleet.
+- Historical Claude Fleet references may remain when they describe existing compatibility.
+- Runtime neutrality is expressed by RuntimeAdapter and FleetInstance, not by renaming native
+  Claude Code concepts.

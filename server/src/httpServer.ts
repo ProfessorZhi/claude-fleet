@@ -5,6 +5,11 @@ import * as crypto from 'crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
 
+import type {
+  FleetControlApi,
+  FleetControlRequest,
+  FleetControlResponse,
+} from '../../core/src/controlContracts.js';
 import type { AgentRuntime } from './agentRuntime.js';
 import type { AgentStateStore } from './agentStateStore.js';
 import type {
@@ -40,6 +45,8 @@ export interface HttpServerOptions {
   onSetHooksEnabled?: SetHooksEnabledSideEffect;
   /** Invoked when an external asset directory is added/removed. Standalone reloads + re-broadcasts assets here. */
   onReloadAssets?: ReloadAssetsSideEffect;
+  /** Optional local management-plane API. HTTP only forwards validated JSON requests to it. */
+  controlApi?: FleetControlApi;
 }
 
 /** Result of createHttpServer(). */
@@ -81,6 +88,7 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
 
   registerHealthRoute(app);
   registerHookRoute(app, options);
+  registerControlRoutes(app, options);
   registerWebSocketRoute(app, options);
 
   // ── Listen ──────────────────────────────────────────────────
@@ -133,6 +141,82 @@ function registerHookRoute(app: FastifyInstance, options: HttpServerOptions): vo
       reply.send('ok');
     },
   );
+}
+
+// ── Fleet Control API ─────────────────────────────────────────
+
+function registerControlRoutes(app: FastifyInstance, options: HttpServerOptions): void {
+  if (!options.controlApi) return;
+
+  app.post<{ Body: unknown }>(
+    '/api/control',
+    { preHandler: bearerAuth(options.token) },
+    async (request, reply) => {
+      if (!isJsonObject(request.body)) {
+        reply.code(400).send({ error: 'invalid_control_request' });
+        return;
+      }
+
+      try {
+        const safeRequest = sanitizeJsonValue(request.body, [options.token]) as FleetControlRequest;
+        const response = await options.controlApi!.submit(safeRequest);
+        reply.send(sanitizeControlResponse(response, options.token));
+      } catch {
+        // The HTTP boundary must not disclose adapter errors, request contents,
+        // credentials, or stack traces to a local client.
+        reply.code(500).send({ error: 'control_request_failed' });
+      }
+    },
+  );
+
+  app.get<{ Params: { instanceId: string } }>(
+    '/api/control/instances/:instanceId',
+    { preHandler: bearerAuth(options.token) },
+    async (request, reply) => {
+      try {
+        const instance = await options.controlApi!.getInstance(request.params.instanceId);
+        if (!instance) {
+          reply.code(404).send({ error: 'instance_not_found' });
+          return;
+        }
+        reply.send(sanitizeJsonValue(instance, [options.token]));
+      } catch {
+        reply.code(500).send({ error: 'control_status_unavailable' });
+      }
+    },
+  );
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const SENSITIVE_FIELD =
+  /(?:token|secret|authorization|credential|password|api[-_]?key|transcript|prompt|raw[-_]?event|environment)/i;
+
+/** Keep the control response shape while excluding credentials and raw agent data. */
+function sanitizeControlResponse(
+  response: FleetControlResponse,
+  token: string,
+): FleetControlResponse {
+  return sanitizeJsonValue(response, [token]) as FleetControlResponse;
+}
+
+function sanitizeJsonValue(value: unknown, forbiddenValues: readonly string[]): unknown {
+  if (typeof value === 'string') {
+    return forbiddenValues.some((secret) => secret.length > 0 && value.includes(secret))
+      ? '[redacted]'
+      : value;
+  }
+  if (Array.isArray(value)) return value.map((child) => sanitizeJsonValue(child, forbiddenValues));
+  if (!isJsonObject(value)) return value;
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (SENSITIVE_FIELD.test(key)) continue;
+    sanitized[key] = sanitizeJsonValue(child, forbiddenValues);
+  }
+  return sanitized;
 }
 
 // ── WebSocket ──────────────────────────────────────────────────

@@ -15,7 +15,7 @@ export interface HookEventPayload {
 }
 
 function getServerJsonPath(tmpHome: string): string {
-  return path.join(tmpHome, '.pixel-agents', 'server.json');
+  return path.join(tmpHome, '.claude-fleet', 'server.json');
 }
 
 function isHookServerConfig(value: unknown): value is HookServerConfig {

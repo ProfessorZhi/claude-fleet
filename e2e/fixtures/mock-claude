@@ -13,7 +13,12 @@ printf '%s wrapper node=%s cwd=%s args=%s\n' "$(date -Iseconds)" "${NODE_BIN}" "
 # for terminal-hosted (internal) sessions — external spawns set no
 # PIXEL_AGENTS_TEST_NARRATION_LOG (their stdout IS the external log, so a tail
 # there would loop). The tail dies with the terminal at test teardown.
-if [ -n "${PIXEL_AGENTS_TEST_NARRATION_LOG:-}" ]; then
+# Skip the narration tail for resolver probes: `claude --version` is run by
+# the product from the extension host, which waits for the spawned process
+# tree to exit — the tail lives as long as the terminal, so the probe would
+# hang until timeout, the mock would be judged a broken candidate, and the
+# launch would fall through to a real CLI.
+if [ "${1:-}" != "--version" ] && [ -n "${PIXEL_AGENTS_TEST_NARRATION_LOG:-}" ]; then
   "${NODE_BIN}" "${SCRIPT_DIR}/tail-follow.cjs" none \
     "${PIXEL_AGENTS_TEST_NARRATION_LOG}" "${PIXEL_AGENTS_EXTERNAL_NARRATION_LOG:-}" \
     2>/dev/null &

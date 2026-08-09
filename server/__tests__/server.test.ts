@@ -3,6 +3,14 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type {
+  FleetControlApi,
+  FleetControlRequest,
+  FleetControlResponse,
+} from '../../core/src/controlContracts.js';
+import { AgentStateStore } from '../src/agentStateStore.js';
+import { createHttpServer } from '../src/httpServer.js';
+
 // Use isolated temp HOME to avoid touching real ~/.pixel-agents/
 let tmpBase: string;
 let serverJsonDir: string;
@@ -340,5 +348,170 @@ describe('ClaudeFleetServer', () => {
     );
 
     expect(received).toHaveLength(0);
+  });
+});
+
+describe('local Fleet Control HTTP endpoint', () => {
+  const token = 'http-test-token';
+  let handle: Awaited<ReturnType<typeof createHttpServer>> | undefined;
+
+  afterEach(async () => {
+    await handle?.app.close();
+    handle = undefined;
+  });
+
+  function createFakeControlApi(): FleetControlApi & { requests: FleetControlRequest[] } {
+    const requests: FleetControlRequest[] = [];
+    return {
+      requests,
+      async submit(request) {
+        requests.push(request);
+        return {
+          requestId: request.requestId,
+          decision: 'accepted',
+          reason: 'fake accepted',
+          acceptedAt: 123,
+        } satisfies FleetControlResponse;
+      },
+      async getInstance(instanceId) {
+        return {
+          instanceId,
+          runtime: 'claude-code',
+          role: 'worker',
+          managedByFleet: true,
+          status: 'working',
+          repo: 'agent-fleet',
+          cwd: 'F:/repo',
+          sessionId: 'session-1',
+          providerProfileId: 'safe-profile',
+          modelId: 'safe-model',
+          secretToken: 'must-not-leak',
+        } as never;
+      },
+      async getMission() {
+        return undefined;
+      },
+      async getWorkItem() {
+        return undefined;
+      },
+    };
+  }
+
+  async function startControlServer(controlApi: FleetControlApi): Promise<number> {
+    handle = await createHttpServer({
+      embedded: true,
+      token,
+      store: new AgentStateStore(),
+      controlApi,
+    });
+    return handle.port;
+  }
+
+  it('requires Bearer auth and forwards a JSON control request', async () => {
+    const api = createFakeControlApi();
+    const port = await startControlServer(api);
+    const payload = {
+      requestId: 'req-1',
+      action: 'get_status',
+      mode: 'observe',
+      requestedBy: 'test',
+      createdAt: Date.now(),
+      apiKey: 'must-not-be-forwarded',
+    };
+
+    const unauthorized = await fetch(`http://127.0.0.1:${port}/api/control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    expect(unauthorized.status).toBe(401);
+    expect(api.requests).toHaveLength(0);
+
+    const authorized = await fetch(`http://127.0.0.1:${port}/api/control`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    expect(authorized.status).toBe(200);
+    expect(await authorized.json()).toEqual({
+      requestId: 'req-1',
+      decision: 'accepted',
+      reason: 'fake accepted',
+      acceptedAt: 123,
+    });
+    expect(api.requests).toHaveLength(1);
+    expect(api.requests[0]).toMatchObject({ requestId: 'req-1', action: 'get_status' });
+    expect(JSON.stringify(api.requests[0])).not.toContain('must-not-be-forwarded');
+    expect(JSON.stringify(api.requests[0])).not.toContain(token);
+  });
+
+  it('returns a safe error for malformed bodies and adapter failures', async () => {
+    const failingApi: FleetControlApi = {
+      submit: async () => {
+        throw new Error('secret API key and internal stack must stay private');
+      },
+      getInstance: async () => undefined,
+      getMission: async () => undefined,
+      getWorkItem: async () => undefined,
+    };
+    const port = await startControlServer(failingApi);
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    };
+
+    const malformed = await fetch(`http://127.0.0.1:${port}/api/control`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(null),
+    });
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toEqual({ error: 'invalid_control_request' });
+
+    const failed = await fetch(`http://127.0.0.1:${port}/api/control`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ requestId: 'req-2' }),
+    });
+    expect(failed.status).toBe(500);
+    const failedBody = JSON.stringify(await failed.json());
+    expect(failedBody).toBe('{"error":"control_request_failed"}');
+    expect(failedBody).not.toContain('secret');
+    expect(failedBody).not.toContain(token);
+  });
+
+  it('protects instance status and strips sensitive response fields', async () => {
+    const api = createFakeControlApi();
+    const port = await startControlServer(api);
+    const url = `http://127.0.0.1:${port}/api/control/instances/instance-1`;
+
+    expect((await fetch(url)).status).toBe(401);
+
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(200);
+    const body = JSON.stringify(await response.json());
+    expect(body).toContain('instance-1');
+    expect(body).not.toContain('must-not-leak');
+    expect(body).not.toContain(token);
+  });
+
+  it('returns a protected 404 without exposing lookup details', async () => {
+    const api: FleetControlApi = {
+      submit: async () => ({ requestId: 'unused', decision: 'unavailable' }),
+      getInstance: async () => undefined,
+      getMission: async () => undefined,
+      getWorkItem: async () => undefined,
+    };
+    const port = await startControlServer(api);
+    const response = await fetch(`http://127.0.0.1:${port}/api/control/instances/missing`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'instance_not_found' });
   });
 });

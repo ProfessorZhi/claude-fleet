@@ -53,7 +53,8 @@ function writeSettings(
 
 function runMockClaude(
   sessionId = 'test-session',
-): Promise<{ code: number | null; stderr: string }> {
+  extraArgs: string[] = [],
+): Promise<{ code: number | null; stderr: string; stdout: string }> {
   return new Promise((resolve) => {
     // The runner resolves its state dir via os.homedir(), which on Windows
     // reads USERPROFILE (HOME is ignored) — pin it like the e2e harness does
@@ -65,17 +66,25 @@ function runMockClaude(
       delete env.HOMEDRIVE;
       delete env.HOMEPATH;
     }
-    const child = spawn(process.execPath, [MOCK_CLAUDE_RUNNER, '--session-id', sessionId], {
-      cwd: workspaceDir,
-      env,
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
+    const child = spawn(
+      process.execPath,
+      [MOCK_CLAUDE_RUNNER, '--session-id', sessionId, ...extraArgs],
+      {
+        cwd: workspaceDir,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
 
     let stderr = '';
+    let stdout = '';
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
     });
-    child.on('close', (code) => resolve({ code, stderr }));
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.on('close', (code) => resolve({ code, stderr, stdout }));
   });
 }
 
@@ -247,6 +256,33 @@ describe('mock-claude-runner hook execution', () => {
     expect(JSON.parse(fs.readFileSync(configPath, 'utf8'))).toEqual({
       members: [{ name: 'lead' }],
     });
+  });
+
+  it('answers --version instantly with no side effects (resolver probe contract)', async () => {
+    writeScenarioQueue(tmpHome, [
+      {
+        schemaVersion: 1,
+        autoInit: false,
+        holdOpenMs: 0,
+        sessions: [],
+        actions: [],
+      },
+    ]);
+    const queuePath = path.join(tmpHome, '.claude-mock', 'scenario-queue.json');
+
+    const startedAt = Date.now();
+    const { code, stderr, stdout } = await runMockClaude('', ['--version']);
+
+    expect(code, stderr).toBe(0);
+    // Far below the 30s default hold — the probe must not start a session.
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+    // No invocation recorded (logInvocation runs after the version branch).
+    expect(fs.existsSync(path.join(tmpHome, '.claude-mock', 'invocations.log'))).toBe(false);
+    // Scenario queue untouched — the probe must not consume a launch scenario.
+    expect(fs.existsSync(queuePath)).toBe(true);
+    const queue = JSON.parse(fs.readFileSync(queuePath, 'utf8'));
+    expect(queue).toHaveLength(1);
   });
 
   it('deletes configured paths with template values', async () => {

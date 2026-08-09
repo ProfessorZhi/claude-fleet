@@ -418,10 +418,49 @@ export async function getPixelAgentsFrame(window: Page): Promise<Frame> {
 /**
  * Click "+ Agent" in the webview and wait for the call to be dispatched.
  */
+/**
+ * Accept one native VS Code QuickPick whose title contains `titleFragment`,
+ * selecting its currently-highlighted item with Enter. `filterText` (when
+ * given) narrows the picker via its filter input first — used for the
+ * multi-root workspace-folder picker, where the target folder is not the
+ * first item. The flow's pickers are driven from the workbench page, not
+ * the webview frame.
+ */
+export async function acceptQuickPick(
+  page: Page,
+  titleFragment: string,
+  filterText?: string,
+): Promise<void> {
+  const input = page.locator('.quick-input-widget .quick-input-filter input');
+  await expect
+    .poll(
+      async () =>
+        (await input.getAttribute('aria-label')) ?? (await input.getAttribute('placeholder')) ?? '',
+      {
+        message: `Expected QuickPick "${titleFragment}" to appear`,
+        timeout: 15_000,
+        intervals: [200, 400],
+      },
+    )
+    .toContain(titleFragment);
+  if (filterText) {
+    await input.fill(filterText);
+  }
+  await page.keyboard.press('Enter');
+}
+
 export async function clickAddAgent(frame: Frame): Promise<void> {
   const btn = frame.locator('button', { hasText: '+ Agent' });
   await expect(btn).toBeVisible({ timeout: WEBVIEW_TIMEOUT_MS });
   await btn.click();
+  // Spec 005: the +Agent button routes through the full New Agent flow
+  // (Provider/Model must come from configured profiles), so two native
+  // QuickPicks follow the click. The harness seeds one provider profile
+  // (CLAUDE_FLEET_E2E_SEED_PROVIDERS), making the first item of each picker
+  // the one to accept.
+  const page = frame.page();
+  await acceptQuickPick(page, 'Claude Fleet: Choose Provider');
+  await acceptQuickPick(page, 'Claude Fleet: Choose Model');
 }
 
 async function setCheckbox(modal: Locator, label: string, checked: boolean): Promise<void> {

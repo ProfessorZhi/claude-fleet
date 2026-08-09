@@ -1,185 +1,394 @@
-# ROADMAP.md — Claude Fleet
+# ROADMAP.md — Agent Fleet
 
-> 阶段式推进计划。不写具体日期 —— 阶段推进的条件是"上一个阶段的 Exit Criteria 达成"，
-> 而不是日历上的某个点。  
-> 产品说明见 [`PROJECT.md`](./PROJECT.md)；架构理解见 [`ARCHITECTURE.md`](./ARCHITECTURE.md)。
-
----
-
-## Phase 0 — 项目基础设施
-
-**目标**：为后续所有阶段打好基础。
-
-- 项目级文档系统（`AGENTS.md` / `docs/` / `.agent/` / `.claude/`）。
-- 公共 Agent 工作流（spec-coding / implement / debug / review）。
-- 知识沉淀与晋升机制（lessons / pitfalls / decisions / workflows / scripts）。
-- 项目愿景、架构草案、Roadmap 本体。
-
-**Exit Criteria**：
-
-- 文档层存在、内容自洽，并已被至少一个 Agent 完整阅读且未发现冲突。
+> Agent Fleet evolves in dependency order. A phase is complete only when its exit criteria
+> are met; dates are intentionally omitted.
+>
+> Product scope: [PROJECT.md](./PROJECT.md). Target architecture: [ARCHITECTURE.md](./ARCHITECTURE.md).
+> Ledger and strategy design: [FLEET_LEDGER_AND_SCHEDULING.md](./FLEET_LEDGER_AND_SCHEDULING.md).
 
 ---
 
-## Phase 1 — MVP Spec Set
+## Roadmap principles
 
-**目标**：确定第一版 MVP 由**哪些 Feature Spec** 组成，并为每个 Feature 完成
-`requirements.md` / `design.md` / `tasks.md`。
+1. Keep the native Coding Agent as the execution engine.
+2. Keep Runtime, Role, ProviderProfile, Model, Session, Host, Terminal, Telemetry, Ledger,
+   Resource, SCM, and Strategy as separate concepts.
+3. Prefer repository artifacts, commits, tests, and review records over copied chat transcripts.
+4. Add a new runtime through an adapter and host contract, not through provider-specific UI code.
+5. Separate recommendation from execution. The default control modes are suggest and approve.
+6. Preserve real terminal focus and native session continuity.
+7. Treat Auto Discovery as adoption compatibility, not as Fleet lifecycle ownership.
+8. Keep Pixel Office and Fleet Command as interchangeable projections over one Scene Model.
+9. Do not add a future architecture label to the current implementation until the required
+   control boundary actually exists.
 
-MVP **不是**一个巨型 Spec，而是**多个独立 Feature Spec 的集合（Spec Set）**。
-这样可以：
-
-- 让多个 Agent 并行实现不同 Feature；
-- 避免单个 Spec 里的 Tasks 膨胀；
-- 避免 Design 把多个边界混在一起。
-
-Phase 1 首先要产出 **MVP Spec Index**，列出 MVP 包含哪些 Feature Spec，并明确
-它们之间的依赖关系。
-
-MVP Spec Index 示例（仅示例，最终列表由 Phase 1 决定）：
-
-```text
-MVP
-├── 001-multi-instance-runtime
-├── 002-provider-model-isolation
-├── 003-instance-status
-└── 004-minimal-control-ui
-```
-
-> ⚠️ 上面的列表只是示例。**不要把示例当成已经批准的最终 MVP**。
-> Feature 数量、命名、边界都可能调整。
-
-具体 Feature Spec 的写法遵循 `.agent/workflows/spec-coding.md` 和
-[`docs/specs/README.md`](./specs/README.md)。
-
-**Exit Criteria**：
-
-- MVP Feature List 已确定（即 MVP Spec Index）。
-- 每个 Feature 都有独立 Spec（独立的 `docs/specs/<slug>/`）。
-- Feature 之间的依赖关系明确（谁依赖谁、依赖什么）。
-- MVP 范围的关键架构问题要么已答、要么显式 defer 并注明理由。
-- 重要架构决策以 ADR 形式落到 `.agent/knowledge/decisions.md`。
+The canonical brand is already **Agent Fleet** for new architecture and product language. Existing
+Claude Fleet package, command, configuration, class, and state identifiers remain compatibility
+surfaces. A second brand migration phase is not planned.
 
 ---
 
-## Phase 2 — Claude Code 多实例 Runtime
+## Baseline complete: 001–006
 
-**目标**：在同一 VS Code Extension 内建立**可靠的 Claude Code 多实例 Runtime**。
+The current repository baseline establishes:
 
-主要内容：
+- 001 multi-instance runtime foundation;
+- 002 provider/model isolation;
+- 003 instance status;
+- 004 minimal control UI;
+- 005 provider registry and native session continuity;
+- 006 branding, state migration, discovery, and compatibility behavior;
+- merged agentmetrics source under agentmetrics/;
+- initial Fleet identity and telemetry contracts in the working tree.
 
-- 同时启动多个 Claude Code 实例。
-- 停止 / 重启 / 跟踪实例生命周期。
-- 每个实例绑定独立 Repo。
-- 每个实例拥有独立 Session。
-- Instance Manager。
-- 基础生命周期状态（最少覆盖）：
-  - `starting`
-  - `running`
-  - `waiting`
-  - `idle`
-  - `stopped`
-  - `error`
-- 最基础的文字状态 UI（不要求可视化）。
-
-**本阶段重点验证：**
-
-> 多个 Claude Code 实例可以同时稳定运行。
-
-**本阶段**不**要求：**
-
-- 完成完整 Provider / Model 隔离系统（这是 Phase 3 的事）。
-- 所有实例必须配置不同 Provider / Model。MVP Runtime 初期可以全部使用同一种
-  Provider，但必须保证 **Repo / Session 不互相污染**。
-
-**Exit Criteria**（至少）：
-
-- Extension 内可以并行运行 ≥2 个 Claude Code 实例。
-- 两个实例的 Repo / Session 不互相污染。
-- 能分别启动、观察、停止每个实例。
-- 能识别并展示基础生命周期状态（`starting` / `running` / `waiting` / `idle` /
-  `stopped` / `error`）。
+The baseline is valuable, but it is not yet the v1 target control plane. In particular, current
+runtime management is primarily Claude Code CLI, and the target host, Ledger, Strategy, and
+Control API layers still need implementation.
 
 ---
 
-## Phase 3 — Provider / Model 独立配置与隔离
+## Phase A — Stabilize the current Claude Code runtime
 
-**目标**：让 Provider / Model 成为 Instance 的一等配置，并保证实例之间互不污染。
+**Goal:** make the current Claude Code CLI path reliable enough to be the reference adapter.
 
-主要内容：
+Scope:
 
-- 每实例独立 Provider。
-- 每实例独立 Model。
-- Provider Profile。
-- Model Profile。
-- 独立配置环境。
-- `CLAUDE_CONFIG_DIR` / 环境变量等隔离策略（具体策略由对应 Spec 决定，本文件不预设）。
-- Provider 切换。
-- Model 切换。
-- 隔离测试。
-- Regression Tests。
+- one executable resolver for Windows, macOS, and Linux;
+- native launch, stop, restart, resume, and focus;
+- no duplicate instance after discovery, resume, restart, or provider switch;
+- explicit Managed versus External identity;
+- Repo, workspace, worktree, host, terminal, and session metadata;
+- regression tests for existing Provider Registry and Session Continuity.
 
-**核心 Exit Criteria**（示例）：
+Exit criteria:
 
-```text
-Instance A → MiniMax
-Instance B → Anthropic
-```
+- at least two Claude Code instances can run concurrently;
+- each instance has an auditable native session and terminal identity;
+- failed resume does not silently fork a new session;
+- external discovery remains functional;
+- existing Provider Registry and Pixel Office flows pass regression checks.
 
-- 修改 A 的 Provider / Model **不得**影响 B。
-- A 与 B 的环境（配置目录、env 等）互不污染。
-
-**Phase 3 才正式完成 Provider / Model Isolation**。Phase 2 提供的隔离能力只是
-Runtime / Repo / Session 级别的。
-
-**当前状态（2026-08-08）**：Spec 002（[`docs/specs/002-provider-model-isolation/`](./specs/002-provider-model-isolation/)）
-实现完成。核心 Exit Criteria 中"修改 A 不得影响 B"已通过单测验证（`server/__tests__/launchConfig.test.ts`）；
-运行时手动验证（同一 VS Code 内同时跑两个不同 Provider 实例）需要 GUI 环境，
-属于"人类用户在 VS Code 中执行的最终确认"，留待实际部署时执行。
-`CLAUDE_CONFIG_DIR` 隔离方案由 [ADR-002](./specs/002-provider-model-isolation/design.md#adr-002-%E6%91%98%E8%A6%81)
-锁定为方案 A（per-terminal env + `claude --model`，**不**强制独立 config dir）。
+Status: baseline exists; stabilization and Development Host verification remain active.
 
 ---
 
-## Phase 4 — 状态监控与可视化
+## Phase B — Runtime-neutral domain contracts
 
-**目标**：Pixel-style 实时展示所有 Agent 的状态。
+**Goal:** make the management model independent of the native runtime without starting a
+generic orchestration framework.
 
-- Agent 以房间 / sprite 形式呈现在虚拟工作区中。
-- 实时更新挂在前几个阶段的 Status / Event Stream 上。
-- 交互：点击 Agent 聚焦、查看 transcript / 动作。
+Scope:
+
+- FleetInstance;
+- Mission, WorkItem, Role, CoordinatorRef;
+- RuntimeCapabilities;
+- Managed versus External;
+- host, workspace, worktree, terminal, session, and launch-source identity;
+- RuntimeAdapter interface and ClaudeCodeRuntimeAdapter boundary.
+
+Exit criteria:
+
+- domain types do not encode Claude equals worker or Codex equals coordinator;
+- unsupported runtime operations are explicit unavailable/capability errors;
+- existing Claude flows can project into the neutral model;
+- no Agent-to-Agent Chat Bus is introduced.
+
+Status: runtime-neutral type contracts are present; lifecycle/host implementation is partial
+and must be completed before Codex management.
 
 ---
 
-## Phase 5 — 多 Coding Agent 扩展
+## Phase C — FleetRuntimeHost and VS Code execution host
 
-**目标**：让 Claude Fleet 走出"只支持 Claude Code"。
+**Goal:** give managed runtime creation one ownership path.
 
-- Codex、Gemini CLI、Antigravity 等作为一等实例。
-- 统一的 Instance Model，新增 Coding Agent 不需要重写宿主或可视化层。
+Scope:
+
+- FleetHost and WorkspaceHost resolution;
+- FleetRuntimeHost launch ownership;
+- VS Code Integrated Terminal binding;
+- process, terminal, session, and instance identity;
+- non-focus-stealing launches;
+- host failure and abort behavior;
+- launch audit fields: requestedBy, launchSource, policy, and assignment.
+
+Exit criteria:
+
+- a control request resolves Mission to host, workspace, worktree, terminal, adapter, and
+  native CLI;
+- all Fleet-managed launches use the host path;
+- direct arbitrary shell spawning is not used as the managed lifecycle path;
+- Focus Terminal reaches the real terminal.
+
+Status: VscodeFleetRuntimeHost now owns the current Claude Code launch/focus/stop/restart/resume
+entry points and persists safe host/workspace/terminal provenance; generic multi-host resolution
+and native terminal identity reconciliation remain.
 
 ---
 
-## v0.1 Alpha — 当前版本状态（2026-08-08）
+## Phase D — Unified observability
 
-```text
-001 multi-instance-runtime                   ✅
-002 provider-model-isolation                 ✅
-003 instance-status                          ✅ Alpha scope
-004 minimal-control-ui                       ✅ Alpha scope
-005 provider-registry-session-continuity     ✅（Provider Registry / Restart=Resume /
-                                                Switch Provider / CLI providers+launch）
-006 branding-discovery-migration             ✅（PixelAgents→ClaudeFleet 品牌 /
-                                                ~/.claude-fleet 迁移 / Discovery upsert /
-                                                Branding assets）
+**Goal:** make every runtime signal consumable by one management and presentation layer.
 
-v0.1 Alpha
-状态：Implementation Complete / Awaiting Extension Development Host Manual Test
-（不是 Released — 等待用户手动 Development Host 测试；VSIX Packaging BLOCKED）
-```
+Scope:
 
-- 详细状态见 [`ALPHA_RELEASE.md`](./ALPHA_RELEASE.md)。
-- Development Host 手动测试清单见 [`MANUAL_TEST_ALPHA.md`](./MANUAL_TEST_ALPHA.md) 阶段一。
-- Development Host 测试通过后：`npm run vsix` → VSIX 安装测试 → tag
-  `v0.1.0-alpha.N` → GitHub Pre-release → 上传 VSIX → （后续）Marketplace。
-- 仅在出现清晰用户需求时才引入跨 Agent 协作流程。
+- FleetEvent normalization;
+- FleetTelemetryStore;
+- per-instance Snapshot;
+- bounded recent event history;
+- Claude Hooks, JSONL, AgentState, and metadata adapters;
+- secret exclusion and unavailable-value semantics;
+- Scene Model consumed by Pixel Office and Fleet Command.
+
+Exit criteria:
+
+- Webview and future strategy code do not parse Claude-specific raw events;
+- recent history is bounded;
+- error records retain message, source, and timestamp without secrets;
+- real signals are distinguishable from estimated or unavailable data;
+- Auto Discovery, subagent, team, completion, and status events preserve identity.
+
+Status: contracts/specs are present in the repository; full end-to-end integration remains work.
+
+---
+
+## Phase E — Codex CLI RuntimeAdapter
+
+**Goal:** add Codex CLI as the second v1 Fleet-managed runtime.
+
+Scope:
+
+- native Codex CLI detection and launch specification;
+- Codex session/resume semantics;
+- Codex JSONL/event normalization;
+- Codex terminal focus and lifecycle;
+- Codex provider/model/resource metadata where real signals exist;
+- adapter-specific regression tests.
+
+Exit criteria:
+
+- Codex CLI can be launched and managed through FleetRuntimeHost;
+- Codex and Claude instances share FleetInstance, Role, Mission, WorkItem, and telemetry
+  contracts;
+- no Codex Desktop client is mistaken for a Fleet-managed Codex CLI instance.
+
+Status: the Codex CLI adapter and thin Codex FleetRuntimeHost are present with Windows/POSIX
+resolution, launch-spec construction, JSON/JSONL normalization, ownership checks, and fake-only
+regression tests. The real process/terminal bridge remains deferred. Codex Desktop is still
+external and is not managed by Fleet.
+
+---
+
+## Phase F — Mission, WorkItem, Coordinator, and Control API
+
+**Goal:** turn a planning request into auditable assignments without introducing a chat bus.
+
+Scope:
+
+- Mission as the top-level work unit;
+- WorkItem dependencies and acceptance criteria;
+- CoordinatorRef for External and Managed Coordinators;
+- Fleet Control API extension point;
+- future MCP adapter over the same API;
+- create, inspect, assign, pause, resume, stop, and collect-result commands;
+- repository artifacts as the durable handoff channel.
+
+Exit criteria:
+
+- external Codex Desktop can request Fleet operations through a controlled boundary;
+- a managed Claude/Codex Coordinator uses the same boundary;
+- command authorization, requestedBy, and policy decision are recorded;
+- messages remain concise task references; full transcript forwarding is not required.
+
+Status: runtime-neutral Control API contracts, mission/work-item creation, idempotent in-memory
+ControlService execution, policy checks, decision Ledger records, and a local Bearer-protected
+HTTP/CLI bridge are present. MCP transport, authorization service, and built-in process-spawning
+implementation remain deferred.
+
+---
+
+## Phase G — Fleet Ledger and Resource Accounts
+
+**Goal:** persist long-lived facts needed for history, accounting, and later strategy.
+
+Scope:
+
+- MissionRecord, WorkItemRecord, SessionRecord, LaunchRecord;
+- PullRequestRecord, UsageRecord, QuotaSnapshot, QualitySignal;
+- AssignmentDecision and AgentPerformanceAggregate;
+- FleetHost, WorkspaceHost, terminal, launch source, and requester identity;
+- ResourceAccount and ResourceAdapter;
+- estimated versus actual time, tokens, cost, and quota;
+- privacy-safe local storage and retention.
+
+Exit criteria:
+
+- every important assignment has a stable identity and audit trail;
+- Token, Cost, and Quota remain separate;
+- unavailable and estimated values preserve their source/confidence;
+- no API key, authorization header, full prompt, full transcript, or secret is persisted;
+- current versus historical telemetry is clearly separated.
+
+Status: Ledger contracts and an in-memory, secret-free metadata store are present. Durable
+persistence, ResourceAdapter integration, retention policy, and SCM/PR records remain deferred.
+
+---
+
+## Phase H — SCM, PR, and quality evidence
+
+**Goal:** connect agent activity to reviewable repository outcomes.
+
+Scope:
+
+- SCMAdapter for repo, branch, worktree, diff, commit, PR, and review evidence;
+- PR lifecycle records;
+- test and validation evidence;
+- quality signals such as acceptance, review findings, rework, regression, and merge outcome;
+- worktree conflict detection only when reliably provable.
+
+Exit criteria:
+
+- a WorkItem can be traced to commits, tests, review, and a PR;
+- quality signals distinguish implementation success from mere process activity;
+- merge remains a policy-controlled human/Coordinator action.
+
+Status: deferred.
+
+---
+
+## Phase I — Metrics, performance profiles, and recommendations
+
+**Goal:** use evidence to improve assignment quality, time, and resource use.
+
+Strategy inputs include:
+
+- capability and role fit;
+- historical quality and review outcomes;
+- elapsed time and speed;
+- token use, context pressure, and estimated/actual cost;
+- quota reserve and rate limits;
+- current load and concurrency;
+- provider/model availability;
+- repo/worktree risk;
+- review policy and Mission constraints.
+
+Scope:
+
+- agent performance aggregates;
+- strategy scoring and explainable weights;
+- strategy accuracy: predicted versus actual time, quality, token, cost, and quota;
+- recommendation records;
+- candidate launch templates for a new Claude or Codex instance;
+- recommendation versus execution separation.
+
+Exit criteria:
+
+- recommendations include reason, alternatives, constraints, and expected impact;
+- a recommendation may propose starting a new runtime instance;
+- no recommendation starts a process without Control API policy approval;
+- low-confidence or missing data is surfaced rather than hidden;
+- strategy can be evaluated against actual outcomes.
+
+Status: partial. `FleetStrategyAdapter` and the `recommend_assignment` Control API
+action now provide bounded, explainable, side-effect-free recommendations and
+record `AssignmentDecision` metadata. Durable directive history, provider-specific
+resource adapters, strategy accuracy evaluation, and any automatic scheduler
+remain deferred; no recommendation starts a process by itself.
+
+---
+
+## Phase J — Fleet Command, Instance Detail, and Terminal Dock
+
+**Goal:** provide a coherent management UI while preserving runtime semantics.
+
+Scope:
+
+- Fleet Command as the default scene;
+- Pixel Office as a fully supported alternative scene;
+- shared Scene Model and selection state;
+- responsive Fleet List, Scene, Telemetry/Instance Detail, and Recent Events layout;
+- stable pixel vessel identity;
+- Agent behavior mapping for spawn, working, waiting, idle, error, completion, discovery,
+  subagent, teams, restart, resume, and provider switch;
+- Instance Detail separate from Focus Terminal;
+- Terminal Dock or equivalent real terminal navigation.
+
+Exit criteria:
+
+- selecting a vessel selects the correct instance;
+- Instance Detail shows actual metadata or unavailable;
+- Focus Terminal opens the actual VS Code terminal;
+- switching scenes does not alter runtime or session state;
+- no Three.js, WebGL, or 3D rewrite is required for the first implementation.
+
+Status: Fleet Command is a target scene; do not claim the architecture update implements it.
+
+---
+
+## Phase K — Policy-controlled Control Plane execution
+
+**Goal:** connect recommendations, resource limits, runtime hosting, and user approval safely.
+
+Scope:
+
+- Control API and future MCP implementation;
+- observe, suggest, approve, and autonomous modes;
+- budgets, concurrency limits, quota reserve, approved runtime/provider/model;
+- worktree and review/merge guardrails;
+- stop conditions, abort behavior, and audit trails;
+- bounded scheduling and queueing.
+
+Exit criteria:
+
+- default operation is suggest or approve;
+- autonomous execution cannot exceed budget, quota, concurrency, runtime, workspace, or review
+  policy;
+- every launch/stop/assignment decision has an audit record;
+- scheduling is explainable and reversible where possible.
+
+Status: deferred. This is not an automatic scheduler implementation.
+
+---
+
+## Post-v1 runtime expansion
+
+After Claude Code CLI and Codex CLI are stable through the same host and adapter boundaries,
+evaluate:
+
+- Gemini CLI;
+- OpenCode;
+- Qoder CLI;
+- Custom Agent Runtime;
+- additional ResourceAdapter and ObservabilityAdapter implementations;
+- optional external management clients.
+
+No runtime is added by embedding its conversation engine inside Agent Fleet.
+
+---
+
+## Current non-goals
+
+The following are intentionally outside the current roadmap implementation update:
+
+- replacing Claude Code or Codex;
+- a generic distributed agent framework;
+- Agent-to-Agent chat transport;
+- automatic PR merge;
+- a full trace platform;
+- cloud backend or mandatory database;
+- quota guessing;
+- unrestricted autonomous process spawning;
+- another Agent Fleet branding migration;
+- VSIX packaging or GitHub release work.
+
+---
+
+## Related documents
+
+- [PROJECT.md](./PROJECT.md)
+- [ARCHITECTURE.md](./ARCHITECTURE.md)
+- [FLEET_LEDGER_AND_SCHEDULING.md](./FLEET_LEDGER_AND_SCHEDULING.md)
+- [WORKFLOW_CODEX_CLAUDE.md](./WORKFLOW_CODEX_CLAUDE.md)
+- [ALPHA_RELEASE.md](./ALPHA_RELEASE.md)
+- [MANUAL_TEST_ALPHA.md](./MANUAL_TEST_ALPHA.md)
+- [spec index](./specs/README.md)
