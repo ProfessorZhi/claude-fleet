@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SanitizedSummary",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "collector_version",
+    "run_id",
+    "work_package",
+    "pr_number",
+    "agent",
+    "timing",
+    "usage",
+    "pricing",
+    "quota",
+    "git",
+    "github",
+    "collectors",
+    "warnings",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer" },
+    "collector_version": { "type": "string" },
+    "run_id": { "type": "string" },
+    "work_package": { "type": "string" },
+    "pr_number": { "type": ["integer", "null"] },
+    "agent": {
+      "type": "object",
+      "required": [
+        "shell",
+        "provider",
+        "configured_model",
+        "requested_model",
+        "observed_model",
+        "inferred_model",
+        "model_detection_source",
+        "model_detection_confidence",
+        "permission_mode"
+      ]
+    },
+    "timing": {
+      "type": "object",
+      "required": [
+        "started_at",
+        "finished_at",
+        "wall_clock_seconds",
+        "agent_process_seconds",
+        "model_event_started_at",
+        "model_event_finished_at",
+        "model_event_span_seconds",
+        "ci_queued_at",
+        "ci_started_at",
+        "ci_completed_at",
+        "ci_queue_seconds",
+        "ci_run_seconds",
+        "agent_active_seconds",
+        "ci_wait_seconds"
+      ]
+    },
+    "usage": {
+      "type": "object",
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "total_tokens",
+        "collection_status",
+        "source",
+        "correlation_confidence"
+      ]
+    },
+    "pricing": {
+      "type": "object",
+      "required": [
+        "price_snapshot_date",
+        "price_source",
+        "price_snapshot_version",
+        "currency",
+        "api_equivalent_cost_usd",
+        "actual_billed_cost_usd",
+        "status"
+      ]
+    },
+    "quota": {
+      "type": "object",
+      "required": [
+        "before",
+        "after",
+        "delta",
+        "reset_time",
+        "subscription_tier",
+        "source"
+      ]
+    },
+    "git": { "type": "object" },
+    "github": { "type": "object" },
+    "collectors": { "type": "object" },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "integrity": {
+      "type": "object",
+      "required": ["payload_sha256"]
+    }
+  }
+}

@@ -1,0 +1,31 @@
+# Local runtime directory
+.local/*
+!.local/.gitkeep
+!.local/
+
+# Raw observations
+raw-observation.local.json
+*.local.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+env/
+venv/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test outputs
+.pytest_cache/
+.coverage
+htmlcov/
