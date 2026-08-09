@@ -1,116 +1,285 @@
-# PROJECT.md — Claude Fleet
+# PROJECT.md — Claude Fleet / Agent Fleet Direction
 
-> "我们在做什么"。  
+> “我们在做什么”。  
 > 系统形态见 [`ARCHITECTURE.md`](./ARCHITECTURE.md)；阶段规划见 [`ROADMAP.md`](./ROADMAP.md)。
 
 ---
 
-## 项目背景
+## 项目定位
 
-目前开发者想同时跑多个 Coding Agent，通常只能：
+Claude Fleet 当前是一个 VS Code Extension，用来统一管理多个 Claude Code CLI 实例。
 
-- 开多个终端 / 多个窗口，缺乏统一视图；
-- 让所有 Agent 共享同一个 Repo、Provider、Model，除非手动隔离；
-- 缺乏"现在每个 Agent 在做什么"的实时、低摩擦的可视化；
-- 难以在同一个任务下对比不同 Agent 的做法。
+v1 目标已经明确扩展为：
 
-结果就是：串行工作流、手工记账、并行 Agent 的信噪比极低。
+> **统一管理 Claude Code CLI + Codex CLI 多实例，并提供 Mission、Role、Coordinator、Telemetry 与可视化控制平面。**
 
----
+当 Codex CLI 达到一等支持后，产品计划迁移品牌为：
 
-## 项目愿景
-
-Claude Fleet 提供一个 VS Code 工作区，让开发者（以及小型团队）可以**同时驱动多个
-Coding Agent**，每个实例独立 Repo、独立 Provider、独立 Model、独立配置，并通过
-**实时状态与 Pixel-style 可视化**同时看到所有 Agent 的工作进展。
+> **Agent Fleet — Local Control Plane for Coding Agents**
 
 ---
 
 ## 要解决的问题
 
-- 多 Agent 并行时缺乏统一管理面。
-- Agent 之间默认共享 Repo / Provider / Model / 配置，容易相互污染。
-- 缺乏"实时、低摩擦"的状态展示。
-- 缺少在同一任务下横向对比多种 Coding Agent 的方式。
+今天开发者同时使用多个 Coding Agent 时，通常面临：
+
+- 多个 Claude / Codex 终端散落在不同窗口；
+- 很难一眼知道每个 Agent 正在做什么；
+- Repo / Worktree / Session 容易混乱；
+- 不同 Agent 的角色关系只能靠人脑记；
+- 主线程与执行线程缺少统一组织方式；
+- Claude Code Provider / Model 多实例配置容易相互污染；
+- Agent 完成、等待、报错、调用工具等状态缺乏统一可视化；
+- 多 Agent 协作时容易把聊天上下文当共享状态，导致不可追踪。
+
+Fleet 的目标是把这些问题收敛到一个本地控制平面。
 
 ---
 
-## 目标用户
+## v1 核心体验
 
-- **主要用户**：已经在使用 Claude Code（或类似 Coding Agent）的独立开发者，希望
-  在一个工作区内同时驱动多个 Agent 实例。
-- **次要用户**：尝试多 Agent 工作流的小型团队，需要为每个 Agent 隔离 Repo / Provider / Model。
+一个开发任务被组织成一个 Mission：
 
----
+```text
+Mission: Fleet Scene Redesign
 
-## 核心能力（规划方向）
+Coordinator
+└── Codex CLI #1
 
-第一阶段重点围绕 Claude Code：
-
-- 同时管理多个 Claude Code 实例
-- 每个实例绑定独立 Repo
-- 每个实例独立 Provider
-- 每个实例独立 Model
-- 每个实例独立 Session 与配置环境
-- 实时查看 Agent 状态与工作进度
-- Pixel-style 可视化
-
-后续阶段会扩展到 Codex、Gemini CLI、Antigravity 等其他 Coding Agent。
-
----
-
-## 第一阶段范围（In Scope）
-
-> "第一阶段"指产品愿景层面的整体范围，不是 Roadmap 上的单一 Phase。  
-> 按 [`ROADMAP.md`](./ROADMAP.md)，下面的能力分属不同 Phase：
-> Repo / Session 隔离在 Phase 2，Provider / Model 隔离在 Phase 3。
-
-- VS Code Extension 作为宿主 UI 与控制面。
-- 多实例 Claude Code 管理。
-- 每个实例独立的 Repo / Session。
-- 每个实例独立的 Provider / Model。
-- 实时状态与进度展示（文字优先）。
-- Pixel-style 可视化骨架。
-
----
-
-## 非目标（Non-Goals）
-
-明确**不做**的事情，避免 scope creep：
-
-- 云端多 Agent 编排（这是一个本地 / IDE 中心化工具）。
-- 替换任何一个具体的 Coding Agent —— Claude Fleet **运行**它们，而不是**重新实现**它们。
-- 自动合并或自动协调多 Agent 的输出（决策由人来做）。
-- 除本地状态展示所必需的遥测以外的任何分析 / 埋点系统。
-
----
-
-## 当前阶段
-
-```
-项目基础设施 / 文档系统 / Spec 设计阶段
+Fleet
+├── Claude Code #1 — Frontend Worker
+├── Claude Code #2 — Telemetry Worker
+└── Codex CLI #2 — Reviewer
 ```
 
-- 文档系统（`AGENTS.md` / `docs/` / `.agent/` / `.claude/`）已建立。
-- 公共 Agent 工作流（spec / implement / debug / review）已建立。
-- 知识沉淀机制（lessons / pitfalls / decisions / 晋升规则）已建立。
-- **尚未**编写任何业务代码。
-- **尚未**启动任何 Feature Spec。
+用户可以在 VS Code 中：
 
-下一步进入 [`ROADMAP.md`](./ROADMAP.md) 中的 **Phase 1 — MVP Spec Set**。
+- 启动多个 Claude Code CLI；
+- 启动多个 Codex CLI；
+- 同时运行 Claude 与 Codex；
+- 给实例指定 Coordinator / Worker / Reviewer / Debugger 角色；
+- 选择任意 managed Claude/Codex Instance 作为 Mission Coordinator；
+- 查看每个实例的 Repo / Worktree / Session / Runtime / Status；
+- 点击实例聚焦真实 Terminal；
+- 查看近期工具调用、等待、错误、完成等 Telemetry；
+- 在 Pixel Office 与新的 Fleet Command Scene 之间切换。
 
 ---
 
-## 待确认问题
+## 当前现实工作流
 
-> 以下问题需要在 Phase 1（MVP Spec）阶段确认。
+当前仓库的成熟 Runtime 仍主要是 Claude Code CLI。
 
-- 多 Agent 实例的运行模型：子进程？VS Code workspace 连接？SDK 嵌入？
-- 持久化状态存在哪里（VS Code `globalState`、本地 JSON/SQLite、不持久化）。
-- Provider / Model / 环境隔离如何强制（独立进程 / 独立配置上下文 / 独立容器）。
-- Pixel-style 可视化的具体形态，以及它如何映射到 Agent 状态。
-- Coding Agent 运行时本身的调用方式：CLI、SDK，还是两者皆可。
-- 未来加入 Codex / Gemini CLI / Antigravity 时，是走 Provider 抽象，还是更通用的
-  Agent Adapter 层。
+开发时可以使用：
 
-这些问题的答案将作为 ADRs 进入 `.agent/knowledge/decisions.md`。
+```text
+Codex Desktop / Client
+→ 外部主线程 / Coordinator
+
+VS Code + Claude Fleet
+→ 多个 Claude Code CLI Worker
+```
+
+但这只是当前工作方式，不是 v1 架构限制。
+
+v1 的目标是把 Codex CLI 也纳入 Fleet，使最完整工作流变成：
+
+```text
+VS Code + Fleet
+├── Claude Code CLI
+├── Claude Code CLI
+├── Codex CLI
+└── Codex CLI
+```
+
+其中任意一个 managed Instance 都可以承担 Coordinator。
+
+Codex Desktop 继续可以作为可选 External Coordinator，但不是 Fleet 核心依赖。
+
+---
+
+## 核心产品原则
+
+### 1. Fleet 是 Control Plane，不是 Agent Runtime
+
+Fleet 启动和管理原生：
+
+```text
+claude
+codex
+```
+
+不重新实现它们。
+
+### 2. Runtime 与 Role 解耦
+
+不要写死：
+
+```text
+Codex = Coordinator
+Claude = Worker
+```
+
+而是：
+
+```text
+Runtime: Claude Code / Codex CLI
+Role: Coordinator / Worker / Reviewer / Debugger
+```
+
+### 3. Repo 是共享真相，不是聊天历史
+
+Agent 协作优先通过：
+
+```text
+AGENTS.md
+.agent/
+docs/specs/
+Git branches / worktrees
+commits
+diffs
+tests
+```
+
+### 4. 原生 Session 语义优先
+
+Claude Code / Codex 的 Resume、Session、权限与工具能力尽量保持原生语义。
+
+### 5. Observability 必须来自真实信号
+
+不知道的数据标记 unavailable，不猜。
+
+### 6. 本地优先
+
+核心能力不依赖云端 Fleet 服务。
+
+---
+
+## 第一版正式支持范围
+
+### Managed Runtime
+
+- Claude Code CLI
+- Codex CLI
+
+### Control Plane
+
+- FleetInstance
+- Mission
+- Role
+- Coordinator
+- Repo / Worktree / Session
+- Runtime lifecycle
+
+### Claude Code 专属能力
+
+- Provider Registry
+- Provider Profile
+- Model selection
+- per-instance Provider / Model isolation
+- SecretStorage
+- native Resume / Provider switch continuity
+
+### Observability
+
+- Runtime-neutral FleetEvent
+- FleetTelemetryStore
+- Instance status
+- Current tool / task（能可靠获取时）
+- Recent Timeline
+- Error state
+
+### Visualization
+
+- Pixel Office 保留
+- Fleet Command Pixel Sci-Fi Scene
+- 点击实例 / Vessel 聚焦真实 Terminal
+- Agent / Subagent / Team 行为尽量保持现有细节
+
+---
+
+## Codex Desktop 的定位
+
+Codex Desktop / Client 可以作为：
+
+```text
+External Coordinator
+```
+
+但 v1 不要求：
+
+- Fleet 自动创建 Codex Desktop Thread；
+- Fleet 管理 Codex Desktop 内所有 Thread；
+- Fleet 嵌入 Codex Desktop 聊天 UI；
+- Fleet 读取其完整聊天上下文。
+
+执行线程优先使用可被 Fleet 管理和观测的 Claude Code CLI / Codex CLI。
+
+---
+
+## 非目标
+
+v1 明确不做：
+
+- 云端分布式 Agent 集群；
+- 重写 Claude Code 或 Codex；
+- Agent-to-Agent 实时聊天总线；
+- 自动 DAG Scheduler；
+- 自动替用户合并所有 Agent 输出；
+- 依赖 Codex Desktop 私有接口；
+- 一次支持所有 Coding Agent；
+- 重型 3D / WebGL 舰队场景；
+- 完整 Jaeger / Grafana 类 tracing 平台；
+- 用聊天复制模拟 Session Resume。
+
+---
+
+## 品牌方向
+
+当前：
+
+```text
+Claude Fleet
+```
+
+当 Claude Code + Codex CLI 都达到稳定一等 Runtime 支持后：
+
+```text
+Agent Fleet
+```
+
+推荐最终描述：
+
+> **Agent Fleet is a local control plane for launching, coordinating, observing and managing multiple coding-agent sessions.**
+
+品牌迁移应作为独立阶段完成，避免 Runtime 重构过程中一半 Claude Fleet、一半 Agent Fleet。
+
+---
+
+## 当前状态
+
+当前仓库已经不是“纯文档阶段”。
+
+已完成的 Claude Code Alpha 基础包括：
+
+- 多实例 Runtime；
+- Provider / Model Isolation；
+- 状态监控；
+- 最小控制 UI；
+- Provider Registry；
+- Session Continuity；
+- Auto Discovery；
+- Claude Fleet Branding；
+- Pixel Agents 可视化基线。
+
+下一阶段围绕 v1 目标推进：
+
+```text
+Runtime-neutral model
+→ Mission / Role
+→ Observability
+→ Codex CLI Adapter
+→ Claude + Codex mixed fleet
+→ Fleet Command Scene
+→ Agent Fleet branding
+```
