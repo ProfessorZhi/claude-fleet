@@ -70,7 +70,7 @@ export function renderLaunchCommand(
   const needsQuoting = /[\s"]/.test(command);
   const renderedCommand = needsQuoting ? `"${command}"` : command;
   if (platform === 'win32' && needsQuoting && shellKind === 'powershell') {
-    return `& ${renderedCommand} ${args.join(' ')}`;
+    return ['&', renderedCommand, ...args].join(' ');
   }
   return [renderedCommand, ...args].join(' ');
 }

@@ -346,6 +346,12 @@ export async function launchVSCode(
     CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
   };
 
+  // The host may point Claude at a real provider profile through
+  // CLAUDE_CONFIG_DIR. E2E must stay fully isolated under tmpHome; otherwise
+  // the extension installs hooks into the user's profile and the fixture waits
+  // forever for ~/.claude/settings.json in the temporary HOME.
+  delete env.CLAUDE_CONFIG_DIR;
+
   // --- VS Code launch args ---
   const args = [
     // Load our extension in dev mode (this overrides the installed version)

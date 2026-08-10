@@ -114,22 +114,27 @@ export function resolveClaudeLaunchConfig(
         throw new MissingSecretError(profile.id, profile.name, 'apiKey');
       }
       const secret = secretLookup(profile.secretRef);
-      if (typeof secret !== 'string' || secret.length === 0) {
+      const normalizedSecret = typeof secret === 'string' ? secret.trim() : '';
+      if (normalizedSecret.length === 0) {
         // Fail closed. NEVER silently fall back to the user's Anthropic
         // login — that would be misleading (the user thinks they're on a
         // Custom Provider when they're not).
         throw new MissingSecretError(profile.id, profile.name, 'apiKey');
       }
-      env.ANTHROPIC_API_KEY = secret;
+      env.ANTHROPIC_API_KEY = normalizedSecret;
     } else if (profile.authMode === 'authToken') {
       if (!profile.secretRef) {
         throw new MissingSecretError(profile.id, profile.name, 'authToken');
       }
+      // Clipboard input commonly carries a trailing newline/space. Normalize at
+      // the process boundary too, so existing profiles are repaired without
+      // ever exposing or rewriting the stored secret.
       const secret = secretLookup(profile.secretRef);
-      if (typeof secret !== 'string' || secret.length === 0) {
+      const normalizedSecret = typeof secret === 'string' ? secret.trim() : '';
+      if (normalizedSecret.length === 0) {
         throw new MissingSecretError(profile.id, profile.name, 'authToken');
       }
-      env.ANTHROPIC_AUTH_TOKEN = secret;
+      env.ANTHROPIC_AUTH_TOKEN = normalizedSecret;
     }
     // authMode 'inherit' + 非 noInject（理论不存在，validator 保证）——
     // 不注入 auth env，仅 baseUrl。

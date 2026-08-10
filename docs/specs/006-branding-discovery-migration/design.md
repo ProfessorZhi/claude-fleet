@@ -17,6 +17,7 @@ Branding
 Discovery
 ├── Global Session Scanner（上游保留）
 ├── External Adoption（上游保留）
+├── Codex Session Scanner（~/.codex/sessions，workspace-scoped）
 ├── Fleet launch 登记 sessionId→provider 映射（005 提供）
 ├── Upsert：按 sessionId 去重（restart/switch 后不重复）
 └── 外部 agent → Provider: External/Unknown, Managed: No
@@ -79,6 +80,8 @@ migrateStateDir(oldDir, newDir, log):
   持久化（005）；rediscovery 时恢复，不落回 Unknown。
 - 外部 agent：`managedByFleet` 不设置 → UI 显示
   `Provider: External / Unknown`、`Managed: No`。
+- Codex CLI 没有 Claude hooks 协议，因此单独读取 `session_meta` 和有界事件尾部，
+  只生成安全状态投影；不解析 prompt/response，也不把 Codex envelope 当 Claude JSONL。
 - 去重 key = `sessionId`（唯一）；无 sessionId 的兜底 = 既有 jsonlFile
   key（现状）。
 
@@ -93,14 +96,15 @@ migrateStateDir(oldDir, newDir, log):
 
 ## 模块职责
 
-| 模块                                           | 职责                                     | 位置                                         |
-| ---------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
-| migrateStateDir                                | old→new 安全迁移                         | `server/src/migrateStateDir.ts`（新）        |
-| fileStateAdapter / layout / config persistence | 新路径                                   | 既有文件（路径常量改）                       |
-| claudeHookInstaller                            | 新 hook 路径 + legacy entry 替换         | 既有文件（扩展）                             |
-| Discovery upsert                               | sessionId 去重                           | `agentRuntime.ts` / `fileWatcher.ts`（增强） |
-| ClaudeFleetViewProvider                        | 改名                                     | `adapters/vscode/`（重命名）                 |
-| DEBUG env                                      | CLAUDE_FLEET_DEBUG ?? PIXEL_AGENTS_DEBUG | `agentStateStore.ts` 等（读处）              |
+| 模块                                           | 职责                                     | 位置                                                |
+| ---------------------------------------------- | ---------------------------------------- | --------------------------------------------------- |
+| migrateStateDir                                | old→new 安全迁移                         | `server/src/migrateStateDir.ts`（新）               |
+| fileStateAdapter / layout / config persistence | 新路径                                   | 既有文件（路径常量改）                              |
+| claudeHookInstaller                            | 新 hook 路径 + legacy entry 替换         | 既有文件（扩展）                                    |
+| Discovery upsert                               | sessionId 去重                           | `agentRuntime.ts` / `fileWatcher.ts`（增强）        |
+| Codex session scanner                          | Codex 外部 session 只读发现              | `server/src/providers/codex/codexSessionScanner.ts` |
+| ClaudeFleetViewProvider                        | 改名                                     | `adapters/vscode/`（重命名）                        |
+| DEBUG env                                      | CLAUDE_FLEET_DEBUG ?? PIXEL_AGENTS_DEBUG | `agentStateStore.ts` 等（读处）                     |
 
 ---
 

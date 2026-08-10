@@ -426,8 +426,22 @@ describe('resolveClaudeLaunchConfig — Spec 005 provider types', () => {
       secretRef: 'claude-fleet.provider.minimax.1',
     };
     const r = resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', () => 'mm-key');
-    expect(r.env.ANTHROPIC_BASE_URL).toBe('https://api.minimax.io/anthropic');
+    expect(r.env.ANTHROPIC_BASE_URL).toBe('https://api.minimaxi.com/anthropic');
     expect(r.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('1000000');
+  });
+
+  it('trims an existing auth token before injecting it into the terminal', () => {
+    const profile: ProviderProfile = {
+      id: 'minimax.trimmed',
+      name: 'MiniMax - Trimmed',
+      kind: 'anthropic-compatible',
+      providerType: 'anthropic-compatible',
+      presetId: 'minimax',
+      authMode: 'authToken',
+      secretRef: 'claude-fleet.provider.minimax.trimmed',
+    };
+    const r = resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', () => '  mm-key\r\n');
+    expect(r.env.ANTHROPIC_AUTH_TOKEN).toBe('mm-key');
   });
 
   it('explicit baseUrl overrides the preset default; explicit model wins via args', () => {

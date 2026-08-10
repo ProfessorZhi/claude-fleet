@@ -218,6 +218,12 @@ Git state ────────────┘
 
 Codex Desktop 可以作为 optional External Coordinator，但不是核心依赖。
 
+当前已实现一个可审计的最小控制闭环：Mission/WorkItem 创建、推荐、显式分配、
+边界化结果回收和 normalized usage/quota 写入。当前补齐了显式 Scheduler（依赖、并发、
+幂等和有上限重试）、authenticated Coordinator plan/tick session、bounded Runtime task delivery、
+自动结果关联，以及只读 SCM/PR/CI evidence adapter；
+完整后台自治循环和真实外部 Provider 连接器仍属于后续工作。
+
 **Exit Criteria**：
 
 ```text
@@ -266,6 +272,10 @@ Subscription→ remaining quota（仅官方/runtime可靠暴露时）
 
 Unknown quota 不等于 Unlimited。
 
+当前 Ledger 已支持 secret-free、版本化、原子快照 persistence、Session/Usage/Quota 查询和
+Coordinator Assignment Decision；Telemetry ingestion 已接入 normalized usage/duration/cost/quota
+边界。没有可靠来源时 quota 明确为 unavailable，不把账户百分比伪装成任务额度。
+
 **Exit Criteria**：
 
 ```text
@@ -292,6 +302,10 @@ review findings
 review rounds
 merge / close / revert
 ```
+
+当前已交付只读 SCM/PR/CI/review adapter 和安全质量信号投影；它使用注入式 provider，
+缺少真实 GitHub/GitLab/CI 凭据或连接器时明确返回 unavailable，不执行 commit、merge、
+push、delete，也不把完整 diff 写入 Ledger。
 
 派生：
 
@@ -372,6 +386,11 @@ Launch Claude Worker · MiniMax
 
 ## Phase I — Fleet Command Scene
 
+**状态（2026-08）**：三种共享数据前端已实现，Task Control Center 为默认 Scene，且已完成 Scene First 信息架构收敛。
+Fleet Command 与 Pixel Office 作为可选投影，并与 Task Control Center 共享 Agent / Telemetry / Command 数据；
+Mission 的真实上游数据与正式 sprite 资产仍按后续任务推进，Canvas greybox 与状态事件动画
+已接入。
+
 **目标**：从 Pixel Office 扩展出符合 Fleet 品牌的 Pixel Sci-Fi Scene，同时保留 Pixel Agents 的行为细节。
 
 ```text
@@ -379,6 +398,7 @@ Runtime / Telemetry
        ↓
     Scene Model
        ↓
+├── Task Control Center（默认）
 ├── Fleet Command
 └── Pixel Office
 ```
@@ -394,6 +414,8 @@ Fleet Command 重点：
 - 点击 Vessel → 真实 Instance；
 - Focus → 真实 CLI Terminal；
 - Telemetry / Ledger / Recommendation 使用现代 VS Code UI；
+- 紧凑 Command Bar + Mission Rail，主场景优先，Instance Detail 按需出现；
+- Terminal Dock 与 Timeline/Recommendation 以薄条呈现，路径与工程细节不进入舰船卡片；
 - Pixel Office 保持可切换。
 
 ---
@@ -426,6 +448,7 @@ fleet.get_metrics()
 fleet.recommend_assignment()
 fleet.launch_instance()
 fleet.assign_work_item()
+fleet.deliver_work_item()
 fleet.stop_instance()
 ```
 
@@ -441,7 +464,8 @@ Concurrency Rules
 Approval Policy
 ```
 
-Coordinator 即可循环调度。
+Coordinator 可以通过显式 Scheduler tick 循环调度。当前循环是 bounded、幂等且受 policy
+控制的执行器；它不会自行解析对话、绕过审批或无限启动进程。
 
 **硬 Guardrails**：
 
@@ -530,10 +554,10 @@ StrategyAdapter      → assignment policies
 [ ] Token / Cost / Quota accounting
 [ ] PR / CI / Review metrics
 [ ] Explainable Recommendation Panel
-[ ] Policy-controlled Coordinator launch/assign
+[x] Policy-controlled Coordinator launch/assign
 [ ] Real terminal Focus / lifecycle control
 [ ] Claude Provider/Profile capability preserved
-[ ] Fleet Command + Pixel Office switchable scenes
-[ ] No secrets in telemetry or ledger
-[ ] Git/spec/tasks remain collaboration source of truth
+[x] Fleet Command + Pixel Office switchable scenes
+[x] No secrets in telemetry or ledger
+[x] Git/spec/tasks remain collaboration source of truth
 ```

@@ -72,10 +72,13 @@ export const test = base.extend<{
   seedLayout: unknown;
   /** Folder basenames for a multi-root workspace (>1 → multi-root). */
   workspaceFolders: string[];
+  /** Visual scene used by the test. Legacy Office specs opt into Pixel Office. */
+  scene: 'control-center' | 'fleet-command' | 'pixel-office';
 }>({
   seedConfig: [undefined, { option: true }],
   seedLayout: [undefined, { option: true }],
   workspaceFolders: [[], { option: true }],
+  scene: ['control-center', { option: true }],
   // Auto-fixture: tag every test with Allure epic + feature derived from its
   // @area: annotation and enclosing describe path. Runs before pixelAgents.
   _allureLabels: [
@@ -85,7 +88,7 @@ export const test = base.extend<{
     },
     { auto: true },
   ],
-  pixelAgents: async ({ seedConfig, seedLayout, workspaceFolders }, use, testInfo) => {
+  pixelAgents: async ({ seedConfig, seedLayout, workspaceFolders, scene }, use, testInfo) => {
     const session = await launchVSCode(testInfo.title, {
       seedConfig,
       seedLayout,
@@ -99,6 +102,35 @@ export const test = base.extend<{
       // autoShown: the seeded pixel-agents.autoShowPanel setting surfaces the
       // view on activation — no command-palette interaction at setup.
       await openPixelAgentsPanel(window, { autoShown: true });
+      const initialFrame = await getPixelAgentsFrame(window);
+      if (scene === 'pixel-office') {
+        // Pixel Office remains an explicit opt-in projection for legacy office
+        // behavior tests; the product homepage is the minimal control center.
+        await initialFrame.getByTestId('fleet-settings').click();
+        await initialFrame
+          .getByTestId('settings-current-scene-pixel-office')
+          .evaluate((element) => (element as HTMLButtonElement).click());
+        await expect(
+          initialFrame.getByTestId('settings-current-scene-pixel-office'),
+        ).toHaveAttribute('aria-pressed', 'true');
+        await initialFrame
+          .getByTestId('settings-close')
+          .evaluate((element) => (element as HTMLButtonElement).click());
+        await expect(initialFrame.getByText('+ Agent', { exact: true })).toBeVisible();
+      } else if (scene === 'fleet-command') {
+        await initialFrame
+          .getByTestId('fleet-settings')
+          .evaluate((element) => (element as HTMLButtonElement).click());
+        await initialFrame
+          .getByTestId('settings-current-scene-fleet')
+          .evaluate((element) => (element as HTMLButtonElement).click());
+        await initialFrame
+          .getByTestId('settings-close')
+          .evaluate((element) => (element as HTMLButtonElement).click());
+        await expect(initialFrame.getByTestId('fleet-command-scene')).toBeVisible();
+      } else {
+        await expect(initialFrame.getByTestId('task-control-center')).toBeVisible();
+      }
       // Run-video layout: office 2/3 left, terminal editor tabs 1/3 right.
       await arrangeReviewLayout(window);
       const frame = await getPixelAgentsFrame(window);

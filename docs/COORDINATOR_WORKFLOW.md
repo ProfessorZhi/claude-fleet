@@ -2,8 +2,8 @@
 
 > 这是 Claude Fleet v0.2 的目标工作流。它定义 Codex Coordinator、Fleet
 > Controller、Claude Fleet UI、Codex/Claude Worker 和 agentmetrics 之间的边界。
-> 当前 MCP Controller 仍在建设中；文中的 `fleet.*` 是稳定的目标 Contract，
-> 不是对未实现 API 的假设。
+> 当前版本的本地 Control HTTP API 已可用于协调和验收；`fleet.*` MCP 是其后续
+> 适配层，不是另一份状态源。
 
 ## 1. 角色分工
 
@@ -26,6 +26,26 @@ agentmetrics
 
 Codex 不直接拥有 Claude 进程。所有 Worker 的生命周期变更都经过 Controller。
 VS Code 和 Codex 都是 Controller 状态的 Projection。
+
+当前可用的本地边界包括：
+
+- `POST /api/control`：创建/启动、停止、重启、恢复、Focus、投递 WorkItem、记录质量信号；
+- `GET /api/control/instances`：读取当前 Fleet 实例；
+- `GET /api/control/metrics?instanceId=&workItemId=`：读取 token、耗时以及同币种/同计费基础的费用汇总；
+- `GET /api/control/quality?workItemId=`：读取与 WorkItem 关联的质量/PR 信号。
+- `POST /api/control/telemetry`：接收 agentmetrics 或运行时产生的有界 Usage/Quota
+  信号，使用 `idempotencyKey` 去重；
+- `GET /api/coordinator/session`、`GET /api/coordinator/plan`、
+  `POST /api/coordinator/tick`：访问 VS Code 内置的主 Coordinator session。
+
+这些端点要求本地 Control token。真实 Provider 的账号额度或未提供结构化计量时，
+Usage 必须显示 `NOT_AVAILABLE`，不能用估算值冒充真实 token 或费用。
+Codex 的本地 JSONL 可以提供累计 token 和最近一轮耗时；账户级套餐剩余额度仍然只能
+作为独立 quota 快照，无法在并发 Agent 间证明归属时保持 `unavailable`。
+
+VS Code 扩展会把 Ledger 持久化到其 global storage 的 `fleet-ledger.json`，因此刷新
+Webview 不会重置协调记录；只有损坏快照才会 fail-closed 回退到当前会话内存 Ledger
+并在 Extension Host 日志中报告。
 
 ## 2. 一次任务的完整生命周期
 
@@ -134,6 +154,9 @@ fleet.attach_worker(worker_id)
 fleet.collect_result(worker_id)
 fleet.get_usage(worker_id / task_id / run_id)
 ```
+
+上述目标操作在本地 HTTP API 中对应 `submit`、`getInstance`、`listInstances`、
+`getMetrics` 和 `getQuality`；`FleetControlClient` 负责请求封装和响应校验。
 
 `attach_worker` 表示人工接管；人工操作仍然通过 Controller 记录状态。Codex 不
 应通过屏幕抓取或模拟键盘控制 Claude TUI。

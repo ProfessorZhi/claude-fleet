@@ -50,7 +50,7 @@ const PETS_CAROUSEL = '[data-testid="pets-carousel"]';
  * Mirrors the layout-editor smoke test in hooks-on/lifecycle.spec.ts.
  */
 async function dismissFirstRunTooltips(frame: Frame): Promise<void> {
-  for (const tooltipText of ['Instant Detection Active', 'Updated to v']) {
+  for (const tooltipText of ['实时检测已开启', 'Instant Detection Active', 'Updated to v']) {
     const tooltip = frame.locator('div', { hasText: tooltipText }).first();
     if (await tooltip.isVisible().catch(() => false)) {
       const closeBtn = tooltip.locator('button', { hasText: 'x' }).first();
@@ -87,6 +87,7 @@ async function petClick(frame: Frame, petId: string): Promise<void> {
 }
 
 test.describe('Pets', () => {
+  test.use({ scene: 'pixel-office' });
   test('pet sprites load, broadcast, and expose manifest names in the editor @area:pets', async ({
     pixelAgents,
   }) => {

@@ -113,6 +113,9 @@ class PricingInfo:
     currency: str = "USD"
     api_equivalent_cost_usd: Optional[float] = None
     actual_billed_cost_usd: Optional[float] = None  # Always null unless explicit real bill provided
+    # Optional subscription/token-plan allocation for this turn/session
+    # boundary. It is evidence, not a claim about the user's actual invoice.
+    subscription: Optional[Dict[str, Any]] = None
     status: str = "PRICE_NOT_AVAILABLE"
 
     def to_dict(self) -> Dict[str, Any]:

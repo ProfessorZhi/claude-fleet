@@ -339,12 +339,15 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
   // exist once the layout flush creates them. Without this a reconnecting
   // client shows bare characters until each agent takes another turn.
   for (const [id, agent] of store) {
-    if (agent.contextTokens > 0) {
+    // A restored/session-scanned agent may have cumulative usage before a
+    // context-window snapshot arrives. Preserve that usage on first render.
+    if (agent.contextTokens > 0 || agent.usageTokens) {
       send({
         type: 'agentContextUsage',
         id,
         contextTokens: agent.contextTokens,
         maxContextTokens: agent.maxContextTokens,
+        usage: agent.usageTokens,
       });
     }
   }

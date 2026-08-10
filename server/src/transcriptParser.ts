@@ -90,6 +90,18 @@ export function formatToolStatus(toolName: string, input: Record<string, unknown
   return hookProvider?.formatToolStatus(toolName, input) ?? `Using ${toolName}`;
 }
 
+function clearReasoningActivity(agentId: number, agent: AgentState, agents: AgentStateStore): void {
+  const toolId = agent.reasoningToolId;
+  if (!toolId) return;
+  if (agent.activeToolIds.has(toolId)) {
+    agents.broadcast({ type: 'agentToolDone', id: agentId, toolId });
+  }
+  agent.activeToolIds.delete(toolId);
+  agent.activeToolStatuses.delete(toolId);
+  agent.activeToolNames.delete(toolId);
+  agent.reasoningToolId = undefined;
+}
+
 export function processTranscriptLine(
   agentId: number,
   line: string,
@@ -147,8 +159,31 @@ export function processTranscriptLine(
         input?: Record<string, unknown>;
       }>;
       const hasToolUse = blocks.some((b) => b.type === 'tool_use');
+      const hasThinking = blocks.some((b) => b.type === 'thinking');
+
+      if (hasThinking && !hasToolUse) {
+        cancelWaitingTimer(agentId, waitingTimers);
+        agent.isWaiting = false;
+        agent.hadToolsInTurn = true;
+        agents.broadcast({ type: 'agentStatus', id: agentId, status: 'working' });
+        const reasoningToolId = `reasoning-${agent.sessionId}`;
+        if (!agent.reasoningToolId || !agent.activeToolIds.has(agent.reasoningToolId)) {
+          agent.reasoningToolId = reasoningToolId;
+          agent.activeToolIds.add(reasoningToolId);
+          agent.activeToolStatuses.set(reasoningToolId, 'Reasoning');
+          agent.activeToolNames.set(reasoningToolId, 'Thinking');
+          agents.broadcast({
+            type: 'agentToolStart',
+            id: agentId,
+            toolId: reasoningToolId,
+            status: 'Reasoning',
+            toolName: 'Thinking',
+          });
+        }
+      }
 
       if (hasToolUse) {
+        clearReasoningActivity(agentId, agent, agents);
         cancelWaitingTimer(agentId, waitingTimers);
         agent.isWaiting = false;
         agent.hadToolsInTurn = true;
@@ -398,12 +433,14 @@ export function processTranscriptLine(
         } else {
           // New user text prompt — new turn starting
           cancelWaitingTimer(agentId, waitingTimers);
+          clearReasoningActivity(agentId, agent, agents);
           clearAgentActivity(agent, agentId, agents, permissionTimers);
           agent.hadToolsInTurn = false;
         }
       } else if (typeof content === 'string' && content.trim()) {
         // New user text prompt — new turn starting
         cancelWaitingTimer(agentId, waitingTimers);
+        clearReasoningActivity(agentId, agent, agents);
         clearAgentActivity(agent, agentId, agents, permissionTimers);
         agent.hadToolsInTurn = false;
       }
@@ -447,6 +484,7 @@ export function processTranscriptLine(
     } else if (record.type === 'system' && record.subtype === 'turn_duration') {
       cancelWaitingTimer(agentId, waitingTimers);
       cancelPermissionTimer(agentId, permissionTimers);
+      clearReasoningActivity(agentId, agent, agents);
 
       // Definitive turn-end: clean up any stale tool state, but preserve background agents.
       // When hooks are active, the Stop hook already handled the status change,

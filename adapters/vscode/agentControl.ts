@@ -50,6 +50,7 @@ export function restartConfigFromAgent(agent: AgentState): InstanceLaunchConfig 
     cwd: agent.cwd ?? agent.projectDir,
     providerProfileId: agent.providerProfileId ?? INHERIT_PROVIDER_PROFILE_ID,
     modelId: agent.modelId,
+    displayName: agent.displayName,
     // Resume the same Claude native conversation on Restart.
     sessionId: agent.sessionId,
     sessionMode: 'resume',
@@ -65,6 +66,7 @@ export function newSessionConfigFromAgent(agent: AgentState): InstanceLaunchConf
     cwd: agent.cwd ?? agent.projectDir,
     providerProfileId: agent.providerProfileId ?? INHERIT_PROVIDER_PROFILE_ID,
     modelId: agent.modelId,
+    displayName: agent.displayName,
     // sessionMode defaults to 'new'; no sessionId → fresh UUID at launch.
   };
 }

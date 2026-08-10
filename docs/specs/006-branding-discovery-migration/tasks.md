@@ -38,6 +38,14 @@
 - [ ] 单测：rediscovery upsert、外部 adoption、同 session 重启不重复、
       switch provider 不重复、unknown provider 显示。
 
+### T5.1 Codex CLI session discovery
+
+- [x] 扫描 `~/.codex/sessions/**/*.jsonl` 的 `session_meta` 与有界事件尾部。
+- [x] 按当前 workspace `cwd` 过滤，提取 session/model/provider/状态，禁止把 Codex
+      envelope 送入 Claude transcript parser。
+- [x] 外部 Codex session 以只读、secret-free AgentState 投影出现，并覆盖 scanner 单测。
+- [x] 外部 Codex 投影关闭后遵守 dismissal cooldown，避免下一轮扫描立即复活。
+
 ## T6. UI 字段
 
 - [ ] Agent 卡片：Session 短 ID、Managed（Fleet/External）、

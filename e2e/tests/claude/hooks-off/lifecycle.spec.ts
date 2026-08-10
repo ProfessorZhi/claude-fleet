@@ -56,6 +56,7 @@ function otherOverlayId(ids: number[], knownId: number): number {
 }
 
 test.describe('Hooks OFF / lifecycle', () => {
+  test.use({ scene: 'pixel-office' });
   test('/clear on internal agent reassigns the same character via JSONL polling @area:lifecycle', async ({
     pixelAgents,
   }) => {
@@ -769,11 +770,14 @@ test.describe('Hooks OFF / lifecycle', () => {
     await expectOverlayVisible(panelFrame, 'Running: npm test', 8_000);
     narrator.check('"Running: npm test" while the tool is active');
 
-    // After tool_result + turn_duration, the overlay must revert to "Idle".
-    narrator.step('after the turn_duration, the overlay must revert to Idle');
-    await expectOverlayVisible(panelFrame, 'Idle', 8_000);
+    // After tool_result + turn_duration, the running tool must disappear and
+    // the completed-turn marker must remain until the user views the agent.
+    narrator.step('after the turn_duration, the running tool must disappear');
+    await expect(panelFrame.getByTestId('agent-completion-unread')).toBeVisible({
+      timeout: 8_000,
+    });
     await expectNoOverlay(panelFrame, 'Running: npm test', 2_000);
-    narrator.check('overlay back to "Idle" — no ghost "Running: npm test" left behind');
+    narrator.check('completion marker is visible — no ghost "Running: npm test" left behind');
   });
 
   // Heuristic permission and text-idle timers are cancelled when an agent

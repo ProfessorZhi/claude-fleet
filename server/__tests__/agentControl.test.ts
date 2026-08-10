@@ -388,6 +388,7 @@ describe('runSwitchProviderCommand — Spec 005 FR-011', () => {
     expect(cfg.sessionMode).toBe('resume'); // Native resume
     expect(cfg.providerProfileId).toBe('deepseek.1'); // New provider
     expect(cfg.modelId).toBe('deepseek-v4-pro[1m]'); // New model
+    expect(agent.lastProviderProfileId).toBe('minimax.1'); // Previous provider is diagnostic metadata only.
   });
 
   it('fails closed with a clear error when no profiles are configured', async () => {

@@ -1,13 +1,11 @@
-import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 
-import { normalizeProjectPath } from '../../../../../core/src/normalizeProjectPath.js';
 import type { AgentEvent, HookProvider } from '../../../../../core/src/provider.js';
 import {
   BASH_COMMAND_DISPLAY_MAX_LENGTH,
   TASK_DESCRIPTION_DISPLAY_MAX_LENGTH,
 } from '../../../constants.js';
+import { getClaudeSessionDirs, getClaudeSessionRoots } from './claudeConfigPath.js';
 import {
   areHooksInstalled as installerAreHooksInstalled,
   installHooks as installerInstallHooks,
@@ -74,6 +72,8 @@ export function formatToolStatus(toolName: string, input?: unknown): string {
 // ── Session dir + launch command ──
 
 function getSessionDirs(workspacePath: string): string[] {
+  return getClaudeSessionDirs(workspacePath);
+  /*
   // Claude stores sessions at ~/.claude/projects/<workspace-path-with-dashes>/.
   const dirName = normalizeProjectPath(workspacePath);
   const projectDir = path.join(os.homedir(), '.claude', 'projects', dirName);
@@ -91,11 +91,12 @@ function getSessionDirs(workspacePath: string): string[] {
       if (match) return [path.join(projectsRoot, match)];
     }
   } catch {
-    /* ignore scan errors */
+    // ignore scan errors
   }
 
   // Return the expected path even if it doesn't exist yet (caller tolerates missing dirs).
   return [projectDir];
+  */
 }
 
 function buildLaunchCommand(
@@ -120,7 +121,7 @@ function buildLaunchCommand(
 /** Root that holds every Claude session across all workspaces. Used by the
  *  global session scanner ("Watch All Sessions"). */
 function getAllSessionRoots(): string[] {
-  return [path.join(os.homedir(), '.claude', 'projects')];
+  return getClaudeSessionRoots();
 }
 
 // ── normalizeHookEvent: the single Claude-specific normalization boundary ──

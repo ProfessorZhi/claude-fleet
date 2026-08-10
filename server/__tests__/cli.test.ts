@@ -168,7 +168,14 @@ describe('dist/cli.js entry-point guard', () => {
       [CLI_BUNDLE, '--port', port.toString(), '--host', '127.0.0.1'],
       {
         cwd: workspaceDir,
-        env: { ...process.env, HOME: tmpHome, USERPROFILE: tmpHome },
+        env: {
+          ...process.env,
+          HOME: tmpHome,
+          USERPROFILE: tmpHome,
+          // Keep the child test home isolated from the developer's active
+          // Claude profile (for example .claude-deepseek).
+          CLAUDE_CONFIG_DIR: '',
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );

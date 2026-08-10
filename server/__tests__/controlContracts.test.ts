@@ -58,6 +58,22 @@ describe('Fleet Control API contracts', () => {
     ).toContain('token or cost budget');
   });
 
+  it('allows autonomous delivery to an already-existing instance without a launch template', () => {
+    expect(
+      validateFleetControlRequest(
+        request({
+          requestId: 'request-delivery-1',
+          action: 'deliver_work_item',
+          mode: 'autonomous',
+          launch: undefined,
+          missionId: 'mission-1',
+          workItemId: 'work-item-1',
+          instanceId: 'agent-1',
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it('requires a native session id when resuming', () => {
     expect(validateLaunchTemplate(launch({ sessionMode: 'resume' }))).toContain('sessionId');
   });

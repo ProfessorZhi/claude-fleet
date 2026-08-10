@@ -19,6 +19,8 @@ import type {
 } from './clientMessageHandler.js';
 import { handleClientMessage } from './clientMessageHandler.js';
 import { HOOK_API_PREFIX, MAX_HOOK_BODY_SIZE } from './constants.js';
+import type { CoordinatorSession } from './coordinatorSession.js';
+import { TelemetryIngestor } from './telemetryIngestor.js';
 import type { AgentState } from './types.js';
 
 /** Options for creating the HTTP + WebSocket server. */
@@ -47,6 +49,8 @@ export interface HttpServerOptions {
   onReloadAssets?: ReloadAssetsSideEffect;
   /** Optional local management-plane API. HTTP only forwards validated JSON requests to it. */
   controlApi?: FleetControlApi;
+  /** Optional explicit Coordinator plan/tick session. */
+  coordinatorSession?: CoordinatorSession;
 }
 
 /** Result of createHttpServer(). */
@@ -89,6 +93,7 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
   registerHealthRoute(app);
   registerHookRoute(app, options);
   registerControlRoutes(app, options);
+  registerCoordinatorRoutes(app, options);
   registerWebSocketRoute(app, options);
 
   // ── Listen ──────────────────────────────────────────────────
@@ -147,6 +152,7 @@ function registerHookRoute(app: FastifyInstance, options: HttpServerOptions): vo
 
 function registerControlRoutes(app: FastifyInstance, options: HttpServerOptions): void {
   if (!options.controlApi) return;
+  const telemetryIngestor = new TelemetryIngestor(options.controlApi);
 
   app.post<{ Body: unknown }>(
     '/api/control',
@@ -154,6 +160,11 @@ function registerControlRoutes(app: FastifyInstance, options: HttpServerOptions)
     async (request, reply) => {
       if (!isJsonObject(request.body)) {
         reply.code(400).send({ error: 'invalid_control_request' });
+        return;
+      }
+
+      if (hasUnsafeResultFields(request.body)) {
+        reply.code(400).send({ error: 'bounded_result_rejected' });
         return;
       }
 
@@ -185,6 +196,172 @@ function registerControlRoutes(app: FastifyInstance, options: HttpServerOptions)
       }
     },
   );
+
+  app.get(
+    '/api/control/instances',
+    { preHandler: bearerAuth(options.token) },
+    async (_request, reply) => {
+      try {
+        const instances = await options.controlApi!.listInstances();
+        reply.send(sanitizeJsonValue(instances, [options.token]));
+      } catch {
+        reply.code(500).send({ error: 'control_roster_unavailable' });
+      }
+    },
+  );
+
+  app.get<{ Querystring: { instanceId?: string; workItemId?: string } }>(
+    '/api/control/metrics',
+    { preHandler: bearerAuth(options.token) },
+    async (request, reply) => {
+      try {
+        const metrics = await options.controlApi!.getMetrics(
+          request.query.instanceId,
+          request.query.workItemId,
+        );
+        reply.send(sanitizeJsonValue(metrics, [options.token]));
+      } catch {
+        reply.code(500).send({ error: 'control_metrics_unavailable' });
+      }
+    },
+  );
+
+  app.get<{ Querystring: { workItemId?: string } }>(
+    '/api/control/quality',
+    { preHandler: bearerAuth(options.token) },
+    async (request, reply) => {
+      try {
+        const controlApi = options.controlApi!;
+        if (!controlApi.getQuality) {
+          reply.code(503).send({ error: 'control_quality_unavailable' });
+          return;
+        }
+        const quality = await controlApi.getQuality(request.query.workItemId);
+        reply.send(sanitizeJsonValue(quality, [options.token]));
+      } catch {
+        reply.code(500).send({ error: 'control_quality_unavailable' });
+      }
+    },
+  );
+
+  app.post<{ Body: unknown }>(
+    '/api/control/telemetry',
+    { preHandler: bearerAuth(options.token) },
+    async (request, reply) => {
+      if (!isJsonObject(request.body)) {
+        reply.code(400).send({ error: 'invalid_telemetry_envelope' });
+        return;
+      }
+      try {
+        const result = await telemetryIngestor.ingest(request.body);
+        reply.send(sanitizeJsonValue(result, [options.token]));
+      } catch {
+        // Do not disclose validation details, raw telemetry, or provider data
+        // at the HTTP boundary. The caller can inspect the status code and
+        // retry with a new idempotency key after correcting its envelope.
+        reply.code(400).send({ error: 'telemetry_rejected' });
+      }
+    },
+  );
+}
+
+function registerCoordinatorRoutes(app: FastifyInstance, options: HttpServerOptions): void {
+  if (!options.coordinatorSession) return;
+
+  app.get(
+    '/api/coordinator/session',
+    { preHandler: bearerAuth(options.token) },
+    async (_request, reply) => {
+      reply.send(
+        sanitizeJsonValue(
+          {
+            sessionId: options.coordinatorSession!.sessionId,
+            ownerId: options.coordinatorSession!.ownerId,
+            policy: options.coordinatorSession!.policy,
+          },
+          [options.token],
+        ),
+      );
+    },
+  );
+
+  app.get<{ Querystring: { requestId?: string } }>(
+    '/api/coordinator/plan',
+    { preHandler: bearerAuth(options.token) },
+    async (request, reply) => {
+      try {
+        reply.send(
+          sanitizeJsonValue(
+            await invokeCoordinatorHttpSession(
+              options.coordinatorSession!,
+              'plan',
+              request.query.requestId ??
+                (typeof request.headers['x-request-id'] === 'string'
+                  ? request.headers['x-request-id']
+                  : undefined),
+            ),
+            [options.token],
+          ),
+        );
+      } catch {
+        reply.code(500).send({ error: 'coordinator_plan_unavailable' });
+      }
+    },
+  );
+
+  app.post<{ Body: unknown }>(
+    '/api/coordinator/tick',
+    { preHandler: bearerAuth(options.token) },
+    async (request, reply) => {
+      if (request.body !== undefined && !isJsonObject(request.body)) {
+        reply.code(400).send({ error: 'invalid_coordinator_request' });
+        return;
+      }
+      try {
+        const requestId = isJsonObject(request.body)
+          ? request.body.requestId
+          : request.headers['x-request-id'];
+        if (requestId !== undefined && typeof requestId !== 'string') {
+          reply.code(400).send({ error: 'invalid_coordinator_request_id' });
+          return;
+        }
+        reply.send(
+          sanitizeJsonValue(
+            await invokeCoordinatorHttpSession(options.coordinatorSession!, 'tick', requestId),
+            [options.token],
+          ),
+        );
+      } catch {
+        reply.code(500).send({ error: 'coordinator_tick_unavailable' });
+      }
+    },
+  );
+}
+
+let coordinatorHttpSequence = 0;
+
+function invokeCoordinatorHttpSession(
+  session: CoordinatorSession,
+  operation: 'plan' | 'tick',
+  requestedId?: string,
+): Promise<FleetControlResponse> {
+  const requestId =
+    requestedId ?? `http-coordinator-${operation}-${Date.now()}-${coordinatorHttpSequence++}`;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(requestId)) {
+    return Promise.resolve({
+      requestId: 'invalid-request',
+      decision: 'rejected',
+      reason: 'Coordinator requestId must be a safe identifier.',
+    });
+  }
+  return session.invoke({
+    requestId,
+    sessionId: session.sessionId,
+    requestedBy: session.ownerId,
+    operation,
+    mode: session.policy,
+    createdAt: Date.now(),
+  });
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
@@ -192,7 +369,25 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 }
 
 const SENSITIVE_FIELD =
-  /(?:token|secret|authorization|credential|password|api[-_]?key|transcript|prompt|raw[-_]?event|environment)/i;
+  /(?:api[-_]?key|authorization|access[-_]?token|refresh[-_]?token|auth[-_]?token|password|secret|credential|transcript|prompt|raw[-_]?event|environment)/i;
+
+const BOUNDED_RESULT_FIELDS = new Set([
+  'workItemId',
+  'instanceId',
+  'outcome',
+  'summary',
+  'artifactRefs',
+  'capturedAt',
+  'source',
+  'availability',
+  'confidence',
+]);
+
+function hasUnsafeResultFields(body: Record<string, unknown>): boolean {
+  const result = body.result;
+  if (!isJsonObject(result)) return false;
+  return Object.keys(result).some((field) => !BOUNDED_RESULT_FIELDS.has(field));
+}
 
 /** Keep the control response shape while excluding credentials and raw agent data. */
 function sanitizeControlResponse(
@@ -253,6 +448,13 @@ function registerWebSocketRoute(app: FastifyInstance, options: HttpServerOptions
         hooksOnly: agent.hooksOnly || undefined,
         palette: agent.palette,
         hueShift: agent.hueShift,
+        displayName: agent.displayName,
+        providerProfileId: agent.providerProfileId,
+        providerDisplayName: agent.providerDisplayName,
+        modelId: agent.modelId,
+        runtime: agent.runtime,
+        createdAt: agent.createdAt,
+        managedByFleet: agent.managedByFleet,
       });
     };
 

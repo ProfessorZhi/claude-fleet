@@ -77,6 +77,41 @@ describe('FleetControlClient', () => {
     expect(result).toBeUndefined();
   });
 
+  it('lists instances and queries token/time/quota metrics', async () => {
+    const urls: string[] = [];
+    const instances = [
+      {
+        instanceId: 'instance-1',
+        runtime: 'claude-code',
+        role: 'worker',
+        managedByFleet: true,
+        status: 'working',
+        createdAt: 10,
+      },
+    ];
+    const controlClient = client(async (input) => {
+      urls.push(input);
+      if (input.endsWith('/instances')) return response(instances);
+      return response({
+        capturedAt: 20,
+        instanceId: 'instance-1',
+        usage: [{ usageId: 'usage-1', tokens: { totalTokens: 42 }, capturedAt: 19 }],
+        sessions: [],
+        quotas: [{ snapshotId: 'quota-1', used: { amount: 42, unit: 'tokens' } }],
+        totals: { durationMs: 1200, tokens: { totalTokens: 42 } },
+      });
+    });
+
+    await expect(controlClient.listInstances()).resolves.toEqual(instances);
+    await expect(controlClient.getMetrics('instance-1')).resolves.toMatchObject({
+      totals: { durationMs: 1200, tokens: { totalTokens: 42 } },
+    });
+    expect(urls).toEqual([
+      'http://127.0.0.1:4321/api/control/instances',
+      'http://127.0.0.1:4321/api/control/metrics?instanceId=instance-1',
+    ]);
+  });
+
   it('fails safely for HTTP errors without exposing the token', async () => {
     let caught: unknown;
     try {

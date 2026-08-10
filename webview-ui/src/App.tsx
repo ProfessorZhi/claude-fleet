@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import type { FleetTelemetryProjection } from '../../core/src/fleetTelemetry.js';
 import { toMajorMinor } from './changelogData.js';
 import { BottomToolbar } from './components/BottomToolbar.js';
 import { ChangelogModal } from './components/ChangelogModal.js';
@@ -12,9 +13,23 @@ import { Tooltip } from './components/Tooltip.js';
 import { Modal } from './components/ui/Modal.js';
 import { VersionIndicator } from './components/VersionIndicator.js';
 import { ZoomControls } from './components/ZoomControls.js';
+import { TaskControlCenter } from './control/TaskControlCenter.js';
+import { FleetCommand, type FleetCommandAction } from './fleet/FleetCommand.js';
+import type { FleetCharacterMetadata } from './fleet/model.js';
+import { buildFleetSceneModel } from './fleet/model.js';
+import {
+  PRODUCT_DEFAULT_SCENE,
+  readDefaultScenePreference,
+  readPersistedScenePreference,
+  type SceneId,
+  writeDefaultScenePreference,
+  writeScenePreference,
+} from './fleet/scene.js';
 import { useEditorActions } from './hooks/useEditorActions.js';
 import { useEditorKeyboard } from './hooks/useEditorKeyboard.js';
 import { useExtensionMessages } from './hooks/useExtensionMessages.js';
+import { getActivityText } from './office/components/agentStatus.js';
+import { OfficeAgentDetail } from './office/components/OfficeAgentDetail.js';
 import { OfficeCanvas } from './office/components/OfficeCanvas.js';
 import { ToolOverlay } from './office/components/ToolOverlay.js';
 import { EditorState } from './office/editor/editorState.js';
@@ -69,6 +84,7 @@ function App() {
     selectedAgent,
     agentTools,
     agentStatuses,
+    agentInfo,
     subagentTools,
     subagentCharacters,
     layoutReady,
@@ -92,6 +108,76 @@ function App() {
     showAreas,
     setShowAreas,
   } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty);
+
+  const [scene, setScene] = useState<SceneId>(() => {
+    try {
+      return readPersistedScenePreference(
+        typeof window === 'undefined' ? null : window.localStorage,
+      );
+    } catch {
+      return PRODUCT_DEFAULT_SCENE;
+    }
+  });
+  const [defaultScene, setDefaultScene] = useState<SceneId>(() => {
+    try {
+      return readDefaultScenePreference(typeof window === 'undefined' ? null : window.localStorage);
+    } catch {
+      return PRODUCT_DEFAULT_SCENE;
+    }
+  });
+  const [telemetry, setTelemetry] = useState<FleetTelemetryProjection>({
+    snapshots: [],
+    recentEvents: [],
+  });
+  // Fleet Command selection is a UI projection only. Runtime ownership and
+  // lifecycle remain in useExtensionMessages/OfficeState.
+  const [fleetSelection, setFleetSelection] = useState<number | null>(null);
+  const [officeSelection, setOfficeSelection] = useState<number | null>(null);
+
+  // Consume the existing normalized telemetry projection as presentation data.
+  // Agent lifecycle and roster ownership remain with useExtensionMessages and
+  // OfficeState; this does not create a second Agent state source.
+  useEffect(() => {
+    return transport.onMessage((msg) => {
+      // fleetTelemetry is an existing adapter broadcast; the older shared
+      // ServerMessage union does not yet include this projection type.
+      const message = msg as unknown as {
+        type: string;
+        projection?: FleetTelemetryProjection;
+      };
+      if (message.type !== 'fleetTelemetry') return;
+      const projection = message.projection;
+      if (!projection || !Array.isArray(projection.snapshots)) return;
+      setTelemetry({
+        snapshots: projection.snapshots,
+        recentEvents: Array.isArray(projection.recentEvents) ? projection.recentEvents : [],
+      });
+    });
+  }, []);
+
+  const handleSceneChange = useCallback((nextScene: SceneId) => {
+    setScene(nextScene);
+    try {
+      writeScenePreference(window.localStorage, nextScene);
+    } catch {
+      writeScenePreference(null, nextScene);
+    }
+  }, []);
+
+  const handleDefaultSceneChange = useCallback(
+    (nextScene: SceneId) => {
+      setDefaultScene(nextScene);
+      try {
+        writeDefaultScenePreference(window.localStorage, nextScene);
+      } catch {
+        writeDefaultScenePreference(null, nextScene);
+      }
+      // Make a default choice immediately visible; it is also the projection
+      // the next webview session will restore.
+      handleSceneChange(nextScene);
+    },
+    [handleSceneChange],
+  );
 
   // Show migration notice once layout reset is detected
   const [migrationNoticeDismissed, setMigrationNoticeDismissed] = useState(false);
@@ -138,7 +224,12 @@ function App() {
   }, [ghostHeadlessAgents, setGhostHeadlessAgents]);
 
   const handleSelectAgent = useCallback((id: number) => {
+    setFleetSelection(id);
     transport.send({ type: 'focusAgent', id });
+  }, []);
+
+  const handleSelectFleetAgent = useCallback((id: number) => {
+    setFleetSelection(id);
   }, []);
 
   // Mutate folder→Area mappings locally + send to server. Updates OfficeState in
@@ -212,7 +303,14 @@ function App() {
     transport.send({ type: 'closeAgent', id });
   }, []);
 
-  const handleClick = useCallback((agentId: number) => {
+  const handleOfficeClick = useCallback((agentId: number) => {
+    getOfficeState().markCompletionViewed(agentId);
+    setOfficeSelection(agentId);
+  }, []);
+
+  const handleOfficeDoubleClick = useCallback((agentId: number) => {
+    getOfficeState().markCompletionViewed(agentId);
+    setOfficeSelection(agentId);
     // If clicked agent is a sub-agent, focus the parent's terminal instead
     const os = getOfficeState();
     const meta = os.subagentMeta.get(agentId);
@@ -221,6 +319,69 @@ function App() {
   }, []);
 
   const officeState = getOfficeState();
+
+  const fleetAgentFolders = useMemo(() => {
+    const folders: Record<number, { name: string; path: string } | undefined> = {};
+    for (const id of agents) {
+      const folderName = officeState.characters.get(id)?.folderName;
+      if (!folderName) {
+        folders[id] = undefined;
+        continue;
+      }
+      const workspaceFolder = workspaceFolders.find((folder) => folder.name === folderName);
+      folders[id] = { name: folderName, path: workspaceFolder?.path ?? folderName };
+    }
+    return folders;
+  }, [agents, officeState, workspaceFolders]);
+
+  const fleetCharacters = useMemo(() => {
+    const characters: Record<number, FleetCharacterMetadata | undefined> = {};
+    for (const id of agents) {
+      const character = officeState.characters.get(id);
+      if (!character) continue;
+      characters[id] = {
+        folderName: character.folderName,
+        createdAt: agentInfo[id]?.createdAt,
+        currentTool: character.currentTool,
+        isSubagent: character.isSubagent,
+        parentAgentId: character.parentAgentId,
+        isTeamLead: character.isTeamLead,
+        agentName: character.agentName,
+        isHeadless: character.isHeadless,
+        displayName: character.displayName,
+        contextTokens: character.contextTokens,
+        maxContextTokens: character.maxContextTokens,
+        usageTokens: agentInfo[id]?.usageTokens ?? character.usageTokens,
+      };
+    }
+    return characters;
+  }, [agents, agentInfo, officeState]);
+
+  const fleetModel = useMemo(
+    () =>
+      buildFleetSceneModel({
+        agents,
+        selectedAgent,
+        agentTools,
+        agentStatuses,
+        agentFolders: fleetAgentFolders,
+        characters: fleetCharacters,
+        telemetry,
+      }),
+    [
+      agents,
+      selectedAgent,
+      agentTools,
+      agentStatuses,
+      fleetAgentFolders,
+      fleetCharacters,
+      telemetry,
+    ],
+  );
+
+  const handleFleetAction = useCallback((action: FleetCommandAction, id: number) => {
+    transport.send({ type: action, id });
+  }, []);
 
   // Merged set of folders the Areas dropdown can map: real workspace folders plus
   // every distinct folder an agent has run in this session (deduped by name; name
@@ -313,155 +474,208 @@ function App() {
 
   return (
     <div ref={containerRef} className="w-full h-full relative overflow-hidden">
-      <OfficeCanvas
-        officeState={officeState}
-        onClick={handleClick}
-        isEditMode={editor.isEditMode}
-        editorState={editorState}
-        onEditorTileAction={editor.handleEditorTileAction}
-        onEditorEraseAction={editor.handleEditorEraseAction}
-        onEditorSelectionChange={editor.handleEditorSelectionChange}
-        onDeleteSelected={editor.handleDeleteSelected}
-        onRotateSelected={editor.handleRotateSelected}
-        onDragMove={editor.handleDragMove}
-        editorTick={editor.editorTick}
-        zoom={editor.zoom}
-        onZoomChange={editor.handleZoomChange}
-        panRef={editor.panRef}
-        showAreas={effectiveShowAreas}
-        activeAreaLabel={activeAreaLabel}
-      />
-
-      {!isDebugMode ? (
-        <>
-          <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />
-
-          {/* Vignette overlay */}
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{ background: 'var(--vignette)' }}
-          />
-
-          {/* Spec 004 — empty state: no agents running */}
-          {agents.length === 0 && (
-            <div
-              data-testid="empty-state"
-              className="absolute inset-0 z-12 flex flex-col items-center justify-center gap-8 pointer-events-none"
-            >
-              <div className="text-3xl font-bold">No agents running</div>
-              <button
-                data-testid="empty-state-new-agent"
-                onClick={() => transport.send({ type: 'newAgent' })}
-                className="pointer-events-auto py-4 px-12 text-xl bg-accent text-white border-2 border-accent rounded-none cursor-pointer shadow-pixel hover:opacity-90"
-              >
-                + New Agent
-              </button>
-              <p className="text-base opacity-80 max-w-140 text-center">
-                Launch a Claude Code instance with its own repo, provider and model.
-              </p>
-            </div>
-          )}
-
-          {editor.isEditMode && editor.isDirty && (
-            <EditActionBar editor={editor} editorState={editorState} />
-          )}
-
-          {showRotateHint && (
-            <div
-              className="absolute left-1/2 -translate-x-1/2 z-11 bg-accent-bright text-white text-sm py-3 px-8 rounded-none border-2 border-accent shadow-pixel pointer-events-none whitespace-nowrap"
-              style={{ top: editor.isDirty ? 64 : 8 }}
-            >
-              Rotate (R)
-            </div>
-          )}
-
-          {editor.isEditMode &&
-            (() => {
-              const selUid = editorState.selectedFurnitureUid;
-              const selColor = selUid
-                ? (officeState.getLayout().furniture.find((f) => f.uid === selUid)?.color ?? null)
-                : null;
-              return (
-                <EditorToolbar
-                  activeTool={editorState.activeTool}
-                  selectedTileType={editorState.selectedTileType}
-                  selectedFurnitureType={editorState.selectedFurnitureType}
-                  selectedFurnitureUid={selUid}
-                  selectedFurnitureColor={selColor}
-                  floorColor={editorState.floorColor}
-                  wallColor={editorState.wallColor}
-                  selectedWallSet={editorState.selectedWallSet}
-                  onToolChange={editor.handleToolChange}
-                  onTileTypeChange={editor.handleTileTypeChange}
-                  onFloorColorChange={editor.handleFloorColorChange}
-                  onWallColorChange={editor.handleWallColorChange}
-                  onWallSetChange={editor.handleWallSetChange}
-                  onSelectedFurnitureColorChange={editor.handleSelectedFurnitureColorChange}
-                  pickedFurnitureColor={editorState.pickedFurnitureColor}
-                  onPickedFurnitureColorChange={editor.handlePickedFurnitureColorChange}
-                  onFurnitureTypeChange={editor.handleFurnitureTypeChange}
-                  loadedAssets={loadedAssets}
-                  activePetTypes={officeState.getActivePetTypes()}
-                  petCount={getPetCount()}
-                  onPetToggle={editor.handlePetToggle}
-                  carpetVariant={editor.carpetVariant}
-                  carpetColor={editor.carpetColor}
-                  carpetAccentColor={editor.carpetAccentColor}
-                  onCarpetVariantChange={editor.handleCarpetVariantChange}
-                  onCarpetColorChange={editor.handleCarpetColorChange}
-                  onCarpetAccentColorChange={editor.handleCarpetAccentColorChange}
-                  areas={officeState.getLayout().areas ?? []}
-                  selectedAreaLabel={editor.selectedAreaLabel}
-                  workspaceFolders={areaFolders}
-                  areasAvailable={areasAvailable}
-                  areaMappings={areaMappings}
-                  onSelectArea={editor.handleSelectArea}
-                  onAddArea={editor.handleAddArea}
-                  onRemoveArea={editor.handleRemoveArea}
-                  onRenameArea={editor.handleRenameArea}
-                  onAreaColorChange={editor.handleAreaColorChange}
-                  onAreaMappingChange={handleAreaMappingChange}
-                />
-              );
-            })()}
-
-          <ToolOverlay
-            officeState={officeState}
-            agents={agents}
-            agentTools={agentTools}
-            subagentTools={subagentTools}
-            subagentCharacters={subagentCharacters}
-            containerRef={containerRef}
-            zoom={editor.zoom}
-            panRef={editor.panRef}
-            onCloseAgent={handleCloseAgent}
-            alwaysShowOverlay={alwaysShowOverlay}
-          />
-        </>
-      ) : (
-        <DebugView
-          agents={agents}
-          selectedAgent={selectedAgent}
-          agentTools={agentTools}
-          agentStatuses={agentStatuses}
-          subagentTools={subagentTools}
-          officeState={officeState}
-          onSelectAgent={handleSelectAgent}
+      {scene === 'control-center' ? (
+        <TaskControlCenter
+          model={fleetModel}
+          selectedAgent={fleetSelection}
+          onSelectAgent={handleSelectFleetAgent}
+          onFocusAgent={handleSelectAgent}
+          onAction={handleFleetAction}
+          onNewAgent={() => transport.send({ type: 'newAgent' })}
+          onClearSelection={() => setFleetSelection(null)}
+          isSettingsOpen={isSettingsOpen}
+          onToggleSettings={() => setIsSettingsOpen((value) => !value)}
         />
+      ) : scene === 'fleet-command' ? (
+        <FleetCommand
+          model={fleetModel}
+          selectedAgent={fleetSelection}
+          onSelectAgent={handleSelectFleetAgent}
+          onFocusAgent={handleSelectAgent}
+          onAction={handleFleetAction}
+          onNewAgent={() => transport.send({ type: 'newAgent' })}
+          onClearSelection={() => setFleetSelection(null)}
+          isSettingsOpen={isSettingsOpen}
+          onToggleSettings={() => setIsSettingsOpen((value) => !value)}
+        />
+      ) : (
+        <>
+          <OfficeCanvas
+            officeState={officeState}
+            onClick={handleOfficeClick}
+            onDoubleClick={handleOfficeDoubleClick}
+            isEditMode={editor.isEditMode}
+            editorState={editorState}
+            onEditorTileAction={editor.handleEditorTileAction}
+            onEditorEraseAction={editor.handleEditorEraseAction}
+            onEditorSelectionChange={editor.handleEditorSelectionChange}
+            onDeleteSelected={editor.handleDeleteSelected}
+            onRotateSelected={editor.handleRotateSelected}
+            onDragMove={editor.handleDragMove}
+            editorTick={editor.editorTick}
+            zoom={editor.zoom}
+            onZoomChange={editor.handleZoomChange}
+            panRef={editor.panRef}
+            showAreas={effectiveShowAreas}
+            activeAreaLabel={activeAreaLabel}
+          />
+
+          {!isDebugMode ? (
+            <>
+              <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />
+
+              {/* Vignette overlay */}
+              <div
+                className="absolute inset-0 pointer-events-none"
+                style={{ background: 'var(--vignette)' }}
+              />
+
+              {/* Spec 004 — empty state: no agents running */}
+              {agents.length === 0 && (
+                <div
+                  data-testid="empty-state"
+                  className="absolute inset-0 z-12 flex flex-col items-center justify-center gap-8 pointer-events-none"
+                >
+                  <div className="text-3xl font-bold">No agents running</div>
+                  <button
+                    data-testid="empty-state-new-agent"
+                    onClick={() => transport.send({ type: 'newAgent' })}
+                    className="pointer-events-auto py-4 px-12 text-xl bg-accent text-white border-2 border-accent rounded-none cursor-pointer shadow-pixel hover:opacity-90"
+                  >
+                    + New Agent
+                  </button>
+                  <p className="text-base opacity-80 max-w-140 text-center">
+                    Launch a Claude Code instance with its own repo, provider and model.
+                  </p>
+                </div>
+              )}
+
+              {editor.isEditMode && editor.isDirty && (
+                <EditActionBar editor={editor} editorState={editorState} />
+              )}
+
+              {showRotateHint && (
+                <div
+                  className="absolute left-1/2 -translate-x-1/2 z-11 bg-accent-bright text-white text-sm py-3 px-8 rounded-none border-2 border-accent shadow-pixel pointer-events-none whitespace-nowrap"
+                  style={{ top: editor.isDirty ? 64 : 8 }}
+                >
+                  Rotate (R)
+                </div>
+              )}
+
+              {editor.isEditMode &&
+                (() => {
+                  const selUid = editorState.selectedFurnitureUid;
+                  const selColor = selUid
+                    ? (officeState.getLayout().furniture.find((f) => f.uid === selUid)?.color ??
+                      null)
+                    : null;
+                  return (
+                    <EditorToolbar
+                      activeTool={editorState.activeTool}
+                      selectedTileType={editorState.selectedTileType}
+                      selectedFurnitureType={editorState.selectedFurnitureType}
+                      selectedFurnitureUid={selUid}
+                      selectedFurnitureColor={selColor}
+                      floorColor={editorState.floorColor}
+                      wallColor={editorState.wallColor}
+                      selectedWallSet={editorState.selectedWallSet}
+                      onToolChange={editor.handleToolChange}
+                      onTileTypeChange={editor.handleTileTypeChange}
+                      onFloorColorChange={editor.handleFloorColorChange}
+                      onWallColorChange={editor.handleWallColorChange}
+                      onWallSetChange={editor.handleWallSetChange}
+                      onSelectedFurnitureColorChange={editor.handleSelectedFurnitureColorChange}
+                      pickedFurnitureColor={editorState.pickedFurnitureColor}
+                      onPickedFurnitureColorChange={editor.handlePickedFurnitureColorChange}
+                      onFurnitureTypeChange={editor.handleFurnitureTypeChange}
+                      loadedAssets={loadedAssets}
+                      activePetTypes={officeState.getActivePetTypes()}
+                      petCount={getPetCount()}
+                      onPetToggle={editor.handlePetToggle}
+                      carpetVariant={editor.carpetVariant}
+                      carpetColor={editor.carpetColor}
+                      carpetAccentColor={editor.carpetAccentColor}
+                      onCarpetVariantChange={editor.handleCarpetVariantChange}
+                      onCarpetColorChange={editor.handleCarpetColorChange}
+                      onCarpetAccentColorChange={editor.handleCarpetAccentColorChange}
+                      areas={officeState.getLayout().areas ?? []}
+                      selectedAreaLabel={editor.selectedAreaLabel}
+                      workspaceFolders={areaFolders}
+                      areasAvailable={areasAvailable}
+                      areaMappings={areaMappings}
+                      onSelectArea={editor.handleSelectArea}
+                      onAddArea={editor.handleAddArea}
+                      onRemoveArea={editor.handleRemoveArea}
+                      onRenameArea={editor.handleRenameArea}
+                      onAreaColorChange={editor.handleAreaColorChange}
+                      onAreaMappingChange={handleAreaMappingChange}
+                    />
+                  );
+                })()}
+
+              <ToolOverlay
+                officeState={officeState}
+                agents={agents}
+                agentTools={agentTools}
+                agentStatuses={agentStatuses}
+                subagentTools={subagentTools}
+                subagentCharacters={subagentCharacters}
+                containerRef={containerRef}
+                zoom={editor.zoom}
+                panRef={editor.panRef}
+                onCloseAgent={handleCloseAgent}
+                alwaysShowOverlay={alwaysShowOverlay}
+              />
+              {officeSelection !== null && officeState.characters.get(officeSelection) && (
+                <OfficeAgentDetail
+                  id={officeSelection}
+                  character={officeState.characters.get(officeSelection)!}
+                  info={agentInfo[officeSelection]}
+                  status={agentStatuses[officeSelection]}
+                  activity={getActivityText(
+                    officeSelection,
+                    agentTools,
+                    officeState.characters.get(officeSelection)?.isActive ?? false,
+                    officeState.characters.get(officeSelection)?.bubbleType ?? null,
+                    officeState.characters.get(officeSelection)?.waitingAwaitingInput ?? false,
+                    agentStatuses[officeSelection],
+                  )}
+                  onClose={() => {
+                    officeState.selectedAgentId = null;
+                    setOfficeSelection(null);
+                  }}
+                  onFocus={() => handleOfficeDoubleClick(officeSelection)}
+                />
+              )}
+            </>
+          ) : (
+            <DebugView
+              agents={agents}
+              selectedAgent={selectedAgent}
+              agentTools={agentTools}
+              agentStatuses={agentStatuses}
+              subagentTools={subagentTools}
+              officeState={officeState}
+              onSelectAgent={handleSelectAgent}
+            />
+          )}
+        </>
       )}
 
       {/* Hooks first-run tooltip */}
       {!hooksInfoShown && !hooksTooltipDismissed && (
         <Tooltip
-          title="Instant Detection Active"
+          title="实时检测已开启"
           position="top-right"
+          compact
           onDismiss={() => {
             setHooksTooltipDismissed(true);
             transport.send({ type: 'setHooksInfoShown' });
           }}
         >
           <span className="text-sm text-text leading-none">
-            Your agents now respond in real-time.{' '}
+            Agent 现在会实时响应。{' '}
             <span
               className="text-accent cursor-pointer underline"
               onClick={() => {
@@ -470,7 +684,7 @@ function App() {
                 transport.send({ type: 'setHooksInfoShown' });
               }}
             >
-              View more
+              查看详情
             </span>
           </span>
         </Tooltip>
@@ -480,49 +694,52 @@ function App() {
       <Modal
         isOpen={isHooksInfoOpen}
         onClose={() => setIsHooksInfoOpen(false)}
-        title="Instant Detection is ON"
+        title="实时检测已开启"
         zIndex={52}
       >
         <div className="text-base text-text px-10" style={{ lineHeight: 1.4 }}>
-          <p className="mb-8">Your Claude Fleet office now reacts in real-time:</p>
+          <p className="mb-8">Claude Fleet 现在会实时响应 Agent 状态：</p>
           <ul className="mb-8 pl-18 list-disc m-0">
-            <li className="text-sm mb-2">Permission prompts appear instantly</li>
-            <li className="text-sm mb-2">Turn completions detected the moment they happen</li>
-            <li className="text-sm mb-2">Sound notifications play immediately</li>
+            <li className="text-sm mb-2">权限请求会立即出现</li>
+            <li className="text-sm mb-2">任务完成会立即被检测</li>
+            <li className="text-sm mb-2">声音通知会即时播放</li>
           </ul>
           <p className="mb-12 text-text-muted">
-            This works through Claude Code Hooks, small event listeners that notify Claude Fleet
-            whenever something happens in your Claude sessions.
+            该功能通过 Claude Code Hooks 工作：它会在会话发生事件时通知 Claude Fleet。
           </p>
           <div className="text-center">
             <button
               onClick={() => setIsHooksInfoOpen(false)}
               className="py-4 px-20 text-lg bg-accent text-white border-2 border-accent rounded-none cursor-pointer shadow-pixel"
             >
-              Got it
+              知道了
             </button>
           </div>
           <p className="mt-8 text-xs text-text-muted text-center">
-            To disable, go to Settings {'>'} Instant Detection
+            如需关闭，请前往“设置” {'>'} “实时检测”
           </p>
         </div>
       </Modal>
 
-      <BottomToolbar
-        isEditMode={editor.isEditMode}
-        onOpenClaude={editor.handleOpenClaude}
-        onToggleEditMode={editor.handleToggleEditMode}
-        isSettingsOpen={isSettingsOpen}
-        onToggleSettings={() => setIsSettingsOpen((v) => !v)}
-        workspaceFolders={workspaceFolders}
-      />
+      {scene === 'pixel-office' ? (
+        <BottomToolbar
+          isEditMode={editor.isEditMode}
+          onOpenClaude={editor.handleOpenClaude}
+          onToggleEditMode={editor.handleToggleEditMode}
+          isSettingsOpen={isSettingsOpen}
+          onToggleSettings={() => setIsSettingsOpen((v) => !v)}
+          workspaceFolders={workspaceFolders}
+        />
+      ) : null}
 
-      <VersionIndicator
-        currentVersion={extensionVersion}
-        lastSeenVersion={lastSeenVersion}
-        onDismiss={handleWhatsNewDismiss}
-        onOpenChangelog={handleOpenChangelog}
-      />
+      {scene === 'pixel-office' ? (
+        <VersionIndicator
+          currentVersion={extensionVersion}
+          lastSeenVersion={lastSeenVersion}
+          onDismiss={handleWhatsNewDismiss}
+          onOpenChangelog={handleOpenChangelog}
+        />
+      ) : null}
 
       <ConnectionIndicator />
 
@@ -535,6 +752,10 @@ function App() {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+        scene={scene}
+        defaultScene={defaultScene}
+        onSceneChange={handleSceneChange}
+        onDefaultSceneChange={handleDefaultSceneChange}
         isDebugMode={isDebugMode}
         onToggleDebugMode={handleToggleDebugMode}
         alwaysShowOverlay={alwaysShowOverlay}

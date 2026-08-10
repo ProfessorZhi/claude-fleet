@@ -21,17 +21,13 @@ import type { SubagentCharacter } from '../../hooks/useExtensionMessages.js';
 import type { OfficeState } from '../engine/officeState.js';
 import type { ToolActivity } from '../types.js';
 import { CharacterState, TILE_SIZE } from '../types.js';
-
-// Both turn-end states show the green checkmark bubble. A finished turn (Stop)
-// shows ONLY the checkmark (the label falls through to its normal idle text);
-// going idle waiting on the user (Notification(idle_prompt)) additionally
-// surfaces this label. Driven by Character.waitingAwaitingInput.
-const WAITING_INPUT_ACTIVITY_TEXT = 'Waiting for input';
+import { formatToolActivity, getActivityText, WAITING_INPUT_ACTIVITY_TEXT } from './agentStatus.js';
 
 interface ToolOverlayProps {
   officeState: OfficeState;
   agents: number[];
   agentTools: Record<number, ToolActivity[]>;
+  agentStatuses: Record<number, string>;
   subagentTools: Record<number, Record<string, ToolActivity[]>>;
   subagentCharacters: SubagentCharacter[];
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -39,38 +35,6 @@ interface ToolOverlayProps {
   panRef: React.RefObject<{ x: number; y: number }>;
   onCloseAgent: (id: number) => void;
   alwaysShowOverlay: boolean;
-}
-
-/** Derive a short human-readable activity string from tools/status */
-function getActivityText(
-  agentId: number,
-  agentTools: Record<number, ToolActivity[]>,
-  isActive: boolean,
-  bubbleType: 'permission' | 'waiting' | null,
-  waitingAwaitingInput: boolean,
-): string {
-  if (bubbleType === 'permission') return 'Needs approval';
-  // Only the idle case ("Waiting for input") gets a dedicated label. A finished
-  // turn (Stop, waitingAwaitingInput=false) falls through so the checkmark alone
-  // signals "done", same as the original behavior.
-  if (bubbleType === 'waiting' && waitingAwaitingInput) return WAITING_INPUT_ACTIVITY_TEXT;
-
-  const tools = agentTools[agentId];
-  if (tools && tools.length > 0) {
-    // Find the latest non-done tool
-    const activeTool = [...tools].reverse().find((t) => !t.done);
-    if (activeTool) {
-      if (activeTool.permissionWait) return 'Needs approval';
-      return activeTool.status;
-    }
-    // All tools done but agent still active (mid-turn) — keep showing last tool status
-    if (isActive) {
-      const lastTool = tools[tools.length - 1];
-      if (lastTool) return lastTool.status;
-    }
-  }
-
-  return 'Idle';
 }
 
 function getFuelColor(ratio: number): string {
@@ -84,6 +48,7 @@ export function ToolOverlay({
   officeState,
   agents,
   agentTools,
+  agentStatuses,
   subagentTools,
   subagentCharacters,
   containerRef,
@@ -132,7 +97,7 @@ export function ToolOverlay({
         const isSub = ch.isSubagent;
 
         // Only show for hovered or selected agents (unless always-show is on)
-        if (!alwaysShowOverlay && !isSelected && !isHovered) return null;
+        if (!alwaysShowOverlay && !isSelected && !isHovered && !ch.completionUnread) return null;
 
         // Position above character
         const sittingOffset = ch.state === CharacterState.TYPE ? CHARACTER_SITTING_OFFSET_PX : 0;
@@ -147,7 +112,7 @@ export function ToolOverlay({
         // panel back. When always-show is off, the early return above already
         // keeps the panel hidden for idle agents.
         const isDone = ch.bubbleType === 'waiting' && !ch.waitingAwaitingInput;
-        if (isDone && !isSelected && !isHovered) {
+        if (isDone && !ch.completionUnread && !isSelected && !isHovered) {
           return (
             <div
               key={id}
@@ -177,7 +142,9 @@ export function ToolOverlay({
             const rows = sub ? subagentTools[sub.parentAgentId]?.[sub.parentToolId] : undefined;
             const activeRow =
               isSelected && rows ? [...rows].reverse().find((t) => !t.done) : undefined;
-            activityText = activeRow?.status ?? (sub?.label || 'Subtask');
+            activityText = activeRow
+              ? formatToolActivity(activeRow.toolName, activeRow.status)
+              : sub?.label || 'Subtask';
           }
         } else {
           activityText = getActivityText(
@@ -186,6 +153,7 @@ export function ToolOverlay({
             ch.isActive,
             ch.bubbleType,
             ch.waitingAwaitingInput ?? false,
+            agentStatuses[id],
           );
         }
 
@@ -195,11 +163,17 @@ export function ToolOverlay({
         const hasActiveTools = tools?.some((t) => !t.done);
         const isActive = ch.isActive;
         const hasWaiting = ch.bubbleType === 'waiting';
+        const agentStatus = agentStatuses[id]?.toLowerCase();
 
         let dotColor: string | null = null;
         if (hasPermission || hasWaiting) {
           dotColor = 'var(--color-status-permission)';
-        } else if (isActive && hasActiveTools) {
+        } else if (agentStatus === 'error') {
+          dotColor = 'var(--color-status-error)';
+        } else if (
+          (isActive || agentStatus === 'working' || agentStatus === 'active') &&
+          hasActiveTools
+        ) {
           dotColor = 'var(--color-status-active)';
         }
 
@@ -227,19 +201,19 @@ export function ToolOverlay({
             data-testid="agent-overlay"
             data-agent-id={id}
           >
-            <div className="flex items-center border-border px-8 pt-2 pb-4 gap-5 pixel-panel whitespace-nowrap max-w-2xs">
+            <div className="flex min-w-0 max-w-2xs items-center gap-2 border-border px-4 py-2 pixel-panel whitespace-nowrap">
               {dotColor && (
                 <span
-                  className={`w-6 h-6 rounded-full shrink-0 ${isActive && !hasPermission && !hasWaiting ? 'pixel-pulse' : ''}`}
+                  className={`h-2 w-2 shrink-0 rounded-full ${isActive && !hasPermission && !hasWaiting ? 'pixel-pulse' : ''}`}
                   style={{ background: dotColor }}
                 />
               )}
-              <div className="flex flex-col gap-0 overflow-hidden">
+              <div className="flex min-w-0 flex-col gap-0 overflow-hidden">
                 {teamRoleLabel && (
                   <span
                     className="overflow-hidden text-ellipsis block leading-none"
                     style={{
-                      fontSize: '18px',
+                      fontSize: '11px',
                       color: ch.isTeamLead ? TEAM_LEAD_COLOR : TEAM_ROLE_COLOR,
                       fontWeight: ch.isTeamLead ? 'bold' : undefined,
                     }}
@@ -250,15 +224,24 @@ export function ToolOverlay({
                 <span
                   className="overflow-hidden text-ellipsis block leading-none"
                   style={{
-                    fontSize: isSub ? '20px' : '22px',
+                    fontSize: isSub ? '11px' : '12px',
                     fontStyle: isSub ? 'italic' : undefined,
                   }}
                 >
                   {activityText}
                 </span>
                 {ch.folderName && (
-                  <span className="text-2xs leading-none overflow-hidden text-ellipsis block">
+                  <span className="block overflow-hidden text-ellipsis text-[10px] leading-none opacity-70">
                     {ch.folderName}
+                  </span>
+                )}
+                {ch.completionUnread && (
+                  <span
+                    className="block text-[11px] font-bold leading-none text-status-success"
+                    title="完成，尚未查看"
+                    data-testid="agent-completion-unread"
+                  >
+                    ✓ 未查看
                   </span>
                 )}
               </div>

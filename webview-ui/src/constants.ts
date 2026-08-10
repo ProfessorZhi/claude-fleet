@@ -224,6 +224,10 @@ export const CONTEXT_GAUGE_BG = '#222';
 // ── Agent Teams ─────────────────────────────────────────────
 export const TEAM_LEAD_COLOR = '#ffd700';
 export const TEAM_ROLE_COLOR = '#66aaff';
+export const AGENT_LABEL_BG = 'rgba(7, 14, 30, 0.88)';
+export const AGENT_LABEL_TEXT = '#dcecff';
+/** Canvas identity labels sit directly above the compact DOM activity panel. */
+export const AGENT_LABEL_VERTICAL_OFFSET_PX = 42;
 
 // ── Pets ────────────────────────────────────────────────────────
 /** Walking speed in world pixels per second (matches character walk speed visually but slower). */

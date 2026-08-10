@@ -494,6 +494,7 @@ export class OfficeState {
     ch.matrixEffectTimer = 0;
     ch.matrixEffectSeeds = matrixEffectSeeds();
     ch.bubbleType = null;
+    ch.completionUnread = false;
   }
 
   /** Find seat uid at a given tile position, or null */
@@ -839,6 +840,16 @@ export class OfficeState {
     }
   }
 
+  markCompletionUnread(id: number): void {
+    const ch = this.characters.get(id);
+    if (ch) ch.completionUnread = true;
+  }
+
+  markCompletionViewed(id: number): void {
+    const ch = this.characters.get(id);
+    if (ch) ch.completionUnread = false;
+  }
+
   /** Dismiss bubble on click — permission: instant, waiting: quick fade */
   dismissBubble(id: number): void {
     const ch = this.characters.get(id);
@@ -1008,6 +1019,12 @@ export class OfficeState {
     }
   }
 
+  setDisplayName(id: number, displayName?: string): void {
+    const ch = this.characters.get(id);
+    if (!ch) return;
+    ch.displayName = displayName?.trim() || undefined;
+  }
+
   /** Mark an agent as headless (adopted, no terminal to focus). */
   setHeadless(id: number, headless: boolean): void {
     const ch = this.characters.get(id);
@@ -1020,6 +1037,20 @@ export class OfficeState {
     if (!ch) return;
     ch.contextTokens = contextTokens;
     ch.maxContextTokens = maxContextTokens;
+  }
+
+  setAgentUsage(
+    id: number,
+    usage?: {
+      inputTokens?: number;
+      cachedInputTokens?: number;
+      outputTokens?: number;
+      totalTokens?: number;
+    },
+  ): void {
+    const ch = this.characters.get(id);
+    if (!ch) return;
+    ch.usageTokens = usage ? { ...usage } : undefined;
   }
 
   update(dt: number): void {

@@ -7,6 +7,7 @@ import { AgentStateStore } from '../src/agentStateStore.js';
 import { CONTEXT_SEED_TAIL_BYTES, DEFAULT_MAX_CONTEXT_TOKENS } from '../src/constants.js';
 import {
   extractContextTokens,
+  extractTokenUsage,
   seedContextUsage,
   updateContextUsage,
   widenContextWindow,
@@ -157,8 +158,31 @@ describe('updateContextUsage', () => {
         id: 1,
         contextTokens: 50_302,
         maxContextTokens: DEFAULT_MAX_CONTEXT_TOKENS,
+        usage: {
+          inputTokens: 2,
+          cachedInputTokens: 50_000,
+          outputTokens: 300,
+          totalTokens: 50_302,
+        },
       },
     ]);
+  });
+
+  it('extracts and accumulates billable token usage separately from the context gauge', () => {
+    expect(
+      extractTokenUsage(
+        assistantRecord({ input: 10, cacheCreation: 20, cacheRead: 30, output: 40 }),
+      ),
+    ).toEqual({ inputTokens: 10, cachedInputTokens: 50, outputTokens: 40, totalTokens: 100 });
+
+    updateContextUsage(1, agent, agents, assistantRecord({ cacheRead: 50_000, output: 300 }));
+    updateContextUsage(1, agent, agents, assistantRecord({ input: 10, output: 20 }));
+    expect(agent.usageTokens).toEqual({
+      cachedInputTokens: 50_000,
+      inputTokens: 12,
+      outputTokens: 320,
+      totalTokens: 50_332,
+    });
   });
 
   it('snapshots rather than accumulates: the gauge falls after a compaction', () => {

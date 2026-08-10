@@ -160,6 +160,7 @@ export class AgentStateStore {
       persisted.push({
         id: agent.id,
         sessionId: agent.sessionId,
+        runtime: agent.runtime,
         terminalName: agent.terminalRef?.name ?? '',
         isExternal: agent.isExternal || undefined,
         jsonlFile: agent.jsonlFile,
@@ -173,6 +174,7 @@ export class AgentStateStore {
         launchSource: agent.launchSource,
         requestedBy: agent.requestedBy,
         folderName: agent.folderName,
+        displayName: agent.displayName,
         teamName: agent.teamName,
         agentName: agent.agentName,
         isTeamLead: agent.isTeamLead,
@@ -189,6 +191,8 @@ export class AgentStateStore {
         fleet: agent.fleet,
         // Spec 005 — managed flag + pre-switch provider (NOT secrets).
         managedByFleet: agent.managedByFleet,
+        createdAt: agent.createdAt,
+        usageTokens: agent.usageTokens,
         lastProviderProfileId: agent.lastProviderProfileId,
       });
     }

@@ -6,6 +6,7 @@ import {
   VscodeFleetRuntimeHost,
   type VscodeRuntimeLaunchRequest,
 } from '../../adapters/vscode/fleetRuntimeHost.js';
+import type { RuntimeTaskBrief } from '../../core/src/runtimeContracts.js';
 
 function request(overrides: Partial<VscodeRuntimeLaunchRequest> = {}): VscodeRuntimeLaunchRequest {
   return {
@@ -20,6 +21,13 @@ function request(overrides: Partial<VscodeRuntimeLaunchRequest> = {}): VscodeRun
     ...overrides,
   };
 }
+
+const task: RuntimeTaskBrief = {
+  workItemId: 'work-1',
+  title: 'Test delivery',
+  objective: 'Deliver a bounded brief.',
+  acceptanceCriteria: ['Terminal receives the rendered brief.'],
+};
 
 describe('VscodeFleetRuntimeHost', () => {
   it('delegates managed Claude launch and returns native identity', async () => {
@@ -91,5 +99,33 @@ describe('VscodeFleetRuntimeHost', () => {
 
     expect(focus).toHaveBeenCalledWith('agent-1');
     expect(stop).toHaveBeenCalledWith('agent-1');
+  });
+
+  it('renders a bounded brief before sending it to the injected terminal boundary', async () => {
+    const sendText = vi.fn();
+    const host = new VscodeFleetRuntimeHost({
+      launch: vi.fn(),
+      focus: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      sendText,
+    });
+
+    await host.sendTask?.('agent-1', task);
+
+    expect(sendText).toHaveBeenCalledWith(
+      'agent-1',
+      expect.stringContaining('[Claude Fleet WorkItem work-1]'),
+    );
+    expect(sendText.mock.calls[0]?.[1]).not.toContain('rawPrompt');
+  });
+
+  it('leaves task delivery unavailable when no terminal boundary is injected', () => {
+    const host = new VscodeFleetRuntimeHost({
+      launch: vi.fn(),
+      focus: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    });
+
+    expect(host.sendTask).toBeUndefined();
   });
 });

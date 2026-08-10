@@ -106,6 +106,13 @@
     @apply bg-bg border-2 border-border rounded-none shadow-pixel;
   }
 
+  /* Dense operational cards use the VS Code UI font for legibility. The
+     office scene keeps its pixel font; labels in this card are data, not art. */
+  .office-agent-detail,
+  .office-agent-detail * {
+    font-family: var(--vscode-font-family, 'Segoe UI', sans-serif) !important;
+  }
+
   /* Horizontal carousel for editor items */
   .carousel {
     @apply flex gap-8 overflow-x-auto flex-nowrap pb-2;

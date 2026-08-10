@@ -16,6 +16,7 @@ FLEET_ID_FIELDS = (
     "fleet_task_id",
     "fleet_worker_id",
     "fleet_coordinator_id",
+    "fleet_turn_id",
     "parent_worker_id",
     "worktree_id",
 )
@@ -98,6 +99,29 @@ def validate_pricing(data: Dict[str, Any]) -> None:
     if cost is not None:
         if not isinstance(cost, (int, float)) or cost < 0:
             raise ValueError(f"api_equivalent_cost_usd must be non-negative numeric or null, got: {cost!r}")
+
+    subscription = data.get("subscription")
+    if subscription is not None:
+        if not isinstance(subscription, dict):
+            raise ValueError("pricing.subscription must be an object or null")
+        allowed = {
+            "amount", "currency", "basis", "plan_type", "billing_period",
+            "period_price", "price_source", "fraction_of_period",
+            "consumed_percentage", "resource_account_id", "confidence",
+            "availability", "estimate_or_actual",
+        }
+        unknown = sorted(set(subscription) - allowed)
+        if unknown:
+            raise ValueError(f"pricing.subscription contains unsupported fields: {', '.join(unknown)}")
+        amount = subscription.get("amount")
+        if not isinstance(amount, (int, float)) or isinstance(amount, bool) or amount < 0:
+            raise ValueError("pricing.subscription.amount must be non-negative numeric")
+        fraction = subscription.get("fraction_of_period")
+        if not isinstance(fraction, (int, float)) or isinstance(fraction, bool) or not 0 <= fraction <= 1:
+            raise ValueError("pricing.subscription.fraction_of_period must be between 0 and 1")
+        percentage = subscription.get("consumed_percentage")
+        if not isinstance(percentage, (int, float)) or isinstance(percentage, bool) or not 0 <= percentage <= 100:
+            raise ValueError("pricing.subscription.consumed_percentage must be between 0 and 100")
 
 
 def validate_run_context(data: Dict[str, Any]) -> None:

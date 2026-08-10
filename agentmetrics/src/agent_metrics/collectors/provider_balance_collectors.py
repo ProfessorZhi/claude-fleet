@@ -70,6 +70,37 @@ class MiniMaxTokenPlanCollector(BaseCollector):
             "balance": mapped,
         }
 
+    def capture_snapshot(self) -> Dict[str, Any]:
+        result = self.collect()
+        balance = result.get("balance") if isinstance(result, dict) else None
+        if isinstance(balance, dict):
+            return {**balance, "status": result.get("status"), "source": result.get("source")}
+        return {
+            "status": result.get("status", CollectorStatus.NOT_AVAILABLE.value),
+            "source": result.get("source", self.endpoint),
+        }
+
+    def calculate_delta(
+        self,
+        before: Optional[Dict[str, Any]],
+        after: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Accept only explicit provider percentage fields, never raw balances."""
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            return {"consumed_percentage": None, "status": "NOT_AVAILABLE", "reason": "missing_snapshot"}
+        for key in ("consumed_percentage", "usage_percentage", "used_percentage"):
+            value = after.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 100:
+                return {"consumed_percentage": float(value), "status": "COMPLETE", "reason": key}
+        for key in ("remaining_percentage", "remain_percentage"):
+            previous = before.get(key)
+            current = after.get(key)
+            if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (previous, current)):
+                delta = float(previous) - float(current)
+                if 0 <= delta <= 100:
+                    return {"consumed_percentage": delta, "status": "COMPLETE", "reason": key}
+        return {"consumed_percentage": None, "status": "NOT_AVAILABLE", "reason": "percentage_field_unavailable"}
+
 
 class _NoCrossHostRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):

@@ -134,6 +134,7 @@ class CLIHandler:
         fleet_task_id: Optional[str] = None,
         fleet_worker_id: Optional[str] = None,
         fleet_coordinator_id: Optional[str] = None,
+        fleet_turn_id: Optional[str] = None,
         parent_worker_id: Optional[str] = None,
         worker_role: Optional[str] = None,
         worktree_id: Optional[str] = None,
@@ -159,6 +160,7 @@ class CLIHandler:
                 "fleet_task_id": fleet_task_id,
                 "fleet_worker_id": fleet_worker_id,
                 "fleet_coordinator_id": fleet_coordinator_id,
+                "fleet_turn_id": fleet_turn_id,
                 "parent_worker_id": parent_worker_id,
                 "worker_role": worker_role,
                 "worktree_id": worktree_id,
@@ -213,6 +215,14 @@ class CLIHandler:
                 codex_quota_snapshot_before = None
                 codex_quota_status = "ERROR"
 
+        is_minimax_agent = "minimax" in str(normalized_provider or provider).strip().lower()
+        minimax_token_plan_before = None
+        if is_minimax_agent:
+            try:
+                minimax_token_plan_before = MiniMaxTokenPlanCollector().capture_snapshot()
+            except Exception:
+                minimax_token_plan_before = None
+
         context_data = {
             "schema_version": 1,
             "collector_version": "0.1.0",
@@ -242,6 +252,8 @@ class CLIHandler:
                 "source_path_type": codex_quota_source,
                 "status": codex_quota_status,
             }
+        if is_minimax_agent:
+            context_data["minimax_token_plan"] = {"before": minimax_token_plan_before}
 
         try:
             self.storage.create_run(context_data)
@@ -500,6 +512,10 @@ class CLIHandler:
         codex_quota_source = None
         codex_quota_status = "NOT_AVAILABLE"
         codex_quota_delta = None
+        subscription_plan_snapshot = None
+        minimax_token_plan_before = None
+        minimax_token_plan_after = None
+        minimax_token_plan_delta = None
         if agent_shell.strip().lower() == "codex":
             stored = ctx.get("codex_quota") if isinstance(ctx, dict) else None
             if isinstance(stored, dict):
@@ -514,6 +530,7 @@ class CLIHandler:
                 after_snapshot = None
 
             if isinstance(after_snapshot, dict):
+                subscription_plan_snapshot = after_snapshot
                 # If we could not capture a Before at start, still persist the
                 # After as a record. Delta computation requires both sides.
                 delta_input_before = codex_quota_snapshot_before
@@ -541,6 +558,24 @@ class CLIHandler:
                 # Capture failed entirely.
                 if codex_quota_status in (None, "NOT_AVAILABLE"):
                     codex_quota_status = "ERROR"
+
+        is_minimax_agent = "minimax" in agent_shell.strip().lower() or "minimax" in str(
+            ctx.get("agent", {}).get("provider", "")
+        ).strip().lower()
+        if is_minimax_agent:
+            stored_minimax = ctx.get("minimax_token_plan") if isinstance(ctx, dict) else None
+            if isinstance(stored_minimax, dict):
+                minimax_token_plan_before = stored_minimax.get("before")
+            try:
+                minimax_collector = MiniMaxTokenPlanCollector()
+                minimax_token_plan_after = minimax_collector.capture_snapshot()
+                minimax_token_plan_delta = minimax_collector.calculate_delta(
+                    minimax_token_plan_before,
+                    minimax_token_plan_after,
+                )
+            except Exception:
+                minimax_token_plan_after = None
+                minimax_token_plan_delta = None
 
         if agent_shell.strip().lower() == "codex":
             codex_run_context = {
@@ -644,6 +679,34 @@ class CLIHandler:
         else:
             pricing = PricingInfo(status="USAGE_NOT_AVAILABLE")
 
+        # Subscription/Token Plan allocation is a separate dimension from
+        # observed tokens and API-equivalent cost. It is only emitted when a
+        # provider supplied an attributable before/after quota delta.
+        quota_delta = codex_quota_delta if isinstance(codex_quota_delta, dict) else None
+        if quota_delta:
+            consumed_percentage = quota_delta.get("primary_consumed_percentage")
+            if consumed_percentage is None:
+                consumed_percentage = quota_delta.get("secondary_consumed_percentage")
+            plan_snapshot = subscription_plan_snapshot or codex_quota_snapshot_before
+            plan_type = plan_snapshot.get("plan_type") if isinstance(plan_snapshot, dict) else None
+            subscription = self.pricing_engine.calculate_subscription_cost(
+                provider=agent_dict.get("provider"),
+                plan_type=plan_type,
+                consumed_percentage=consumed_percentage,
+            )
+            if subscription is not None:
+                pricing.subscription = subscription
+
+        if isinstance(minimax_token_plan_delta, dict):
+            minimax_snapshot = minimax_token_plan_after or minimax_token_plan_before
+            minimax_subscription = self.pricing_engine.calculate_subscription_cost(
+                provider=agent_dict.get("provider"),
+                plan_type=minimax_snapshot.get("plan_type") if isinstance(minimax_snapshot, dict) else None,
+                consumed_percentage=minimax_token_plan_delta.get("consumed_percentage"),
+            )
+            if minimax_subscription is not None:
+                pricing.subscription = minimax_subscription
+
         timing = TimingInfo(
             started_at=started_at,
             finished_at=finished_at,
@@ -725,6 +788,15 @@ class CLIHandler:
             provider_quota["antigravity_quota"] = CockpitLocalSnapshotCollector().collect(run_context=ctx)
         if provider_quota:
             summary_dict["provider_quota"] = provider_quota
+        if is_minimax_agent:
+            summary_dict["provider_quota"] = {
+                **(summary_dict.get("provider_quota") or {}),
+                "minimax_token_plan": {
+                    "before": minimax_token_plan_before,
+                    "after": minimax_token_plan_after,
+                    "delta": minimax_token_plan_delta,
+                },
+            }
 
         try:
             written_summary = self.storage.write_sanitized_summary(run_id, summary_dict, overwrite=True)
@@ -1143,6 +1215,7 @@ def main(args: Optional[List[str]] = None) -> int:
     start_p.add_argument("--fleet-task-id")
     start_p.add_argument("--fleet-worker-id")
     start_p.add_argument("--fleet-coordinator-id")
+    start_p.add_argument("--fleet-turn-id")
     start_p.add_argument("--parent-worker-id")
     start_p.add_argument("--worker-role")
     start_p.add_argument("--worktree-id")
@@ -1245,6 +1318,7 @@ def main(args: Optional[List[str]] = None) -> int:
             fleet_task_id=parsed.fleet_task_id,
             fleet_worker_id=parsed.fleet_worker_id,
             fleet_coordinator_id=parsed.fleet_coordinator_id,
+            fleet_turn_id=parsed.fleet_turn_id,
             parent_worker_id=parsed.parent_worker_id,
             worker_role=parsed.worker_role,
             worktree_id=parsed.worktree_id,

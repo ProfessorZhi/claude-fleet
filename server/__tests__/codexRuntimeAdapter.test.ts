@@ -7,6 +7,7 @@ import {
   codexCandidateNames,
   type CodexFileSystem,
   CodexRuntimeAdapter,
+  type CodexRuntimeHostBoundary,
   CodexRuntimeUnsupportedError,
   normalizeCodexEvents,
   resolveCodexCli,
@@ -90,6 +91,23 @@ describe('Codex CLI candidate resolution', () => {
     });
 
     expect(result.command).toBe(good);
+  });
+
+  it('prefers the newest verified CLI when an old Desktop binary precedes npm global', async () => {
+    const oldDir = 'C:\\Users\\Administrator\\AppData\\Local\\OpenAI\\Codex\\bin';
+    const newDir = 'E:\\develop\\packages\\node-global';
+    const oldCommand = nodePath.win32.join(oldDir, 'codex.exe');
+    const newCommand = nodePath.win32.join(newDir, 'codex.cmd');
+    const result = await resolveCodexCli({
+      platform: 'win32',
+      pathEnv: oldDir + ';' + newDir,
+      path: nodePath.win32,
+      fs: fakeFileSystem([oldCommand, newCommand]),
+      verify: async (candidate) =>
+        candidate === oldCommand ? 'codex-cli 0.130.0-alpha.5' : 'codex-cli 0.147.0',
+    });
+
+    expect(result).toMatchObject({ command: newCommand, version: 'codex-cli 0.147.0' });
   });
 });
 
@@ -208,6 +226,21 @@ describe('Codex JSON and JSONL normalization', () => {
 });
 
 describe('unsupported lifecycle operations', () => {
+  it('reports unsupported lifecycle capabilities instead of claiming compatibility', () => {
+    const adapter = new CodexRuntimeAdapter();
+
+    expect(adapter.capabilities).toMatchObject({
+      launch: true,
+      stop: false,
+      focus: false,
+      restart: false,
+      resume: false,
+      discover: false,
+      structuredEvents: true,
+      nativeSessionContinuity: true,
+    });
+  });
+
   it('fails closed instead of pretending to control a runtime', async () => {
     const adapter = new CodexRuntimeAdapter();
     await expect(adapter.stop('codex-1')).rejects.toBeInstanceOf(CodexRuntimeUnsupportedError);
@@ -215,5 +248,71 @@ describe('unsupported lifecycle operations', () => {
     await expect(adapter.restart(request())).rejects.toBeInstanceOf(CodexRuntimeUnsupportedError);
     await expect(adapter.resume(request())).rejects.toBeInstanceOf(CodexRuntimeUnsupportedError);
     await expect(adapter.discover()).rejects.toBeInstanceOf(CodexRuntimeUnsupportedError);
+  });
+
+  it('derives capabilities and delegates lifecycle operations through an injected host', async () => {
+    const calls: string[] = [];
+    const result = { instanceId: 'codex-1', sessionId: 'session-1', startedAt: 42 };
+    const host: CodexRuntimeHostBoundary = {
+      stop: async (instanceId) => {
+        calls.push('stop:' + instanceId);
+      },
+      focus: async (instanceId) => {
+        calls.push('focus:' + instanceId);
+      },
+      restart: async (value) => {
+        calls.push('restart:' + value.instance.instanceId);
+        return result;
+      },
+      resume: async (value) => {
+        calls.push('resume:' + value.instance.instanceId);
+        return result;
+      },
+      discover: async () => [{ instanceId: 'codex-discovered', runtime: 'codex-cli' }],
+    };
+    const adapter = new CodexRuntimeAdapter({ host });
+
+    expect(adapter.capabilities).toMatchObject({
+      launch: true,
+      stop: true,
+      focus: true,
+      restart: true,
+      resume: true,
+      discover: true,
+    });
+    await adapter.stop('codex-1');
+    await adapter.focus('codex-1');
+    await expect(adapter.restart(request({ sessionId: 'session-1' }))).resolves.toEqual(result);
+    await expect(adapter.resume(request({ sessionId: 'session-1' }))).resolves.toEqual(result);
+    await expect(adapter.discover()).resolves.toEqual([
+      { instanceId: 'codex-discovered', runtime: 'codex-cli' },
+    ]);
+    expect(calls).toEqual(['stop:codex-1', 'focus:codex-1', 'restart:codex-1', 'resume:codex-1']);
+  });
+
+  it('updates capabilities when a host is attached after construction', async () => {
+    const adapter = new CodexRuntimeAdapter();
+    expect(adapter.capabilities).toMatchObject({
+      stop: false,
+      focus: false,
+      restart: false,
+      resume: false,
+      discover: false,
+    });
+
+    adapter.attachHost({
+      stop: async () => undefined,
+      focus: async () => undefined,
+    });
+    expect(adapter.capabilities).toMatchObject({
+      stop: true,
+      focus: true,
+      restart: false,
+      resume: false,
+      discover: false,
+    });
+    await expect(adapter.stop('codex-1')).resolves.toBeUndefined();
+    await expect(adapter.focus('codex-1')).resolves.toBeUndefined();
+    await expect(adapter.restart(request())).rejects.toBeInstanceOf(CodexRuntimeUnsupportedError);
   });
 });

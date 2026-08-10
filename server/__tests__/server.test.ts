@@ -388,6 +388,18 @@ describe('local Fleet Control HTTP endpoint', () => {
           secretToken: 'must-not-leak',
         } as never;
       },
+      async listInstances() {
+        return [];
+      },
+      async getMetrics() {
+        return {
+          capturedAt: 123,
+          usage: [],
+          sessions: [],
+          quotas: [],
+          totals: { durationMs: 0, tokens: {} },
+        };
+      },
       async getMission() {
         return undefined;
       },
@@ -454,6 +466,14 @@ describe('local Fleet Control HTTP endpoint', () => {
         throw new Error('secret API key and internal stack must stay private');
       },
       getInstance: async () => undefined,
+      listInstances: async () => [],
+      getMetrics: async () => ({
+        capturedAt: 123,
+        usage: [],
+        sessions: [],
+        quotas: [],
+        totals: { durationMs: 0, tokens: {} },
+      }),
       getMission: async () => undefined,
       getWorkItem: async () => undefined,
     };
@@ -504,6 +524,14 @@ describe('local Fleet Control HTTP endpoint', () => {
     const api: FleetControlApi = {
       submit: async () => ({ requestId: 'unused', decision: 'unavailable' }),
       getInstance: async () => undefined,
+      listInstances: async () => [],
+      getMetrics: async () => ({
+        capturedAt: 123,
+        usage: [],
+        sessions: [],
+        quotas: [],
+        totals: { durationMs: 0, tokens: {} },
+      }),
       getMission: async () => undefined,
       getWorkItem: async () => undefined,
     };

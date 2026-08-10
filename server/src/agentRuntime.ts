@@ -552,6 +552,7 @@ export class AgentRuntime {
         linesProcessed: 0,
         seenUnknownRecordTypes: new Set(),
         folderName: p.folderName,
+        displayName: p.displayName,
         hookDelivered: false,
         contextTokens: 0,
         maxContextTokens: DEFAULT_MAX_CONTEXT_TOKENS,
@@ -563,6 +564,9 @@ export class AgentRuntime {
         palette: p.palette,
         hueShift: p.hueShift,
         fleet: p.fleet,
+        managedByFleet: p.managedByFleet,
+        createdAt: p.createdAt,
+        usageTokens: p.usageTokens,
       };
 
       assignPaletteIfNeeded(agent, this.store);

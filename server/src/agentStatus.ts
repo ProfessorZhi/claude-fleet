@@ -104,8 +104,22 @@ export const JSONL_ERROR_GRACE_MS = 30_000;
 
 export function agentStateToUserStatusWithError(
   agent: AgentState,
-  opts: { jsonlExists: boolean; createdAt: number | undefined; now: number },
+  opts: {
+    jsonlExists: boolean;
+    createdAt: number | undefined;
+    now: number;
+    /**
+     * When the VS Code terminal is still active, the interactive Claude
+     * process may legitimately have no JSONL yet: Claude creates the native
+     * session after the first prompt. Do not turn that normal pre-prompt state
+     * into a launch error.
+     */
+    processAlive?: boolean;
+  },
 ): UserFacingStatus {
+  if (opts.processAlive === true) {
+    return agentStateToUserStatus(agent);
+  }
   if (agent.linesProcessed > 0 && !opts.jsonlExists) {
     return normalizeAgentStatus({ error: true });
   }

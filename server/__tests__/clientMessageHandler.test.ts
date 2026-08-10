@@ -198,6 +198,34 @@ describe('clientMessageHandler: areas + carpet wire ordering', () => {
       expect(existing.agents).toEqual([1]);
     });
 
+    it('sends restored cumulative usage even before a context snapshot exists', () => {
+      store.set(
+        1,
+        createTestAgent({
+          contextTokens: 0,
+          usageTokens: {
+            inputTokens: 120,
+            outputTokens: 45,
+            totalTokens: 165,
+          },
+        }),
+      );
+
+      handleClientMessage({ type: 'webviewReady' }, (m) => sent.push(m), ctx);
+
+      expect(sent).toContainEqual({
+        type: 'agentContextUsage',
+        id: 1,
+        contextTokens: 0,
+        maxContextTokens: 200_000,
+        usage: {
+          inputTokens: 120,
+          outputTokens: 45,
+          totalTokens: 165,
+        },
+      });
+    });
+
     it('emits carpetTilesLoaded after wallTilesLoaded when both are present in the cache', () => {
       // Hex placeholders are test fixtures, not UI tokens — disable the
       // centralized-color rule just for this cache literal.

@@ -83,6 +83,11 @@ Select login method
 - [ ] 配置 DeepSeek + MiniMax 两个 Profile，启动两个 Agent
 - [ ] 同时存在、Provider 显示不同、Model 显示不同、两个 Terminal 独立
 
+MiniMax Token Plan（中国区）使用 `https://api.minimaxi.com/anthropic`；Token Plan Key
+从 MiniMax 控制台创建并粘贴到 API Key 输入框。Fleet 会在保存和启动时去除复制内容首尾空白。
+如果是已有的 MiniMax Profile，请在 Manage Providers → Edit 中把 Base URL 改为该地址，并选择
+Replace… 重新粘贴 Key；Fleet 不会读取或显示旧 Key。
+
 ### Test 10 — Auto Discovery
 
 在另一个普通 Terminal 手动运行 `claude`：
@@ -91,6 +96,13 @@ Select login method
 - [ ] Pixel Office 出现 Agent
 - [ ] Managed = External
 - [ ] Provider 无法可靠识别时显示 Unknown
+
+在同一 workspace 的普通 Terminal 或 Codex Desktop 中打开 Codex Session：
+
+- [ ] 等待约 2 秒后 Codex Session 自动出现在 Fleet roster
+- [ ] Runtime 显示 Codex CLI，Managed 显示 External
+- [ ] Model / 最近状态可见；不会读取或显示 prompt、response、API Key
+- [ ] 外部 Codex Session 只读；Focus / Stop 仅对 Fleet-managed Terminal 可用
 
 ### Test 11 — Restart Conversation
 

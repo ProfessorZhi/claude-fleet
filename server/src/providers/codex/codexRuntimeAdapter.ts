@@ -9,6 +9,7 @@ import type {
   RuntimeCapabilities,
   RuntimeLaunchRequest,
   RuntimeLaunchResult,
+  RuntimeTaskBrief,
 } from '../../../../core/src/runtimeContracts.js';
 import { execCaptured } from '../../cliResolver.js';
 
@@ -51,13 +52,30 @@ export interface CodexLaunchSpec {
 export interface CodexRuntimeAdapterOptions extends CodexCliResolverOptions {
   now?: () => number;
   launch?: (request: RuntimeLaunchRequest, spec: CodexLaunchSpec) => Promise<RuntimeLaunchResult>;
+  /**
+   * Optional management boundary supplied by the embedding host.
+   *
+   * The adapter never discovers or controls a process on its own. Capability
+   * flags are derived from this boundary so a server-only adapter fails closed
+   * instead of claiming it can manage terminals it cannot reach.
+   */
+  host?: CodexRuntimeHostBoundary;
+}
+
+export interface CodexRuntimeHostBoundary {
+  stop(instanceId: string): Promise<void>;
+  focus(instanceId: string): Promise<void>;
+  sendTask?(instanceId: string, task: RuntimeTaskBrief): Promise<void>;
+  restart?(request: RuntimeLaunchRequest): Promise<RuntimeLaunchResult>;
+  resume?(request: RuntimeLaunchRequest): Promise<RuntimeLaunchResult>;
+  discover?(): Promise<ReadonlyArray<Partial<FleetInstance>>>;
 }
 
 export class CodexRuntimeUnsupportedError extends Error {
   readonly code = 'CODEX_RUNTIME_UNSUPPORTED';
 
   constructor(operation: string) {
-    super('Codex CLI ' + operation + ' is unavailable in this adapter slice.');
+    super('Codex CLI ' + operation + ' requires an injected RuntimeHost/Terminal boundary.');
     this.name = 'CodexRuntimeUnsupportedError';
   }
 }
@@ -218,6 +236,25 @@ export function codexCandidateNames(platform: NodeJS.Platform): string[] {
   return platform === 'win32' ? ['codex.cmd', 'codex.exe', 'codex'] : ['codex'];
 }
 
+function codexVersionParts(version: string): [number, number, number] | undefined {
+  const match = /(?:codex(?:-cli)?\s*)?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(version);
+  if (!match) return undefined;
+  return [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)];
+}
+
+function isNewerCodexVersion(candidate: string, current: string): boolean {
+  const candidateParts = codexVersionParts(candidate);
+  const currentParts = codexVersionParts(current);
+  if (candidateParts && !currentParts) return true;
+  if (!candidateParts || !currentParts) return false;
+  for (let index = 0; index < candidateParts.length; index += 1) {
+    if (candidateParts[index] !== currentParts[index]) {
+      return candidateParts[index] > currentParts[index];
+    }
+  }
+  return false;
+}
+
 export async function resolveCodexCli(
   options: CodexCliResolverOptions = {},
 ): Promise<CodexCliResolution> {
@@ -241,6 +278,7 @@ export async function resolveCodexCli(
     searchedPaths.push(directory);
   }
 
+  let best: { command: string; version: string } | undefined;
   for (const directory of searchedPaths) {
     for (const candidateName of candidateNames) {
       const command = pathModule.join(directory, candidateName);
@@ -248,19 +286,26 @@ export async function resolveCodexCli(
       try {
         const version = await verify(command);
         if (!version.trim()) continue;
-        return {
-          ok: true,
-          command,
-          version: version.trim(),
-          source: 'path',
-          searchedPaths,
-          candidateNames,
-          diagnostics: 'Codex CLI resolved: ' + command + ' (' + version.trim() + ')',
-        };
+        const normalizedVersion = version.trim();
+        if (!best || isNewerCodexVersion(normalizedVersion, best.version)) {
+          best = { command, version: normalizedVersion };
+        }
       } catch {
         // Continue after a broken candidate.
       }
     }
+  }
+
+  if (best) {
+    return {
+      ok: true,
+      command: best.command,
+      version: best.version,
+      source: 'path',
+      searchedPaths,
+      candidateNames,
+      diagnostics: 'Codex CLI resolved: ' + best.command + ' (' + best.version + ')',
+    };
   }
 
   return {
@@ -346,27 +391,38 @@ export function normalizeCodexEvents(input: unknown, now = Date.now): FleetEvent
 export class CodexRuntimeAdapter implements RuntimeAdapter {
   readonly runtime: FleetRuntime = 'codex-cli';
   readonly displayName = 'Codex CLI';
-  readonly capabilities: RuntimeCapabilities = {
-    launch: true,
-    stop: false,
-    focus: false,
-    restart: false,
-    resume: false,
-    discover: false,
-    structuredEvents: true,
-    nativeSessionContinuity: true,
-  };
 
   private readonly resolverOptions: CodexCliResolverOptions;
   private readonly now: () => number;
   private readonly launchExecutor:
     | ((request: RuntimeLaunchRequest, spec: CodexLaunchSpec) => Promise<RuntimeLaunchResult>)
     | undefined;
+  private controlHost: CodexRuntimeHostBoundary | undefined;
 
   constructor(options: CodexRuntimeAdapterOptions = {}) {
     this.resolverOptions = options;
     this.now = options.now ?? (() => Date.now());
     this.launchExecutor = options.launch;
+    this.controlHost = options.host;
+  }
+
+  /** Attach the host after construction when the host owns this adapter. */
+  attachHost(host: CodexRuntimeHostBoundary | undefined): void {
+    this.controlHost = host;
+  }
+
+  get capabilities(): RuntimeCapabilities {
+    const host = this.controlHost;
+    return {
+      launch: true,
+      stop: host !== undefined,
+      focus: host !== undefined,
+      restart: typeof host?.restart === 'function',
+      resume: typeof host?.resume === 'function',
+      discover: typeof host?.discover === 'function',
+      structuredEvents: true,
+      nativeSessionContinuity: true,
+    };
   }
 
   async resolveExecutable(): Promise<CodexCliResolution> {
@@ -414,23 +470,33 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
   }
 
   async stop(_instanceId: string): Promise<void> {
-    throw new CodexRuntimeUnsupportedError('stop');
+    const host = this.controlHost;
+    if (!host) throw new CodexRuntimeUnsupportedError('stop');
+    return host.stop(_instanceId);
   }
 
-  async focus(_instanceId: string): Promise<void> {
-    throw new CodexRuntimeUnsupportedError('focus');
+  async focus(instanceId: string): Promise<void> {
+    const host = this.controlHost;
+    if (!host) throw new CodexRuntimeUnsupportedError('focus');
+    return host.focus(instanceId);
   }
 
-  async restart(_request: RuntimeLaunchRequest): Promise<RuntimeLaunchResult> {
-    throw new CodexRuntimeUnsupportedError('restart');
+  async restart(request: RuntimeLaunchRequest): Promise<RuntimeLaunchResult> {
+    const restart = this.controlHost?.restart;
+    if (!restart) throw new CodexRuntimeUnsupportedError('restart');
+    return restart(request);
   }
 
-  async resume(_request: RuntimeLaunchRequest): Promise<RuntimeLaunchResult> {
-    throw new CodexRuntimeUnsupportedError('resume');
+  async resume(request: RuntimeLaunchRequest): Promise<RuntimeLaunchResult> {
+    const resume = this.controlHost?.resume;
+    if (!resume) throw new CodexRuntimeUnsupportedError('resume');
+    return resume(request);
   }
 
   async discover(): Promise<ReadonlyArray<Partial<FleetInstance>>> {
-    throw new CodexRuntimeUnsupportedError('discover');
+    const discover = this.controlHost?.discover;
+    if (!discover) throw new CodexRuntimeUnsupportedError('discover');
+    return discover();
   }
 
   normalizeEvent(input: unknown): FleetEvent | undefined {

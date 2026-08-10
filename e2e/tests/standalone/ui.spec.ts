@@ -24,6 +24,7 @@ const ASSET_RELOAD_TIMEOUT_MS = 15_000;
 const CONNECTION_STATE_TIMEOUT_MS = 15_000;
 
 test.describe('Standalone / UI', () => {
+  test.use({ scene: 'pixel-office' });
   test('closeAgent despawns the character @area:standalone', async ({ page, standalone }) => {
     await setSettings(page, {
       alwaysShowLabels: true,
@@ -134,7 +135,7 @@ test.describe('Standalone / UI', () => {
       modal.locator('button', { hasText: 'Export Layout' }).click(),
     ]);
 
-    expect(download.suggestedFilename()).toBe('pixel-agents-layout.json');
+    expect(download.suggestedFilename()).toBe('claude-fleet-layout.json');
   });
 
   test('browser Import Layout applies the chosen file @area:standalone', async ({

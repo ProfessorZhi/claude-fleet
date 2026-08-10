@@ -550,6 +550,7 @@ export class HookEventHandler {
       parentToolId,
       toolId: subToolId,
       status,
+      toolName: agentType,
     });
   }
 

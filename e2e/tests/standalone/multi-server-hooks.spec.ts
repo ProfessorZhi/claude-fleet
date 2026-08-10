@@ -28,6 +28,7 @@ function hookDrivenScenario(name: string, command: string) {
 }
 
 test.describe('Standalone / multi-server hooks', () => {
+  test.use({ scene: 'pixel-office' });
   test('extension and standalone both stay hook-driven without cross-contamination @area:standalone', async ({
     page,
     pixelAgents,
@@ -43,6 +44,7 @@ test.describe('Standalone / multi-server hooks', () => {
 
     const standalone = await launchStandalone(page, { homeDir: tmpHome });
     try {
+      await expect(page.getByTestId('empty-state-new-agent')).toBeVisible();
       await setSettings(page, {
         alwaysShowLabels: true,
         hooksEnabled: true,

@@ -73,6 +73,7 @@ export interface ToolActivity {
   status: string;
   done: boolean;
   permissionWait?: boolean;
+  toolName?: string;
 }
 
 export const EditTool = {
@@ -207,6 +208,8 @@ export interface Character {
    *  false/undefined when the agent simply finished its turn (checkmark only,
    *  label falls through to idle). */
   waitingAwaitingInput?: boolean;
+  /** Completed turn has not been opened by the user yet. Client-only state. */
+  completionUnread?: boolean;
   /** Countdown timer for bubble (waiting: 2→0, permission: unused) */
   bubbleTimer: number;
   /** Timer to stay seated while inactive after seat reassignment (counts down to 0) */
@@ -233,6 +236,8 @@ export interface Character {
   teamName?: string;
   /** Role name within the team (null for lead) */
   agentName?: string;
+  /** User-facing Fleet label; separate from Team role name. */
+  displayName?: string;
   /** Whether this agent is the team lead */
   isTeamLead?: boolean;
   /** ID of the lead agent (set on teammates) */
@@ -246,6 +251,13 @@ export interface Character {
   contextTokens: number;
   /** Window `contextTokens` is measured against. */
   maxContextTokens: number;
+  /** Cumulative runtime usage observed for this session, when available. */
+  usageTokens?: {
+    inputTokens?: number;
+    cachedInputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
 }
 
 export const PetState = { IDLE: 'idle', WALK: 'walk', FOLLOW: 'follow' } as const;

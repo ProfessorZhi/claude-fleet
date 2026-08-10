@@ -10,6 +10,8 @@
  */
 
 import type { FleetIdentity } from './fleetContracts.js';
+import type { TokenUsage } from './ledgerContracts.js';
+import type { FleetRuntime } from './runtimeContracts.js';
 
 // ── Agent State ──────────────────────────────────────────────
 
@@ -17,6 +19,7 @@ import type { FleetIdentity } from './fleetContracts.js';
 export interface PersistedAgent {
   id: number;
   sessionId?: string;
+  runtime?: FleetRuntime;
   terminalName: string;
   isExternal?: boolean;
   jsonlFile: string;
@@ -30,6 +33,8 @@ export interface PersistedAgent {
   launchSource?: string;
   requestedBy?: string;
   folderName?: string;
+  /** User-facing Fleet label; distinct from the Claude Team role name. */
+  displayName?: string;
   teamName?: string;
   agentName?: string;
   isTeamLead?: boolean;
@@ -56,6 +61,10 @@ export interface PersistedAgent {
   /** True when launched by Fleet (vs discovered externally). Persisted so
    *  Auto Discovery restores Provider/Model after a reload. NOT a secret. */
   managedByFleet?: boolean;
+  /** Launch timestamp used for elapsed-time display after reload. */
+  createdAt?: number;
+  /** Cumulative, secret-free token counters observed for this session. */
+  usageTokens?: TokenUsage;
   /** Provider profile id used before a Switch Provider. NOT a secret. */
   lastProviderProfileId?: string;
 

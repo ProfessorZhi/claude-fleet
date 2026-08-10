@@ -77,6 +77,7 @@ export function createCharacter(
     isActive: true,
     seatId,
     bubbleType: null,
+    completionUnread: false,
     bubbleTimer: 0,
     seatTimer: 0,
     isSubagent: false,

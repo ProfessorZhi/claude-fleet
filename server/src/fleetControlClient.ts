@@ -1,6 +1,12 @@
-import type { FleetControlRequest, FleetControlResponse } from '../../core/src/controlContracts.js';
+import type {
+  FleetControlRequest,
+  FleetControlResponse,
+  FleetMetricsSnapshot,
+} from '../../core/src/controlContracts.js';
+import type { QualitySignal } from '../../core/src/ledgerContracts.js';
 import type { FleetInstance } from '../../core/src/runtimeContracts.js';
 import type { ServerConfig } from './serverConfig.js';
+import type { TelemetryIngestEnvelope, TelemetryIngestResult } from './telemetryIngestor.js';
 
 export type FleetControlServer = Pick<ServerConfig, 'port' | 'token'>;
 
@@ -15,9 +21,15 @@ export interface FleetControlClientOptions {
 
 export class FleetControlClientError extends Error {
   readonly status?: number;
-  readonly operation: 'submit' | 'getInstance';
+  readonly operation:
+    'submit' | 'getInstance' | 'listInstances' | 'getMetrics' | 'getQuality' | 'ingestTelemetry';
 
-  constructor(operation: 'submit' | 'getInstance', message: string, status?: number) {
+  constructor(
+    operation:
+      'submit' | 'getInstance' | 'listInstances' | 'getMetrics' | 'getQuality' | 'ingestTelemetry',
+    message: string,
+    status?: number,
+  ) {
     super(message);
     this.name = 'FleetControlClientError';
     this.operation = operation;
@@ -89,8 +101,84 @@ export class FleetControlClient {
     return parseInstancePayload(payload);
   }
 
+  async listInstances(): Promise<FleetInstance[]> {
+    const response = await this.send('listInstances', '/api/control/instances', {
+      method: 'GET',
+      headers: this.headers(),
+    });
+    const payload = await parseJson(response, 'listInstances');
+    if (!Array.isArray(payload)) {
+      throw new FleetControlClientError(
+        'listInstances',
+        'Fleet Control returned an invalid roster.',
+      );
+    }
+    return payload
+      .map(parseInstancePayload)
+      .filter((instance): instance is FleetInstance => !!instance);
+  }
+
+  async getMetrics(instanceId?: string, workItemId?: string): Promise<FleetMetricsSnapshot> {
+    const query = new URLSearchParams();
+    if (instanceId !== undefined) query.set('instanceId', instanceId);
+    if (workItemId !== undefined) query.set('workItemId', workItemId);
+    const queryString = query.toString();
+    const response = await this.send(
+      'getMetrics',
+      `/api/control/metrics${queryString ? `?${queryString}` : ''}`,
+      {
+        method: 'GET',
+        headers: this.headers(),
+      },
+    );
+    const payload = await parseJson(response, 'getMetrics');
+    if (!isRecord(payload) || !Array.isArray(payload.usage) || !Array.isArray(payload.sessions)) {
+      throw new FleetControlClientError(
+        'getMetrics',
+        'Fleet Control returned invalid metrics.',
+        200,
+      );
+    }
+    return payload as unknown as FleetMetricsSnapshot;
+  }
+
+  async getQuality(workItemId?: string): Promise<QualitySignal[]> {
+    const query = workItemId === undefined ? '' : `?workItemId=${encodeURIComponent(workItemId)}`;
+    const response = await this.send('getQuality', `/api/control/quality${query}`, {
+      method: 'GET',
+      headers: this.headers(),
+    });
+    const payload = await parseJson(response, 'getQuality');
+    if (!Array.isArray(payload)) {
+      throw new FleetControlClientError('getQuality', 'Fleet Control returned invalid quality.');
+    }
+    return payload as QualitySignal[];
+  }
+
+  async ingestTelemetry(envelope: TelemetryIngestEnvelope): Promise<TelemetryIngestResult> {
+    const response = await this.send('ingestTelemetry', '/api/control/telemetry', {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(envelope),
+    });
+    const payload = await parseJson(response, 'ingestTelemetry');
+    if (
+      !isRecord(payload) ||
+      !isRecord(payload.response) ||
+      typeof payload.requestId !== 'string'
+    ) {
+      throw new FleetControlClientError(
+        'ingestTelemetry',
+        'Fleet Control returned invalid telemetry ingestion result.',
+        response.status,
+      );
+    }
+    return payload as unknown as TelemetryIngestResult;
+  }
+
   private async send(
-    operation: 'submit' | 'getInstance',
+    operation:
+      'submit' | 'getInstance' | 'listInstances' | 'getMetrics' | 'getQuality' | 'ingestTelemetry',
     path: string,
     init: RequestInit,
     allowNotFound = false,

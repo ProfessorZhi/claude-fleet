@@ -188,6 +188,7 @@ export class SubagentWatch {
           parentToolId: spawnToolUseId,
           toolId,
           status: message.status,
+          toolName: message.toolName,
         });
         break;
       }

@@ -1,5 +1,8 @@
 import type { ColorValue } from '../../components/ui/types.js';
 import {
+  AGENT_LABEL_BG,
+  AGENT_LABEL_TEXT,
+  AGENT_LABEL_VERTICAL_OFFSET_PX,
   AREA_ACTIVE_ALPHA_MULTIPLIER,
   AREA_LABEL_ALPHA,
   AREA_LABEL_FALLBACK_COLOR,
@@ -488,6 +491,31 @@ export function renderScene(
   for (const d of drawables) {
     d.draw(ctx);
   }
+
+  // Identity labels stay attached to the character and make the office useful
+  // as a Fleet view even before the detail card is opened. Keep them short and
+  // high-contrast; operational details remain in the HTML detail card.
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  const labelFontSize = Math.max(7, Math.round(6 * zoom));
+  const labelHeight = Math.max(12, labelFontSize + 4);
+  ctx.font = `${labelFontSize}px sans-serif`;
+  for (const ch of characters) {
+    const label =
+      ch.displayName?.trim() ?? (ch.isSubagent ? `Subagent #${ch.id}` : `Agent #${ch.id}`);
+    const x = Math.round(offsetX + ch.x * zoom);
+    // ToolOverlay renders the compact activity/status panel around ch.y - 32px.
+    // Keep the identity label in the adjacent row above that panel. The old
+    // 70px offset left a large visual gap once the office was zoomed in.
+    const y = Math.round(offsetY + (ch.y - AGENT_LABEL_VERTICAL_OFFSET_PX) * zoom);
+    const width = ctx.measureText(label).width + 10;
+    ctx.fillStyle = AGENT_LABEL_BG;
+    ctx.fillRect(x - width / 2, y - labelHeight, width, labelHeight);
+    ctx.fillStyle = AGENT_LABEL_TEXT;
+    ctx.fillText(label, x, y);
+  }
+  ctx.restore();
 }
 
 // ── Seat indicators ─────────────────────────────────────────────

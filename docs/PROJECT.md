@@ -73,7 +73,7 @@ Fleet
 - 查看 Time to PR、PR cycle、CI、Review、返工等效率与质量指标；
 - 获得“用现有 Agent / 新开 Agent / 换资源账户 / 暂缓任务”的可解释建议；
 - 在用户授权的 Policy 下，让 Coordinator 通过 Fleet Control API / MCP 请求或自动 Launch / Assign Agent；
-- 在 Pixel Office 与 Fleet Command Scene 之间切换。
+- 在 Task Control Center、Fleet Command 与 Pixel Office Scene 之间切换。
 
 ---
 

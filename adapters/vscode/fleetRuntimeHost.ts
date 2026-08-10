@@ -3,7 +3,9 @@ import type {
   FleetRuntimeHost,
   RuntimeLaunchRequest,
   RuntimeLaunchResult,
+  RuntimeTaskBrief,
 } from '../../core/src/runtimeContracts.js';
+import { renderRuntimeTaskBrief } from '../../server/src/runtimeTaskDelivery.js';
 import type { LaunchNewTerminalOptions } from './agentManager.js';
 
 export interface VscodeRuntimeLaunchRequest extends RuntimeLaunchRequest {
@@ -15,6 +17,8 @@ export interface VscodeFleetRuntimeHostDependencies {
   launch(request: VscodeRuntimeLaunchRequest): Promise<RuntimeLaunchResult>;
   stop(instanceId: string): Promise<void>;
   focus(instanceId: string): Promise<void>;
+  /** Injected terminal boundary; the host supplies only a validated brief. */
+  sendText?(instanceId: string, text: string): void | Promise<void>;
 }
 
 /**
@@ -28,8 +32,15 @@ export interface VscodeFleetRuntimeHostDependencies {
 export class VscodeFleetRuntimeHost implements FleetRuntimeHost<VscodeRuntimeLaunchRequest> {
   readonly hostId = 'vscode-integrated-terminal';
   readonly hostType = 'vscode-integrated-terminal';
+  readonly sendTask: FleetRuntimeHost['sendTask'];
 
-  constructor(private readonly dependencies: VscodeFleetRuntimeHostDependencies) {}
+  constructor(private readonly dependencies: VscodeFleetRuntimeHostDependencies) {
+    this.sendTask = dependencies.sendText
+      ? async (instanceId: string, task: RuntimeTaskBrief): Promise<void> => {
+          await dependencies.sendText!(instanceId, renderRuntimeTaskBrief(task));
+        }
+      : undefined;
+  }
 
   async launch(request: VscodeRuntimeLaunchRequest): Promise<RuntimeLaunchResult> {
     this.assertManagedClaudeRequest(request);
@@ -66,6 +77,7 @@ export function makeClaudeFleetInstance(args: {
   sessionId?: string;
   providerProfileId?: string;
   modelId?: string;
+  displayName?: string;
   launchSource?: string;
   requestedBy?: string;
   fleet?: FleetInstance['fleet'];
@@ -86,6 +98,7 @@ export function makeClaudeFleetInstance(args: {
     status: args.sessionId ? 'working' : 'starting',
     providerProfileId: args.providerProfileId,
     modelId: args.modelId,
+    displayName: args.displayName,
     launchSource: args.launchSource,
     requestedBy: args.requestedBy,
     fleet: args.fleet,

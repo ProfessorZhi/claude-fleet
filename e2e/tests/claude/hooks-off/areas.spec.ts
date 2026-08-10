@@ -22,6 +22,7 @@ import { buildSeedConfig, buildSeedLayout } from '../../../helpers/layout-seed';
  */
 
 test.describe('Areas (single-folder)', () => {
+  test.use({ scene: 'pixel-office' });
   test.describe('seeded area data + show-areas state', () => {
     test.use({
       seedConfig: buildSeedConfig({ showAreas: true }),

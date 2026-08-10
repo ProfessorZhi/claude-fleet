@@ -5,7 +5,13 @@
  * scheduling, runtime execution, or transcript transport.
  */
 
-import type { AgentRole, FleetControlMode, FleetRuntime, FleetStatus } from './runtimeContracts.js';
+import type {
+  AgentRole,
+  FleetControlMode,
+  FleetRuntime,
+  FleetStatus,
+  WorkItemResult,
+} from './runtimeContracts.js';
 
 export type LedgerSource =
   | 'runtime'
@@ -15,6 +21,7 @@ export type LedgerSource =
   | 'scm'
   | 'strategy'
   | 'ledger'
+  | 'agentmetrics'
   | 'user'
   | 'system'
   | 'external';
@@ -47,7 +54,7 @@ export interface TokenUsage {
   totalTokens?: number;
 }
 
-export type CostBasis = 'metered' | 'api-equivalent' | 'unknown';
+export type CostBasis = 'metered' | 'api-equivalent' | 'subscription-amortized' | 'unknown';
 
 export interface CostAmount {
   amount: number;
@@ -64,11 +71,60 @@ export interface QuotaValue {
 
 export type QuotaWindow = 'session' | 'five-hour' | 'daily' | 'weekly' | 'monthly' | 'custom';
 
+export type BillingMode = 'metered' | 'subscription' | 'credits' | 'unknown';
+export type BillingPeriod = 'five-hour' | 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom';
+export type BillingPriceSource =
+  'official-list' | 'user-entered' | 'invoice' | 'provider' | 'unknown';
+
+/** Subscription allocation for one uniquely correlated usage segment (usually a turn). */
+export interface SubscriptionCostAllocation {
+  amount: number;
+  currency: string;
+  basis: 'subscription-amortized';
+  planType?: string;
+  billingPeriod: BillingPeriod;
+  periodPrice: number;
+  priceSource: BillingPriceSource;
+  fractionOfPeriod: number;
+  consumedPercentage: number;
+  resourceAccountId?: string;
+  confidence: EvidenceConfidence;
+  availability: DataAvailability;
+  estimateOrActual: EstimateOrActual;
+}
+
+export interface UsageCostBreakdown {
+  apiEquivalent?: CostAmount;
+  metered?: CostAmount;
+  subscription?: SubscriptionCostAllocation;
+}
+
+/** How the record contributes to session/PR aggregation. */
+export type UsageAggregation = 'turn' | 'session-cumulative' | 'session-segment';
+
+/** Provider-reported quota delta; never inferred from token counts. */
+export interface QuotaUsageImpact {
+  resourceAccountId?: string;
+  planType?: string;
+  billingMode?: BillingMode;
+  window: QuotaWindow;
+  consumedPercentage?: number;
+  fractionOfWindow?: number;
+  before?: QuotaValue;
+  after?: QuotaValue;
+  source: LedgerSource;
+  availability: DataAvailability;
+  confidence: EvidenceConfidence;
+  estimateOrActual: EstimateOrActual;
+}
+
 export interface QuotaSnapshot {
   snapshotId: string;
   resourceAccountId?: string;
   runtime?: FleetRuntime;
   providerDisplayName?: string;
+  planType?: string;
+  billingMode?: BillingMode;
   window: QuotaWindow;
   capturedAt: number;
   limit?: QuotaValue;
@@ -85,7 +141,9 @@ export interface ResourceMetrics {
   durationMs?: number;
   tokens?: TokenUsage;
   cost?: CostAmount;
-  quotaImpact?: QuotaValue;
+  costs?: UsageCostBreakdown;
+  /** Legacy expected quota value remains accepted for strategy compatibility. */
+  quotaImpact?: QuotaValue | QuotaUsageImpact;
 }
 
 export type ExpectedActualMetrics = ExpectedActual<ResourceMetrics>;
@@ -118,6 +176,7 @@ export interface WorkItemRecord {
   repo?: string;
   worktree?: string;
   assignedInstanceId?: string;
+  result?: WorkItemResult;
   createdAt: number;
   startedAt?: number;
   completedAt?: number;
@@ -219,16 +278,22 @@ export interface UsageRecord {
   providerDisplayName?: string;
   modelId?: string;
   capturedAt: number;
+  /** Provider/runtime turn or conversation-round identifier when available. */
+  turnId?: string;
+  aggregation?: UsageAggregation;
   durationMs?: number;
   tokens?: TokenUsage;
   cost?: CostAmount;
+  costs?: UsageCostBreakdown;
+  quotaImpact?: QuotaUsageImpact;
   source: LedgerSource;
   availability: DataAvailability;
   confidence: EvidenceConfidence;
   estimateOrActual: EstimateOrActual;
 }
 
-export type QualitySignalKind = 'test' | 'review' | 'build' | 'lint' | 'merge' | 'user' | 'runtime';
+export type QualitySignalKind =
+  'test' | 'review' | 'build' | 'lint' | 'merge' | 'pull-request' | 'ci' | 'user' | 'runtime';
 
 export interface QualitySignal {
   signalId: string;
@@ -240,6 +305,7 @@ export interface QualitySignal {
   outcome: 'passed' | 'failed' | 'warning' | 'neutral';
   score?: number;
   summary?: string;
+  metadata?: SafeMetadata;
   capturedAt: number;
   source: LedgerSource;
   availability: DataAvailability;

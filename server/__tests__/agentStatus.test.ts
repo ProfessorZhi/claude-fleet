@@ -177,6 +177,18 @@ describe('agentStateToUserStatusWithError — time-injected heuristics', () => {
     ).toBe('starting');
   });
 
+  it('active interactive terminal stays starting before the first prompt creates JSONL', () => {
+    const agent = makeAgent({ createdAt: NOW - JSONL_ERROR_GRACE_MS - 10_000 });
+    expect(
+      agentStateToUserStatusWithError(agent, {
+        jsonlExists: false,
+        createdAt: agent.createdAt,
+        now: NOW,
+        processAlive: true,
+      }),
+    ).toBe('starting');
+  });
+
   it('no createdAt (restored agent) never triggers the timeout rule', () => {
     const agent = makeAgent();
     expect(

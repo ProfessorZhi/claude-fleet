@@ -37,5 +37,16 @@ Codex 不直接拥有 Claude Code 进程，也不通过屏幕抓取模拟终端�
 
 ## 当前接口状态
 
-`fleet.*` MCP / Local API 是 v0.2 目标 Contract。若 Controller 尚未实现，使用
-现有 Adapter / runner 做实验，但不要把临时脚本当成最终 Ownership 模型。
+当前版本已经提供认证的本地 Fleet Control HTTP API，以及对应的 TypeScript
+`FleetControlClient`。Coordinator 可以通过它查询实例、投递控制动作、读取按
+Agent/WorkItem 聚合的 token、时间和兼容费用，并记录/查询有界的质量信号。
+Usage/Quota 采集器通过认证的 `POST /api/control/telemetry` 接入并以
+`idempotencyKey` 去重；Codex 原生 JSONL 的累计 token/最近轮次耗时可以实时进入
+Ledger，账户级套餐额度在无法证明归属时保持 `unavailable`。
+
+VS Code 内置的 `codex-primary-session` 通过 `/api/coordinator/plan` 和
+`/api/coordinator/tick` 执行显式、受策略约束的协调步骤。Fleet 启动的 Codex
+终端会在 CLI 生成原生 session id 后被重新绑定到同一 Fleet 实例，不会重复显示。
+
+`fleet.*` MCP 外壳仍是后续适配层；在它完成前，不要把临时脚本当成状态源，直接使用
+本地 Control API 或 `FleetControlClient`。

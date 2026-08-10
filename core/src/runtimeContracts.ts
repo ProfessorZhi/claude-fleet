@@ -61,6 +61,21 @@ export interface Mission {
   completedAt?: number;
 }
 
+export type WorkItemResultOutcome = 'completed' | 'blocked' | 'failed';
+
+/** Bounded, secret-free result metadata returned by a Worker. */
+export interface WorkItemResult {
+  workItemId: string;
+  instanceId: string;
+  outcome: WorkItemResultOutcome;
+  summary?: string;
+  artifactRefs?: string[];
+  capturedAt: number;
+  source: 'runtime' | 'scm' | 'user' | 'system';
+  availability: 'available' | 'partial' | 'unavailable';
+  confidence: 'exact' | 'high' | 'medium' | 'low' | 'unknown';
+}
+
 export interface WorkItem {
   workItemId: string;
   missionId: string;
@@ -74,13 +89,76 @@ export interface WorkItem {
   allowedRuntimeTypes?: FleetRuntime[];
   allowedRoles?: AgentRole[];
   assignedInstanceId?: string;
+  result?: WorkItemResult;
   createdAt: number;
   startedAt?: number;
   completedAt?: number;
 }
 
+export type WorktreeStatus = 'reserved' | 'active' | 'released';
+
+/** Safe metadata describing one isolated repository worktree. */
+export interface WorktreeRecord {
+  worktreeId: string;
+  repo: string;
+  worktreePath: string;
+  branch?: string;
+  missionId?: string;
+  workItemId?: string;
+  instanceId?: string;
+  status: WorktreeStatus;
+  createdAt: number;
+  releasedAt?: number;
+}
+
+export interface WorktreeCreateRequest {
+  worktreeId: string;
+  repo: string;
+  worktreePath: string;
+  branch?: string;
+  missionId?: string;
+  workItemId?: string;
+  instanceId?: string;
+  createdAt: number;
+}
+
+export interface WorktreeConflictCheckRequest {
+  repo: string;
+  worktreePath: string;
+  branch?: string;
+  worktreeId?: string;
+  missionId?: string;
+  workItemId?: string;
+  instanceId?: string;
+}
+
+export interface WorktreeConflict {
+  worktreeId: string;
+  reason: 'path' | 'branch';
+  worktreePath: string;
+  branch?: string;
+}
+
+export interface WorktreeConflictCheck {
+  conflict: boolean;
+  conflicts: WorktreeConflict[];
+}
+
+/**
+ * Worktree lifecycle boundary. Implementations may provision a real Git
+ * worktree, while the management plane only depends on these safe metadata
+ * operations.
+ */
+export interface WorktreeManager {
+  create(request: WorktreeCreateRequest): Promise<WorktreeRecord>;
+  record(record: WorktreeRecord): Promise<void>;
+  checkConflict(request: WorktreeConflictCheckRequest): Promise<WorktreeConflictCheck>;
+}
+
 export interface FleetInstance {
   instanceId: string;
+  /** User-facing label; separate from Team role metadata. */
+  displayName?: string;
   runtime: FleetRuntime;
   role: AgentRole;
   managedByFleet: boolean;
@@ -132,6 +210,37 @@ export interface RuntimeLaunchResult {
   startedAt: number;
 }
 
+/**
+ * Bounded, secret-free work brief accepted by a managed runtime terminal.
+ *
+ * This is deliberately not a prompt/transcript transport contract. Runtime
+ * adapters may add their own native delivery implementation, but the Fleet
+ * control plane only sends these four fields.
+ */
+export interface RuntimeTaskBrief {
+  workItemId: string;
+  title: string;
+  objective: string;
+  acceptanceCriteria: string[];
+}
+
+export interface RuntimeTaskDeliveryRequest {
+  instanceId: string;
+  task: RuntimeTaskBrief;
+}
+
+export type RuntimeTaskDeliveryStatus = 'delivered' | 'unavailable' | 'rejected';
+
+export type RuntimeTaskDeliveryReason = 'boundary_unavailable' | 'host_failed' | 'invalid_brief';
+
+export interface RuntimeTaskDeliveryResult {
+  instanceId: string;
+  workItemId: string;
+  status: RuntimeTaskDeliveryStatus;
+  deliveredAt?: number;
+  reason?: RuntimeTaskDeliveryReason;
+}
+
 export interface FleetRuntimeHost<Request extends RuntimeLaunchRequest = RuntimeLaunchRequest> {
   readonly hostId: string;
   readonly hostType: string;
@@ -139,6 +248,8 @@ export interface FleetRuntimeHost<Request extends RuntimeLaunchRequest = Runtime
   launch(request: Request): Promise<RuntimeLaunchResult>;
   stop(instanceId: string): Promise<void>;
   focus(instanceId: string): Promise<void>;
+  /** Optional bounded task-delivery boundary; hosts without it fail closed. */
+  sendTask?(instanceId: string, task: RuntimeTaskBrief): Promise<void>;
 }
 
 export interface RuntimeAdapter {

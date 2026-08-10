@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 
+import type { TokenUsage } from '../../core/src/ledgerContracts.js';
 import type { HookProvider } from '../../core/src/provider.js';
 import type { AgentStateStore } from './agentStateStore.js';
 import {
@@ -50,6 +51,38 @@ export function extractContextTokens(record: unknown): number {
   return Number.isFinite(sum) && sum > 0 ? sum : 0;
 }
 
+/** Extract one transcript turn's billable token counters for cumulative usage. */
+export function extractTokenUsage(record: unknown): TokenUsage | undefined {
+  const usage = (record as TranscriptRecord | null)?.message?.usage;
+  if (!usage || typeof usage !== 'object') return undefined;
+  const input = finiteNonNegative(usage.input_tokens);
+  const cached =
+    finiteNonNegative(usage.cache_creation_input_tokens) +
+    finiteNonNegative(usage.cache_read_input_tokens);
+  const output = finiteNonNegative(usage.output_tokens);
+  const total = input + cached + output;
+  if (total <= 0) return undefined;
+  return {
+    ...(input > 0 ? { inputTokens: input } : {}),
+    ...(cached > 0 ? { cachedInputTokens: cached } : {}),
+    ...(output > 0 ? { outputTokens: output } : {}),
+    totalTokens: total,
+  };
+}
+
+function finiteNonNegative(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function addTokenUsage(total: TokenUsage | undefined, next: TokenUsage): TokenUsage {
+  const result = { ...(total ?? {}) };
+  for (const key of ['inputTokens', 'cachedInputTokens', 'outputTokens', 'totalTokens'] as const) {
+    const value = next[key];
+    if (value !== undefined) result[key] = (result[key] ?? 0) + value;
+  }
+  return result;
+}
+
 /**
  * Window an observed context has to fit in, when nobody can name it.
  *
@@ -88,6 +121,7 @@ function applyContextTokens(
     id: agentId,
     contextTokens: agent.contextTokens,
     maxContextTokens: agent.maxContextTokens,
+    ...(agent.usageTokens ? { usage: agent.usageTokens } : {}),
   });
 }
 
@@ -112,6 +146,8 @@ export function updateContextUsage(
   if (tokens <= 0) return;
   const isSidechain = (record as TranscriptRecord | null)?.isSidechain === true;
   if (isSidechain && agent.sawMainChainUsage) return;
+  const usage = extractTokenUsage(record);
+  if (usage) agent.usageTokens = addTokenUsage(agent.usageTokens, usage);
   applyContextTokens(agentId, agent, agents, tokens, !isSidechain, windowFor(record, provider));
 }
 

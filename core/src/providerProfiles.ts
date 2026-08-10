@@ -209,6 +209,8 @@ export interface InstanceLaunchConfig {
   cwd?: string;
   providerProfileId: string;
   modelId?: string;
+  /** Human-facing Fleet label; independent from Claude Team agentName. */
+  displayName?: string;
   /** Spec 005: 会话模式。缺省 'new'（与旧行为一致）。 */
   sessionMode?: 'new' | 'resume';
   /** Spec 005: 显式 sessionId。缺省时 launchNewTerminal 生成新 UUID。 */
@@ -229,6 +231,7 @@ export function isInstanceLaunchConfig(value: unknown): value is InstanceLaunchC
     (v.cwd === undefined || typeof v.cwd === 'string') &&
     typeof v.providerProfileId === 'string' &&
     v.providerProfileId.length > 0 &&
+    (v.displayName === undefined || typeof v.displayName === 'string') &&
     (v.sessionMode === undefined || v.sessionMode === 'new' || v.sessionMode === 'resume') &&
     (v.sessionId === undefined || typeof v.sessionId === 'string')
   );

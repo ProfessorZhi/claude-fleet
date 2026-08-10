@@ -31,7 +31,7 @@ export function Modal({
       >
         <div className="flex items-center justify-between py-4 px-10 border-b border-border mb-4">
           <span className="text-accent-bright text-2xl">{title}</span>
-          <Button variant="ghost" size="icon" onClick={onClose}>
+          <Button variant="ghost" size="icon" data-testid="settings-close" onClick={onClose}>
             x
           </Button>
         </div>

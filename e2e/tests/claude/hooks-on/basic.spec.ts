@@ -31,6 +31,7 @@ import {
 import { getPixelAgentsFrame, openPixelAgentsPanel, setSettings } from '../../../helpers/webview';
 
 test.describe('Hooks ON / spawn paths', () => {
+  test.use({ scene: 'pixel-office' });
   test('internal terminal spawns agent and Task subagent appears then despawns @area:spawn', async ({
     pixelAgents,
   }) => {

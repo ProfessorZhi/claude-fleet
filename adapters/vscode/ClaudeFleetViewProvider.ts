@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import type { StateAdapter } from '../../core/src/adapter.js';
+import type { FleetControlPolicy, FleetLaunchTemplate } from '../../core/src/controlContracts.js';
 import {
   type FleetTelemetrySnapshot,
   FleetTelemetryStore,
@@ -21,6 +22,7 @@ import { AgentStateStore } from '../../server/src/agentStateStore.js';
 import {
   agentStateToUserStatus,
   agentStateToUserStatusWithError,
+  type UserFacingStatus,
 } from '../../server/src/agentStatus.js';
 import type {
   LoadedAssets,
@@ -41,18 +43,34 @@ import {
 } from '../../server/src/assetLoader.js';
 import { loadAllCharacters, loadAllFurniture, loadAllPets } from '../../server/src/assetReload.js';
 import { readConfig, writeConfig } from '../../server/src/configPersistence.js';
+import { DEFAULT_MAX_CONTEXT_TOKENS } from '../../server/src/constants.js';
+import { CoordinatorScheduler } from '../../server/src/coordinatorScheduler.js';
+import { CoordinatorSession } from '../../server/src/coordinatorSession.js';
 import { setFolderNameResolver, setTerminalAdapter } from '../../server/src/fileWatcher.js';
 import { FleetControlService } from '../../server/src/fleetControlService.js';
+import { FleetLedgerStore } from '../../server/src/fleetLedgerStore.js';
 import type { LayoutWatcher } from '../../server/src/layoutPersistence.js';
 import {
   readLayoutFromFile,
   watchLayoutFile,
   writeLayoutToFile,
 } from '../../server/src/layoutPersistence.js';
+import { assignPaletteIfNeeded } from '../../server/src/paletteAssigner.js';
 import { PathSet } from '../../server/src/pathKey.js';
+import { JsonFileFleetSnapshotPersistence } from '../../server/src/persistence/fleetSnapshotPersistence.js';
+import { CodexFleetRuntimeHost } from '../../server/src/providers/codex/codexFleetRuntimeHost.js';
+import { CodexRuntimeAdapter } from '../../server/src/providers/codex/codexRuntimeAdapter.js';
+import {
+  type CodexDiscoveredStatus,
+  type CodexSessionMetadata,
+  findManagedCodexAgentCandidate,
+  isCodexDesktopSessionFile,
+  scanCodexSessions,
+} from '../../server/src/providers/codex/codexSessionScanner.js';
 import { claudeProvider, copyHookScript } from '../../server/src/providers/index.js';
 import { ClaudeFleetServer } from '../../server/src/server.js';
 import type { AgentState } from '../../server/src/types.js';
+import { WorkItemResultCorrelator } from '../../server/src/workItemResultCorrelator.js';
 import { runRestartAgentCommand, runSwitchProviderCommand } from './agentControl.js';
 import type { LaunchNewTerminalOptions } from './agentManager.js';
 import {
@@ -64,6 +82,7 @@ import {
   sendLayout,
 } from './agentManager.js';
 import { ClaudeCodeRuntimeAdapter } from './claudeRuntimeAdapter.js';
+import { launchCodexTerminal } from './codexAgentManager.js';
 import {
   COMMAND_NEW_AGENT,
   CONFIG_KEY_AUTO_SHOW_PANEL,
@@ -83,6 +102,7 @@ import {
   VscodeFleetRuntimeHost,
   type VscodeRuntimeLaunchRequest,
 } from './fleetRuntimeHost.js';
+import type { CodexLaunchAgentOptions } from './launchAgentFlow.js';
 import { createProviderProfileStore, type ProviderProfileStore } from './providerProfileStore.js';
 import {
   createSecretStorageProvider,
@@ -95,8 +115,8 @@ import { VscodeTerminalAdapter } from './vscodeTerminalAdapter.js';
 const MAX_PENDING_BROADCASTS = 1_000;
 
 function parseAgentInstanceId(instanceId: string): number {
-  const match = /^agent-(\\d+)$/.exec(instanceId);
-  if (!match) throw new Error(`Invalid Claude Code instance id: ${instanceId}`);
+  const match = /^agent-(\d+)$/.exec(instanceId);
+  if (!match) throw new Error(`Invalid managed instance id: ${instanceId}`);
   return Number(match[1]);
 }
 
@@ -121,11 +141,20 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
   /** Managed launch boundary; initialized when the webview/terminal context is ready. */
   runtimeHost: VscodeFleetRuntimeHost | undefined;
   /** Local management API used by the primary Coordinator through the embedded server. */
-  readonly controlService = new FleetControlService();
+  readonly controlService: FleetControlService;
+  readonly resultCorrelator: WorkItemResultCorrelator;
+  readonly coordinatorSession: CoordinatorSession;
   private readonly claudeRuntimeAdapter = new ClaudeCodeRuntimeAdapter();
+  private readonly codexRuntimeAdapter: CodexRuntimeAdapter;
+  private readonly codexRuntimeHost: CodexFleetRuntimeHost;
 
   // Global session scanning dismissal tracking
   private globalDismissedFiles = new Set<string>();
+
+  // Codex CLI has no Claude-compatible hooks. Its JSONL session files are
+  // discovered by a small runtime-specific scanner instead of being sent
+  // through the Claude transcript parser.
+  private codexDiscoveryTimer: ReturnType<typeof setInterval> | null = null;
 
   // Bundled default layout (loaded from assets/default-layout.json)
   defaultLayout: Record<string, unknown> | null = null;
@@ -156,6 +185,39 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     );
   };
 
+  /** New Agent Codex branch: reuse the local Codex login and create a Worker. */
+  launchCodexFromFlow: (options: CodexLaunchAgentOptions) => Promise<void> = async (options) => {
+    const cwd = options.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir();
+    const instanceId = `agent-${this.store.nextAgentId.current}`;
+    const now = Date.now();
+    await this.codexRuntimeHost.launch({
+      cwd,
+      sessionMode: 'new',
+      launchSource: options.launchSource ?? 'fleet-ui',
+      requestedBy: options.requestedBy ?? 'user',
+      instance: {
+        instanceId,
+        runtime: 'codex-cli',
+        role: 'worker',
+        managedByFleet: true,
+        displayName: options.displayName,
+        workspaceId: cwd,
+        repo: cwd,
+        hostId: this.codexRuntimeHost.hostId,
+        terminalId: `terminal-${instanceId}`,
+        status: 'starting',
+        launchSource: options.launchSource ?? 'fleet-ui',
+        requestedBy: options.requestedBy ?? 'user',
+        createdAt: now,
+        lastActivityAt: now,
+      },
+    });
+  };
+
+  checkCodexCli() {
+    return this.codexRuntimeAdapter.resolveExecutable();
+  }
+
   // Auto-spawn guard: ensures the startup spawn fires at most once per VS Code
   // session, even though webviewReady fires on every panel focus.
   private autoSpawnAttempted = false;
@@ -166,6 +228,36 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
   ) {
     this.adapter = adapter;
     this.store.setAdapter(this.adapter);
+    const ledgerPath = path.join(this.context.globalStorageUri.fsPath, 'fleet-ledger.json');
+    try {
+      this.controlService = new FleetControlService({
+        ledger: new FleetLedgerStore({
+          persistence: new JsonFileFleetSnapshotPersistence(ledgerPath),
+        }),
+      });
+    } catch (error) {
+      // A corrupt snapshot must never prevent the extension from opening. Do
+      // not overwrite it; keep this session in memory and expose the failure
+      // in the Extension Host log for recovery instead.
+      console.error('[Claude Fleet] Fleet ledger recovery failed; using memory ledger.', error);
+      this.controlService = new FleetControlService();
+    }
+    this.resultCorrelator = new WorkItemResultCorrelator(this.controlService);
+    const coordinatorPolicy: FleetControlPolicy = {
+      mode: 'approve',
+      maxConcurrentInstances: 8,
+    };
+    this.coordinatorSession = new CoordinatorSession({
+      sessionId: 'codex-primary-session',
+      scheduler: new CoordinatorScheduler({
+        control: this.controlService,
+        requestedBy: 'codex-primary',
+        workItems: () => this.controlService.listWorkItems(),
+        policy: coordinatorPolicy,
+        launchTemplates: this.defaultCoordinatorLaunchTemplates(coordinatorPolicy),
+      }),
+    });
+    this.controlService.registerCoordinatorSession(this.coordinatorSession);
     this.providerProfileStore = createProviderProfileStore(this.context);
     this.secretStorageProvider = createSecretStorageProvider(this.context);
     this.store.on('agentAdded', (id, agent) => {
@@ -187,6 +279,10 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
         providerProfileId: agent.providerProfileId,
         providerDisplayName: agent.providerDisplayName,
         modelId: agent.modelId,
+        runtime: agent.runtime ?? 'claude-code',
+        displayName: agent.displayName,
+        createdAt: agent.createdAt,
+        managedByFleet: agent.managedByFleet,
       };
       this.consumeTelemetry(message, this.telemetrySeed(agent));
       this.sendOrBuffer(message);
@@ -246,6 +342,62 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     // Create shared runtime (owns timer Maps, scanners, hook handler, dismissal tracker)
     this.runtime = new AgentRuntime(this.store, claudeProvider);
 
+    // Codex authentication stays outside Fleet. The adapter only resolves the
+    // local executable and the injected host creates an isolated VS Code
+    // terminal without receiving a secret.
+    this.codexRuntimeAdapter = new CodexRuntimeAdapter({
+      launch: async (request, spec) => {
+        const agent = launchCodexTerminal(
+          this.store.nextAgentId,
+          this.store.nextTerminalIndex,
+          this.runtime.activeAgentId,
+          this.store,
+          () => this.store.persist(),
+          {
+            cwd: request.cwd,
+            command: spec.command,
+            args: spec.args,
+            modelId: request.modelId,
+            displayName: request.instance.displayName,
+            sessionMode: request.sessionMode,
+            sessionId: request.sessionId,
+            launchSource: request.launchSource,
+            requestedBy: request.requestedBy,
+          },
+        );
+        return {
+          instanceId: `agent-${agent.id}`,
+          sessionId: agent.sessionId,
+          terminalId: agent.terminalId,
+          terminalName: agent.terminalRef?.name,
+          hostId: agent.hostId,
+          workspaceId: agent.workspaceId,
+          launchSource: agent.launchSource,
+          requestedBy: agent.requestedBy,
+          startedAt: agent.createdAt ?? Date.now(),
+        };
+      },
+    });
+    this.codexRuntimeHost = new CodexFleetRuntimeHost(this.codexRuntimeAdapter, {
+      stop: async (instanceId) => {
+        const id = parseAgentInstanceId(instanceId);
+        if (this.store.has(id)) this.runtime.stopAgent(id);
+      },
+      focus: async (instanceId) => {
+        const agent = this.store.get(parseAgentInstanceId(instanceId));
+        agent?.terminalRef?.show();
+      },
+      sendText: async (instanceId, text) => {
+        const agent = this.store.get(parseAgentInstanceId(instanceId));
+        if (!agent?.terminalRef) throw new Error('Managed Codex terminal is unavailable.');
+        agent.terminalRef.sendText(text);
+      },
+    });
+    this.controlService.registerRuntime({
+      adapter: this.codexRuntimeAdapter,
+      host: this.codexRuntimeHost,
+    });
+
     this.initServer();
   }
 
@@ -281,7 +433,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     return {
       instanceId: `agent-${agent.id}`,
       agentId: agent.id,
-      runtime: 'claude-code',
+      runtime: agent.runtime ?? 'claude-code',
       managedByFleet: agent.managedByFleet,
       repo: agent.cwd ?? agent.projectDir,
       cwd: agent.cwd,
@@ -305,12 +457,12 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
   }
 
   /** Keep the local ControlService candidate pool aligned with real AgentState. */
-  private syncControlInstance(agent?: AgentState): void {
+  private syncControlInstance(agent?: AgentState, statusOverride?: UserFacingStatus): void {
     if (!agent) return;
-    const status = agentStateToUserStatus(agent);
+    const status = statusOverride ?? agentStateToUserStatus(agent);
     const instance: FleetInstance = {
       instanceId: `agent-${agent.id}`,
-      runtime: 'claude-code',
+      runtime: agent.runtime ?? 'claude-code',
       role: agent.leadAgentId === undefined ? 'worker' : 'subagent',
       managedByFleet: agent.managedByFleet ?? !agent.isExternal,
       sessionId: agent.sessionId,
@@ -324,6 +476,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
       providerProfileId: agent.providerProfileId,
       providerDisplayName: agent.providerDisplayName,
       modelId: agent.modelId,
+      displayName: agent.displayName,
       fleet: agent.fleet,
       status,
       parentAgentId: agent.leadAgentId === undefined ? undefined : `agent-${agent.leadAgentId}`,
@@ -331,7 +484,17 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
       createdAt: agent.createdAt ?? agent.lastDataAt ?? Date.now(),
       lastActivityAt: agent.lastDataAt || undefined,
     };
-    this.controlService.upsertInstance(instance);
+    this.controlService.observeRuntimeInstance(instance);
+    if (agent.usageTokens) {
+      this.controlService.recordLiveUsage(
+        instance.instanceId,
+        instance.runtime,
+        instance.providerDisplayName,
+        instance.modelId,
+        agent.usageTokens,
+        agent.lastDataAt || Date.now(),
+      );
+    }
   }
 
   private consumeTelemetry(
@@ -340,8 +503,64 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
   ): void {
     const event = normalizeAgentBroadcast(message, seed);
     if (!event) return;
+    const usage = message.type === 'agentContextUsage' ? message.usage : undefined;
+    if (typeof seed.instanceId === 'string' && usage && typeof usage === 'object') {
+      this.controlService.recordLiveUsage(
+        seed.instanceId,
+        seed.runtime,
+        seed.providerDisplayName,
+        seed.modelId,
+        usage,
+        event.observedAt,
+      );
+    }
+    const previous = event.instanceId
+      ? this.telemetryStore.getSnapshot(event.instanceId)
+      : undefined;
     this.telemetryStore.consume(event);
+    void this.resultCorrelator.consume(event).catch((error) => {
+      console.warn('[Claude Fleet] WorkItem result correlation unavailable:', error);
+    });
+    // Claude's legacy broadcast protocol reports an idle status rather than a
+    // dedicated task_finished event. Only a working -> idle transition is
+    // promoted, so an already-idle refresh cannot complete the same WorkItem
+    // twice; the correlator still provides request idempotency as a second
+    // guard.
+    if (event.eventType === 'idle' && previous?.status === 'working' && event.instanceId) {
+      void this.resultCorrelator
+        .consume({
+          ...event,
+          eventId: event.eventId + '-task-finished',
+          eventType: 'task_finished',
+        })
+        .catch((error) => {
+          console.warn('[Claude Fleet] WorkItem completion correlation unavailable:', error);
+        });
+    }
     this.sendOrBuffer({ type: 'fleetTelemetry', projection: this.telemetryStore.getProjection() });
+  }
+
+  private defaultCoordinatorLaunchTemplates(policy: FleetControlPolicy): FleetLaunchTemplate[] {
+    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir();
+    return [
+      {
+        runtime: 'claude-code',
+        role: 'worker',
+        repo: cwd,
+        cwd,
+        providerProfileId: INHERIT_PROVIDER_PROFILE_ID,
+        requestedBy: 'codex-primary',
+        policy,
+      },
+      {
+        runtime: 'codex-cli',
+        role: 'worker',
+        repo: cwd,
+        cwd,
+        requestedBy: 'codex-primary',
+        policy,
+      },
+    ];
   }
 
   private initServer(): void {
@@ -351,7 +570,12 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     });
 
     this.claudeFleetServer
-      .start({ store: this.store, embedded: true, controlApi: this.controlService })
+      .start({
+        store: this.store,
+        embedded: true,
+        controlApi: this.controlService,
+        coordinatorSession: this.coordinatorSession,
+      })
       .then((config) => {
         // Server always starts regardless of hooks-enabled state.
         // It's the foundation for WebSocket transport and health monitoring.
@@ -429,6 +653,11 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
         const id = parseAgentInstanceId(instanceId);
         if (this.store.has(id)) this.runtime.stopAgent(id);
       },
+      sendText: async (instanceId, text) => {
+        const agent = this.store.get(parseAgentInstanceId(instanceId));
+        if (!agent?.terminalRef) throw new Error('Managed Claude terminal is unavailable.');
+        agent.terminalRef.sendText(text);
+      },
     });
     this.controlService.registerRuntime({
       adapter: this.claudeRuntimeAdapter,
@@ -457,6 +686,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
           sessionId: options.launchConfig?.sessionId,
           providerProfileId: options.launchConfig?.providerProfileId,
           modelId: options.launchConfig?.modelId,
+          displayName: options.launchConfig?.displayName,
           launchSource: options.launchSource ?? 'fleet-ui',
           requestedBy: options.requestedBy ?? 'user',
           fleet: options.launchConfig?.fleet,
@@ -763,6 +993,12 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
         // Start external session scanning (detects VS Code extension panel sessions)
         this.runtime.startExternalScanning(projectDir);
 
+        // Codex Desktop/CLI writes session_meta JSONL under ~/.codex/sessions,
+        // not ~/.claude/projects. Keep this independent from Claude hooks so a
+        // user-created Codex coordinator is visible without launching it from
+        // Fleet. The scanner is workspace-scoped and secret-free.
+        this.startCodexSessionDiscovery((wsFolders ?? []).map((folder) => folder.uri.fsPath));
+
         // In multi-root workspaces, also scan project dirs for all other folders
         // so agents running in any workspace folder are discovered
         if (wsFolders && wsFolders.length > 1) {
@@ -897,10 +1133,34 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
               jsonlExists,
               createdAt: agent.createdAt,
               now,
+              // An interactive Fleet terminal can be healthy before the
+              // first prompt creates its JSONL session. Use VS Code's
+              // authoritative terminal lifecycle signal so the timeout
+              // heuristic only reports a real launch failure.
+              processAlive:
+                agent.terminalRef !== undefined
+                  ? agent.terminalRef.exitStatus === undefined
+                  : undefined,
             }),
           };
-          this.consumeTelemetry(statusMessage, this.telemetrySeed(agent));
-          this.webview?.postMessage(statusMessage);
+          // Keep the ControlService projection aligned with the error-aware
+          // diagnostic result as well. Without this, the Webview could show a
+          // dead terminal as disconnected while /api/control/instances still
+          // reported the old "starting" state.
+          this.syncControlInstance(agent, statusMessage.status);
+          // Diagnostics run on a timer. Re-ingesting an unchanged status on
+          // every tick turns the activity feed into a heartbeat log and hides
+          // meaningful events. Only publish a telemetry event when the
+          // user-facing status actually changes (or when this is the first
+          // snapshot for the agent).
+          const instanceId = `agent-${id}`;
+          const previousSnapshot = this.telemetryStore.getSnapshot(instanceId);
+          const statusChanged =
+            !previousSnapshot || previousSnapshot.status !== statusMessage.status;
+          if (statusChanged) {
+            this.consumeTelemetry(statusMessage, this.telemetrySeed(agent));
+            this.webview?.postMessage(statusMessage);
+          }
         }
       } else if (message.type === 'openSessionsFolder') {
         const projectDir = getProjectDirPath();
@@ -1021,6 +1281,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
             cwd: request.cwd,
             providerProfileId,
             modelId: request.modelId,
+            displayName: request.instance.displayName,
             sessionMode: request.sessionMode,
             sessionId: request.sessionId,
             fleet: request.instance.fleet,
@@ -1038,6 +1299,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
       },
       stop: (instanceId) => host.stop(instanceId),
       focus: (instanceId) => host.focus(instanceId),
+      sendTask: host.sendTask,
     };
   }
 
@@ -1135,9 +1397,202 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  private startCodexSessionDiscovery(workspaceRoots: readonly string[]): void {
+    if (this.codexDiscoveryTimer) return;
+
+    // Older builds projected Codex Desktop threads as external Worker Agents.
+    // Remove those stale projections once; the scanner below excludes Desktop
+    // sessions from future Worker discovery while keeping their JSONL intact.
+    for (const candidate of [...this.store.values()]) {
+      if (
+        candidate.runtime === 'codex-cli' &&
+        candidate.isExternal &&
+        isCodexDesktopSessionFile(candidate.jsonlFile)
+      ) {
+        this.runtime.removeAgent(candidate.id);
+        console.log(
+          `[Claude Fleet] Codex: removed stale Desktop session projection Agent ${candidate.id}`,
+        );
+      }
+    }
+
+    const scan = (): void => {
+      const sessions = scanCodexSessions({
+        workspaceRoots,
+        // An external Codex session remains on disk after the user closes its
+        // Fleet projection. Reuse the shared dismissal cooldown so the next
+        // 2-second scan does not immediately resurrect the closed vessel.
+        isDismissed: (filePath) => this.runtime.dismissalTracker.isDismissed(filePath),
+      });
+      for (const session of sessions) this.upsertDiscoveredCodexSession(session);
+    };
+
+    scan();
+    this.codexDiscoveryTimer = setInterval(scan, 2_000);
+  }
+
+  private upsertDiscoveredCodexSession(session: CodexSessionMetadata): void {
+    let agent: AgentState | undefined;
+    for (const candidate of this.store.values()) {
+      if (
+        candidate.runtime === 'codex-cli' &&
+        (candidate.sessionId === session.sessionId || candidate.jsonlFile === session.filePath)
+      ) {
+        agent = candidate;
+        break;
+      }
+    }
+
+    // A Fleet-launched Codex terminal starts with a placeholder session id.
+    // Adopt the native JSONL session once Codex creates it instead of adding a
+    // second external vessel for the same terminal.
+    if (!agent) {
+      const managedInstanceId = findManagedCodexAgentCandidate(
+        [...this.store.values()]
+          .filter((candidate) => candidate.runtime === 'codex-cli')
+          .map((candidate) => ({
+            instanceId: `agent-${candidate.id}`,
+            runtime: 'codex-cli' as const,
+            managedByFleet: candidate.managedByFleet,
+            isExternal: candidate.isExternal,
+            cwd: candidate.cwd ?? candidate.projectDir,
+            createdAt: candidate.createdAt,
+            sessionId: candidate.sessionId,
+            jsonlFile: candidate.jsonlFile,
+            terminalAttached: candidate.terminalRef !== undefined,
+          })),
+        session,
+      );
+      if (managedInstanceId) {
+        const id = parseAgentInstanceId(managedInstanceId);
+        agent = this.store.get(id);
+        if (agent) {
+          agent.sessionId = session.sessionId;
+          agent.jsonlFile = session.filePath;
+          agent.isExternal = false;
+          agent.managedByFleet = true;
+          agent.hooksOnly = true;
+          agent.hostId = agent.hostId ?? this.codexRuntimeHost.hostId;
+          this.store.persist();
+          this.syncControlInstance(agent);
+        }
+      }
+    }
+
+    if (!agent) {
+      const id = this.store.nextAgentId.current++;
+      agent = {
+        id,
+        sessionId: session.sessionId,
+        runtime: 'codex-cli',
+        terminalRef: undefined,
+        isExternal: true,
+        projectDir: session.cwd,
+        cwd: session.cwd,
+        hostId: 'codex-cli-external',
+        workspaceId: session.cwd,
+        terminalId: undefined,
+        launchSource: 'auto-discovery',
+        requestedBy: 'external',
+        jsonlFile: session.filePath,
+        fileOffset: 0,
+        lineBuffer: '',
+        activeToolIds: new Set(),
+        activeToolStatuses: new Map(),
+        activeToolNames: new Map(),
+        activeSubagentToolIds: new Map(),
+        activeSubagentToolNames: new Map(),
+        backgroundAgentToolIds: new Set(),
+        isWaiting: false,
+        permissionSent: false,
+        hadToolsInTurn: false,
+        hookDelivered: false,
+        hooksOnly: true,
+        lastDataAt: session.lastActivityAt,
+        linesProcessed: 1,
+        seenUnknownRecordTypes: new Set(),
+        contextTokens: 0,
+        maxContextTokens: session.contextWindow ?? DEFAULT_MAX_CONTEXT_TOKENS,
+        providerId: 'codex-cli',
+        providerDisplayName: 'Codex CLI · 本机登录',
+        modelId: session.modelId,
+        managedByFleet: false,
+        createdAt: session.lastActivityAt,
+      };
+      assignPaletteIfNeeded(agent, this.store);
+      this.applyCodexVisualStatus(agent, session.status);
+      agent.usageTokens = session.tokens;
+      this.store.set(id, agent);
+      this.store.persist();
+      this.store.broadcast({ type: 'agentStatus', id, status: session.status });
+      this.publishCodexUsage(agent, session);
+      console.log(
+        `[Claude Fleet] Codex: auto-discovered external session ${session.sessionId.slice(0, 8)}...`,
+      );
+      return;
+    }
+
+    const previousStatus = agentStateToUserStatus(agent);
+    const previousActivity = agent.lastDataAt;
+    agent.cwd = session.cwd;
+    agent.projectDir = session.cwd;
+    agent.workspaceId = session.cwd;
+    agent.jsonlFile = session.filePath;
+    agent.lastDataAt = session.lastActivityAt;
+    agent.linesProcessed = Math.max(agent.linesProcessed, 1);
+    agent.modelId = session.modelId ?? agent.modelId;
+    agent.maxContextTokens = session.contextWindow ?? agent.maxContextTokens;
+    agent.usageTokens = session.tokens ?? agent.usageTokens;
+    this.applyCodexVisualStatus(agent, session.status);
+    // Refresh the control-plane session id before recording usage. Without
+    // this, the first native token snapshot would remain attached to the
+    // launch placeholder session.
+    this.syncControlInstance(agent);
+    if (session.tokens) this.store.persist();
+
+    if (previousStatus !== session.status || previousActivity !== session.lastActivityAt) {
+      this.store.broadcast({ type: 'agentStatus', id: agent.id, status: session.status });
+    }
+    this.publishCodexUsage(agent, session);
+  }
+
+  private publishCodexUsage(agent: AgentState, session: CodexSessionMetadata): void {
+    if (!session.tokens) return;
+    this.store.broadcast({
+      type: 'agentContextUsage',
+      id: agent.id,
+      contextTokens: agent.contextTokens,
+      maxContextTokens: agent.maxContextTokens,
+      usage: session.tokens,
+    });
+    this.controlService.recordLiveUsage(
+      `agent-${agent.id}`,
+      'codex-cli',
+      agent.providerDisplayName ?? 'Codex CLI · 本机登录',
+      session.modelId ?? agent.modelId,
+      session.tokens,
+      session.lastActivityAt,
+      session.durationMs,
+    );
+  }
+
+  private applyCodexVisualStatus(agent: AgentState, status: CodexDiscoveredStatus): void {
+    agent.activeToolIds.clear();
+    agent.activeToolStatuses.clear();
+    agent.activeToolNames.clear();
+    agent.isWaiting = status === 'waiting';
+    if (status === 'working') {
+      // The shared status projection uses activeToolIds as its working signal;
+      // keep the synthetic id out of activeToolStatuses so no fake tool appears.
+      agent.activeToolIds.add('codex-session-active');
+    }
+  }
+
   dispose() {
     this.claudeFleetServer?.stop();
     this.claudeFleetServer = null;
+    if (this.codexDiscoveryTimer) clearInterval(this.codexDiscoveryTimer);
+    this.codexDiscoveryTimer = null;
     this.runtime.dispose();
     this.layoutWatcher?.dispose();
     this.layoutWatcher = null;

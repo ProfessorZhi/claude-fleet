@@ -149,8 +149,8 @@ export const PROVIDER_DEFINITIONS: readonly ProviderDefinition[] = [
     runtime: 'claude-code',
     authStrategy: 'auth-token',
     // 官方双端点：国际 api.minimax.io / 中国 api.minimaxi.com。
-    // 这里给国际端点作默认；中国区用户在创建 Profile 时手动改 endpoint。
-    defaultEndpoint: 'https://api.minimax.io/anthropic',
+    // 本项目默认面向中国 Token Plan 用户；国际用户可在 Profile 中改回国际端点。
+    defaultEndpoint: 'https://api.minimaxi.com/anthropic',
     supportedModelHints: ['MiniMax-M3[1m]'],
     requiredEnv: {
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
@@ -165,7 +165,7 @@ export const PROVIDER_DEFINITIONS: readonly ProviderDefinition[] = [
       '中国区用户 endpoint 使用 https://api.minimaxi.com/anthropic。',
     source: {
       label: 'MiniMax API Docs — Claude Code',
-      url: 'https://platform.minimax.io/docs/token-plan/claude-code',
+      url: 'https://platform.minimaxi.com/docs/token-plan/claude-code',
     },
   },
 ];

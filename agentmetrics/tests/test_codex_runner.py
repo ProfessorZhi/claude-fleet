@@ -11,6 +11,7 @@ The runner is invoked via PowerShell. The "fake codex" process is a tiny
 name (``fake-codex``) so the real ``codex.exe`` on PATH is never hit.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -21,8 +22,14 @@ import unittest
 import uuid
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = REPO_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from agent_metrics.fleet_boundary import usage_record_from_summary
+
+
 RUNNER = REPO_ROOT / "scripts" / "run-codex-with-metrics.ps1"
 LOCAL_RUNS_ROOT = REPO_ROOT / ".local" / "runs"
 
@@ -53,6 +60,20 @@ def _make_named_fake_codex_dir(exit_code: int, stdout_line: str):
         """
     ).strip() + "\n"
     shim_path.write_text(body, encoding="utf-8")
+    return d, shim_basename
+
+
+def _make_json_fake_codex_dir(events, exit_code: int = 0):
+    """Create a fake Codex that emits deterministic ``exec --json`` events."""
+    d = Path(tempfile.mkdtemp(prefix="amc-fake-codex-json-"))
+    shim_basename = "fake-codex-json"
+    shim_path = d / (shim_basename + ".cmd")
+    lines = [
+        "@echo off",
+        *[f"echo {json.dumps(event, separators=(',', ':'))}" for event in events],
+        f"exit /b {exit_code}",
+    ]
+    shim_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return d, shim_basename
 
 
@@ -111,13 +132,12 @@ class TestCodexRunner(unittest.TestCase):
                     continue
                 shutil.rmtree(run_dir, ignore_errors=True)
 
-    def _run_runner(self, worktree, fake_dir, fake_basename, work_package):
+    def _run_runner(self, worktree, fake_dir, fake_basename, work_package, extra_args=None):
         env = os.environ.copy()
         env["PATH"] = str(fake_dir) + os.pathsep + env.get("PATH", "")
         # Use a unique work-package per run so the .local/runs tree stays
         # observable per-test and we can clean it up after each test.
-        proc = subprocess.run(
-            [
+        command = [
                 self.powershell,
                 "-NoProfile",
                 "-ExecutionPolicy", "Bypass",
@@ -126,13 +146,24 @@ class TestCodexRunner(unittest.TestCase):
                 "-Worktree", str(worktree),
                 "-CodexCommand", fake_basename,
                 "fake-arg-1",
-            ],
+            ]
+        if extra_args:
+            command[command.index("fake-arg-1"):command.index("fake-arg-1")] = extra_args
+        proc = subprocess.run(
+            command,
             capture_output=True,
             text=True,
             env=env,
             timeout=60,
         )
         return proc
+
+    @staticmethod
+    def _summary_path(stdout):
+        for line in stdout.splitlines():
+            if line.startswith("SUMMARY_PATH="):
+                return Path(line[len("SUMMARY_PATH="):].strip())
+        return None
 
     def _make_worktree(self):
         return Path(tempfile.mkdtemp(prefix="amc-runner-"))
@@ -182,6 +213,112 @@ class TestCodexRunner(unittest.TestCase):
                 os.path.isfile(match),
                 f"Runner reported SUMMARY_PATH={match} but the file does not exist.",
             )
+        finally:
+            shutil.rmtree(worktree, ignore_errors=True)
+            shutil.rmtree(fake_dir, ignore_errors=True)
+
+    def test_fake_codex_fleet_identity_usage_and_quota_boundary(self):
+        """Exercise Fleet identity -> runner -> summary -> UsageRecord.
+
+        The fake emits fixed usage values and a fixed thread id.  No provider
+        process or API is contacted.  Quota remains a separate account-level
+        snapshot and is never folded into tokens or duration.
+        """
+        worktree = self._make_worktree()
+        fake_dir, fake_basename = _make_json_fake_codex_dir([
+            {
+                "type": "turn.completed",
+                "event_id": "evt-fleet-001",
+                "thread_id": "thread-fleet-001",
+                "turn_ordinal": 1,
+                "timestamp": "2026-08-09T10:00:01Z",
+                "model": "gpt-5.3-codex",
+                "prompt": "must not persist",
+                "api_key": "sk-test-secret",
+                "usage": {
+                    "input_tokens": 120,
+                    "cached_input_tokens": 10,
+                    "cache_write_input_tokens": 5,
+                    "output_tokens": 45,
+                    "reasoning_output_tokens": 15,
+                },
+            }
+        ])
+        fleet_args = [
+            "-FleetRunId", "mission-fake-001",
+            "-FleetTaskId", "task-fake-001",
+            "-FleetWorkerId", "worker-fake-001",
+            "-FleetCoordinatorId", "coordinator-fake-001",
+            "-ParentWorkerId", "worker-parent-001",
+            "-WorkerRole", "implementer",
+            "-WorktreeId", "worktree-fake-001",
+            "-Attempt", "2",
+        ]
+        try:
+            proc = self._run_runner(
+                worktree,
+                fake_dir,
+                fake_basename,
+                "WP-FLEET-BOUNDARY",
+                extra_args=fleet_args,
+            )
+            self.assertEqual(
+                proc.returncode,
+                0,
+                msg=f"Expected exit 0; got {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}",
+            )
+            summary_path = self._summary_path(proc.stdout)
+            self.assertIsNotNone(summary_path, "Runner did not emit SUMMARY_PATH=")
+            self.assertTrue(summary_path.is_file(), f"Missing summary: {summary_path}")
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(summary["fleet"], {
+                "fleet_run_id": "mission-fake-001",
+                "fleet_task_id": "task-fake-001",
+                "fleet_worker_id": "worker-fake-001",
+                "fleet_coordinator_id": "coordinator-fake-001",
+                "parent_worker_id": "worker-parent-001",
+                "worker_role": "implementer",
+                "worktree_id": "worktree-fake-001",
+                "attempt": 2,
+            })
+            self.assertEqual(summary["usage"]["collection_status"], "COMPLETE")
+            self.assertEqual(summary["usage"]["input_tokens"], 120)
+            self.assertEqual(summary["usage"]["output_tokens"], 45)
+            self.assertEqual(summary["usage"]["reasoning_tokens"], 15)
+            self.assertEqual(summary["usage"]["cache_read_tokens"], 10)
+            self.assertEqual(summary["usage"]["cache_write_tokens"], 5)
+            # total_tokens is input + output; cache/reasoning buckets are not
+            # added again because they are sub-buckets, not extra requests.
+            self.assertEqual(summary["usage"]["total_tokens"], 165)
+            self.assertEqual(summary["session"]["agent_session_id"], "thread-fleet-001")
+            self.assertGreaterEqual(summary["timing"]["agent_process_seconds"], 0.0)
+
+            quota_json = json.dumps(summary["quota"], sort_keys=True)
+            self.assertEqual(summary["quota"]["scope"], "ACCOUNT")
+            self.assertEqual(summary["quota"]["attribution"], "NOT_PROVEN")
+            self.assertNotIn("total_tokens", quota_json)
+            self.assertNotIn("input_tokens", quota_json)
+            self.assertNotIn("output_tokens", quota_json)
+            self.assertNotIn("must not persist", json.dumps(summary, sort_keys=True))
+            self.assertNotIn("sk-test-secret", json.dumps(summary, sort_keys=True))
+
+            record = usage_record_from_summary(summary, usage_id="usage-fake-001")
+            self.assertEqual(record["instanceId"], "worker-fake-001")
+            self.assertEqual(record["workItemId"], "task-fake-001")
+            self.assertEqual(record["sessionId"], "thread-fleet-001")
+            self.assertEqual(record["tokens"], {
+                "inputTokens": 120,
+                "cachedInputTokens": 10,
+                "outputTokens": 45,
+                "totalTokens": 165,
+            })
+            self.assertNotIn("quota", record)
+            self.assertEqual(record["source"], "agentmetrics")
+            # The fake has token usage but no provider invoice. The derived
+            # API-equivalent cost is therefore an estimate, never a metered
+            # actual cost.
+            self.assertEqual(record["estimateOrActual"], "estimate")
         finally:
             shutil.rmtree(worktree, ignore_errors=True)
             shutil.rmtree(fake_dir, ignore_errors=True)

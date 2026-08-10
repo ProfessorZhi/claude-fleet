@@ -67,11 +67,28 @@ export interface WorkspaceFolder {
   path: string;
 }
 
+export interface AgentInfo {
+  displayName?: string;
+  providerProfileId?: string;
+  providerDisplayName?: string;
+  modelId?: string;
+  runtime?: string;
+  createdAt?: number;
+  managedByFleet?: boolean;
+  usageTokens?: {
+    inputTokens?: number;
+    cachedInputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
+}
+
 interface ExtensionMessageState {
   agents: number[];
   selectedAgent: number | null;
   agentTools: Record<number, ToolActivity[]>;
   agentStatuses: Record<number, string>;
+  agentInfo: Record<number, AgentInfo>;
   subagentTools: Record<number, Record<string, ToolActivity[]>>;
   subagentCharacters: SubagentCharacter[];
   layoutReady: boolean;
@@ -116,6 +133,7 @@ export function useExtensionMessages(
   const [selectedAgent, setSelectedAgent] = useState<number | null>(null);
   const [agentTools, setAgentTools] = useState<Record<number, ToolActivity[]>>({});
   const [agentStatuses, setAgentStatuses] = useState<Record<number, string>>({});
+  const [agentInfo, setAgentInfo] = useState<Record<number, AgentInfo>>({});
   const [subagentTools, setSubagentTools] = useState<
     Record<number, Record<string, ToolActivity[]>>
   >({});
@@ -154,6 +172,7 @@ export function useExtensionMessages(
   // agentToolsClear must NOT remove them — despawning and re-creating moved the
   // character to a new tile every turn. Cleared by subagentClear/agentClosed.
   const backgroundParentToolIdsRef = useRef<Record<number, Set<string>>>({});
+  const previousStatusRef = useRef<Record<number, string>>({});
 
   useEffect(() => {
     // Buffer agents from existingAgents until layout is loaded
@@ -217,6 +236,7 @@ export function useExtensionMessages(
         // Add buffered agents now that layout (and seats) are correct
         for (const p of pendingAgents) {
           os.addAgent(p.id, p.palette, p.hueShift, p.seatId, true, p.folderName);
+          os.setDisplayName(p.id, p.displayName);
           if (p.isHeadless) os.setHeadless(p.id, true);
         }
         pendingAgents = [];
@@ -235,6 +255,16 @@ export function useExtensionMessages(
         const teammateName = msg.teammateName as string | undefined;
         const teammateParentId = msg.parentAgentId as number | undefined;
         const teamName = msg.teamName as string | undefined;
+        const info: AgentInfo = {
+          displayName: msg.displayName as string | undefined,
+          providerProfileId: msg.providerProfileId as string | undefined,
+          providerDisplayName: msg.providerDisplayName as string | undefined,
+          modelId: msg.modelId as string | undefined,
+          runtime: msg.runtime as string | undefined,
+          createdAt: msg.createdAt as number | undefined,
+          managedByFleet: msg.managedByFleet as boolean | undefined,
+        };
+        setAgentInfo((prev) => ({ ...prev, [id]: info }));
         setAgents((prev) => (prev.includes(id) ? prev : [...prev, id]));
         // Don't auto-select teammates (keep focus on lead)
         if (!isTeammate) {
@@ -268,6 +298,7 @@ export function useExtensionMessages(
           const palette = msg.palette as number | undefined;
           const hueShift = msg.hueShift as number | undefined;
           os.addAgent(id, palette, hueShift, undefined, undefined, folderName);
+          os.setDisplayName(id, info.displayName);
           noteFolderName(folderName);
           if (isHeadlessAgent(msg.isExternal as boolean | undefined)) {
             os.setHeadless(id, true);
@@ -276,6 +307,7 @@ export function useExtensionMessages(
         saveAgentSeats(os);
       } else if (msg.type === 'agentClosed') {
         const id = msg.id as number;
+        delete previousStatusRef.current[id];
         setAgents((prev) => prev.filter((a) => a !== id));
         setSelectedAgent((prev) => (prev === id ? null : prev));
         setAgentTools((prev) => {
@@ -285,6 +317,12 @@ export function useExtensionMessages(
           return next;
         });
         setAgentStatuses((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        setAgentInfo((prev) => {
           if (!(id in prev)) return prev;
           const next = { ...prev };
           delete next[id];
@@ -306,6 +344,27 @@ export function useExtensionMessages(
         const meta = (msg.agentMeta || {}) as Record<number, ExistingAgentMeta>;
         const folderNames = (msg.folderNames || {}) as Record<number, string>;
         const externalAgents = (msg.externalAgents || {}) as Record<number, boolean>;
+        const displayNames = (msg.displayNames || {}) as Record<number, string>;
+        const providerDisplayNames = (msg.providerDisplayNames || {}) as Record<number, string>;
+        const modelIds = (msg.modelIds || {}) as Record<number, string>;
+        const runtimes = (msg.runtimes || {}) as Record<number, string>;
+        const createdAt = (msg.createdAt || {}) as Record<number, number>;
+        const managedByFleet = (msg.managedByFleet || {}) as Record<number, boolean>;
+        setAgentInfo((prev) => {
+          const next = { ...prev };
+          for (const id of incoming) {
+            next[id] = {
+              ...next[id],
+              displayName: displayNames[id],
+              providerDisplayName: providerDisplayNames[id],
+              modelId: modelIds[id],
+              runtime: runtimes[id],
+              createdAt: createdAt[id],
+              managedByFleet: managedByFleet[id],
+            };
+          }
+          return next;
+        });
         const headlessAgents: Record<number, boolean> = {};
         for (const id of incoming) {
           noteFolderName(folderNames[id]);
@@ -324,6 +383,7 @@ export function useExtensionMessages(
             layoutReadyRef.current,
             pendingAgents,
             headlessAgents,
+            displayNames,
           )
         ) {
           saveAgentSeats(os);
@@ -350,7 +410,13 @@ export function useExtensionMessages(
             ...prev,
             [id]: [
               ...list,
-              { toolId, status, done: false, permissionWait: permissionActive || false },
+              {
+                toolId,
+                status,
+                toolName: msg.toolName as string | undefined,
+                done: false,
+                permissionWait: permissionActive || false,
+              },
             ],
           };
         });
@@ -458,6 +524,8 @@ export function useExtensionMessages(
       } else if (msg.type === 'agentStatus') {
         const id = msg.id as number;
         const status = msg.status as string;
+        const previousStatus = previousStatusRef.current[id];
+        previousStatusRef.current[id] = status;
         // Spec 003 — agentStatuses now records the *current user-facing status*
         // (starting/working/waiting/idle/error/stopped) instead of "waiting
         // only". 'active' is tolerated as a legacy alias of 'working' and is
@@ -465,8 +533,12 @@ export function useExtensionMessages(
         setAgentStatuses((prev) => ({ ...prev, [id]: status }));
         os.setAgentActive(id, status === 'working' || status === 'active');
         if (status === 'waiting') {
-          os.showWaitingBubble(id, msg.awaitingInput === true);
-          playDoneSound();
+          const awaitingInput = msg.awaitingInput === true;
+          os.showWaitingBubble(id, awaitingInput);
+          if (!awaitingInput && previousStatus !== 'waiting') {
+            os.markCompletionUnread(id);
+            playDoneSound();
+          }
         }
       } else if (msg.type === 'agentToolPermission') {
         const id = msg.id as number;
@@ -518,7 +590,13 @@ export function useExtensionMessages(
           if (list.some((t) => t.toolId === toolId)) return prev;
           return {
             ...prev,
-            [id]: { ...agentSubs, [parentToolId]: [...list, { toolId, status, done: false }] },
+            [id]: {
+              ...agentSubs,
+              [parentToolId]: [
+                ...list,
+                { toolId, status, toolName: msg.toolName as string | undefined, done: false },
+              ],
+            },
           };
         });
         // Update sub-agent character's tool and active state. The sub-agent is
@@ -682,6 +760,17 @@ export function useExtensionMessages(
       } else if (msg.type === 'agentContextUsage') {
         const id = msg.id as number;
         os.setAgentContext(id, msg.contextTokens as number, msg.maxContextTokens as number);
+        os.setAgentUsage(id, msg.usage);
+        // OfficeState is intentionally mutable for the pixel renderer. Mirror
+        // the usage snapshot in React state as well so the non-office
+        // projections re-render immediately when token telemetry arrives.
+        setAgentInfo((prev) => ({
+          ...prev,
+          [id]: {
+            ...prev[id],
+            usageTokens: msg.usage as AgentInfo['usageTokens'],
+          },
+        }));
       }
     };
     const unsubscribe = transport.onMessage(handler);
@@ -689,6 +778,18 @@ export function useExtensionMessages(
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getOfficeState]);
+
+  // Diagnostics used to be owned by DebugView. That meant the default task
+  // control center never asked the extension to re-evaluate stale terminals,
+  // so a dead Claude process could remain displayed as "Starting" forever.
+  // Keep one transport-wide poll here so every projection receives the same
+  // status refresh, including the control center and Fleet Command views.
+  useEffect(() => {
+    const request = () => transport.send({ type: 'requestDiagnostics' });
+    request();
+    const interval = window.setInterval(request, 2000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   // Idle sub-agent characters between their turns: when every tracked tool row
   // for a sub is done, stop its typing animation (a later subagentToolStart
@@ -710,6 +811,7 @@ export function useExtensionMessages(
     selectedAgent,
     agentTools,
     agentStatuses,
+    agentInfo,
     subagentTools,
     subagentCharacters,
     layoutReady,

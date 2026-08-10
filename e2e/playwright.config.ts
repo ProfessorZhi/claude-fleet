@@ -39,7 +39,9 @@ export default defineConfig({
   use: {
     video: 'on',
   },
-  // Default to one worker locally; CI can override this with --workers.
+  // Preserve the serial default for compatibility. The runner exposes an
+  // explicit `e2e:parallel` entry, and callers can override this with
+  // `--workers=N` after confirming their machine has enough CPU/RAM.
   workers: 1,
   // Shard distribution at test level (not file level). Without this, Playwright
   // shards by file: hooks-on/lifecycle.spec.ts alone has 22 tests (47% of the

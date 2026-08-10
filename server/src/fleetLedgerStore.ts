@@ -12,13 +12,27 @@ import {
   validateLedgerPayload,
   type WorkItemRecord,
 } from '../../core/src/ledgerContracts.js';
+import type { WorktreeRecord } from '../../core/src/runtimeContracts.js';
+import {
+  assertSnapshotSafe,
+  FLEET_LEDGER_SNAPSHOT_SCHEMA,
+  FLEET_LEDGER_SNAPSHOT_VERSION,
+  type FleetLedgerSnapshot,
+  type FleetSnapshotPersistence,
+} from './persistence/fleetSnapshotPersistence.js';
+
+export interface FleetLedgerStoreOptions {
+  persistence?: FleetSnapshotPersistence;
+  snapshot?: FleetLedgerSnapshot;
+}
 
 /**
  * Small in-memory ledger for the management plane.
  *
  * The ledger stores bounded, secret-free metadata only. It intentionally does
  * not persist transcripts, run scheduling, spawn runtimes, or act as a cloud
- * database. A durable adapter can be added later without changing callers.
+ * database. An optional local snapshot adapter can persist the same bounded
+ * metadata without changing the default in-memory behavior.
  */
 export class FleetLedgerStore {
   private readonly missions = new Map<string, MissionRecord>();
@@ -32,6 +46,18 @@ export class FleetLedgerStore {
   private readonly controlDecisions = new Map<string, ControlDecisionRecord>();
   private readonly performance = new Map<string, AgentPerformanceAggregate>();
   private readonly resources = new Map<string, ResourceAccount>();
+  private readonly worktrees = new Map<string, WorktreeRecord>();
+  private readonly persistence?: FleetSnapshotPersistence;
+  private revision = 0;
+
+  constructor(options: FleetLedgerStoreOptions = {}) {
+    this.persistence = options.persistence;
+    const snapshot = options.snapshot ?? this.persistence?.load();
+    if (snapshot) {
+      this.revision = snapshot.revision ?? 0;
+      this.restore(snapshot);
+    }
+  }
 
   upsertMission(record: MissionRecord): void {
     this.put(this.missions, record.missionId, record);
@@ -67,9 +93,11 @@ export class FleetLedgerStore {
     return this.read(this.sessions.get(sessionId));
   }
 
-  listSessions(instanceId?: string): SessionRecord[] {
+  listSessions(instanceId?: string, workItemId?: string): SessionRecord[] {
     return this.list(this.sessions).filter(
-      (record) => !instanceId || record.instanceId === instanceId,
+      (record) =>
+        (!instanceId || record.instanceId === instanceId) &&
+        (!workItemId || record.workItemId === workItemId),
     );
   }
 
@@ -91,9 +119,11 @@ export class FleetLedgerStore {
     this.put(this.usage, record.usageId, record);
   }
 
-  listUsage(instanceId?: string): UsageRecord[] {
+  listUsage(instanceId?: string, workItemId?: string): UsageRecord[] {
     return this.list(this.usage).filter(
-      (record) => !instanceId || record.instanceId === instanceId,
+      (record) =>
+        (!instanceId || record.instanceId === instanceId) &&
+        (!workItemId || record.workItemId === workItemId),
     );
   }
 
@@ -159,7 +189,113 @@ export class FleetLedgerStore {
     return this.list(this.resources);
   }
 
+  upsertWorktree(record: WorktreeRecord): void {
+    this.put(this.worktrees, record.worktreeId, record);
+  }
+
+  getWorktree(worktreeId: string): WorktreeRecord | undefined {
+    return this.read(this.worktrees.get(worktreeId));
+  }
+
+  listWorktrees(): WorktreeRecord[] {
+    return this.list(this.worktrees);
+  }
+
+  snapshot(): FleetLedgerSnapshot {
+    return this.snapshotAt(this.revision);
+  }
+
+  private snapshotAt(revision: number): FleetLedgerSnapshot {
+    return {
+      schema: FLEET_LEDGER_SNAPSHOT_SCHEMA,
+      version: FLEET_LEDGER_SNAPSHOT_VERSION,
+      revision,
+      missions: this.list(this.missions),
+      workItems: this.list(this.workItems),
+      sessions: this.list(this.sessions),
+      launches: this.list(this.launches),
+      usage: this.list(this.usage),
+      quotas: this.list(this.quotas),
+      quality: this.list(this.quality),
+      assignments: this.list(this.assignments),
+      controlDecisions: this.list(this.controlDecisions),
+      performance: this.list(this.performance),
+      resources: this.list(this.resources),
+      worktrees: this.list(this.worktrees),
+    };
+  }
+
   clear(): void {
+    const previous = this.snapshot();
+    this.clearMaps();
+    try {
+      this.persist();
+    } catch (error) {
+      this.clearMaps();
+      this.restore(previous);
+      throw error;
+    }
+  }
+
+  private put<T>(records: Map<string, T>, id: string, record: T): void {
+    if (!id.trim()) throw new Error('Ledger records require a non-empty identifier.');
+    const errors = validateLedgerPayload(record);
+    if (errors.length > 0) throw new Error(errors[0]);
+    const previous = records.get(id);
+    records.set(id, cloneRecord(record));
+    try {
+      this.persist();
+    } catch (error) {
+      if (previous === undefined) records.delete(id);
+      else records.set(id, previous);
+      throw error;
+    }
+  }
+
+  private read<T>(record: T | undefined): T | undefined {
+    return record === undefined ? undefined : cloneRecord(record);
+  }
+
+  private list<T>(records: Map<string, T>): T[] {
+    return [...records.values()].map((record) => cloneRecord(record));
+  }
+
+  private restore(snapshot: FleetLedgerSnapshot): void {
+    assertSnapshotSafe(snapshot);
+    this.restoreMap(this.missions, snapshot.missions, 'missionId');
+    this.restoreMap(this.workItems, snapshot.workItems, 'workItemId');
+    this.restoreMap(this.sessions, snapshot.sessions, 'sessionId');
+    this.restoreMap(this.launches, snapshot.launches, 'launchId');
+    this.restoreMap(this.usage, snapshot.usage, 'usageId');
+    this.restoreMap(this.quotas, snapshot.quotas, 'snapshotId');
+    this.restoreMap(this.quality, snapshot.quality, 'signalId');
+    this.restoreMap(this.assignments, snapshot.assignments, 'decisionId');
+    this.restoreMap(this.controlDecisions, snapshot.controlDecisions, 'decisionId');
+    this.restoreMap(this.performance, snapshot.performance, 'aggregateId');
+    this.restoreMap(this.resources, snapshot.resources, 'resourceAccountId');
+    this.restoreMap(this.worktrees, snapshot.worktrees, 'worktreeId');
+  }
+
+  private restoreMap<T, K extends keyof T>(target: Map<string, T>, records: T[], idKey: K): void {
+    for (const record of records) {
+      const id = record[idKey];
+      if (typeof id !== 'string' || !id.trim()) {
+        throw new Error('Ledger snapshot contains a record without an identifier.');
+      }
+      target.set(id, cloneRecord(record));
+    }
+  }
+
+  private persist(): void {
+    if (!this.persistence) return;
+    const nextRevision = this.revision + 1;
+    this.persistence.save(this.snapshotAt(nextRevision), {
+      expectedRevision: this.revision,
+    });
+    this.revision = nextRevision;
+  }
+
+  private clearMaps(): void {
     for (const records of [
       this.missions,
       this.workItems,
@@ -172,24 +308,10 @@ export class FleetLedgerStore {
       this.controlDecisions,
       this.performance,
       this.resources,
+      this.worktrees,
     ]) {
       records.clear();
     }
-  }
-
-  private put<T>(records: Map<string, T>, id: string, record: T): void {
-    if (!id.trim()) throw new Error('Ledger records require a non-empty identifier.');
-    const errors = validateLedgerPayload(record);
-    if (errors.length > 0) throw new Error(errors[0]);
-    records.set(id, cloneRecord(record));
-  }
-
-  private read<T>(record: T | undefined): T | undefined {
-    return record === undefined ? undefined : cloneRecord(record);
-  }
-
-  private list<T>(records: Map<string, T>): T[] {
-    return [...records.values()].map((record) => cloneRecord(record));
   }
 }
 

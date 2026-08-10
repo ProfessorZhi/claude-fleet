@@ -1,0 +1,340 @@
+.vessel-sprite {
+  --vessel-cyan: #5ee7ff;
+  --vessel-violet: #9c7dff;
+  --vessel-hull-light: #334b64;
+  --vessel-hull-mid: #18293d;
+  --vessel-hull-dark: #0a1422;
+  --vessel-metal: #24384e;
+  --vessel-metal-dark: #0a1422;
+  --vessel-status: #8095ad;
+  --vessel-status-bright: #b1c5d9;
+  --vessel-thruster: 0.18;
+  --vessel-glow: 0;
+  --vessel-alarm: 0;
+  display: inline-block;
+  width: min(100%, 18rem);
+  min-width: 8rem;
+  aspect-ratio: 5 / 3;
+  color: var(--vessel-cyan);
+  contain: layout paint;
+}
+
+.vessel-sprite__graphic {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.vessel-sprite__motion {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.vessel-sprite__shadow {
+  fill: #02060d;
+  opacity: 0.72;
+}
+
+.vessel-sprite__hull {
+  stroke: #6c8299;
+  stroke-width: 2;
+  stroke-linejoin: bevel;
+}
+
+.vessel-sprite__hull-edge,
+.vessel-sprite__keel,
+.vessel-sprite__spine,
+.vessel-sprite__panel-line,
+.vessel-sprite__core-line,
+.vessel-sprite__module-edge,
+.vessel-sprite__module-line,
+.vessel-sprite__sensor-line {
+  fill: none;
+  stroke: #7590a7;
+  stroke-width: 1.5;
+  stroke-linecap: square;
+  stroke-linejoin: bevel;
+  opacity: 0.78;
+}
+
+.vessel-sprite__hull-edge {
+  stroke: var(--vessel-cyan);
+  opacity: 0.65;
+}
+
+.vessel-sprite__keel {
+  stroke: var(--vessel-violet);
+  opacity: 0.55;
+}
+
+.vessel-sprite__spine {
+  stroke: #9db1c4;
+  opacity: 0.35;
+}
+
+.vessel-sprite__core {
+  opacity: 0.6;
+}
+
+.vessel-sprite__module-fill {
+  fill: #182b40;
+  stroke: #607b94;
+  stroke-width: 1.5;
+  stroke-linejoin: bevel;
+}
+
+.vessel-sprite__module-window {
+  fill: #77eaff;
+  opacity: 0.58;
+}
+
+.vessel-sprite__module-signal,
+.vessel-sprite__status-light {
+  fill: var(--vessel-status);
+}
+
+.vessel-sprite__module-signal {
+  filter: drop-shadow(0 0 3px var(--vessel-status));
+}
+
+.vessel-sprite__sensor-ring {
+  fill: none;
+  stroke: var(--vessel-cyan);
+  stroke-width: 2;
+  stroke-dasharray: 2 3;
+  opacity: 0.8;
+}
+
+.vessel-sprite__status-light--violet {
+  fill: var(--vessel-violet);
+}
+
+.vessel-sprite__thruster-flare,
+.vessel-sprite__thruster-core {
+  transform-origin: center;
+  transform-box: fill-box;
+  opacity: var(--vessel-thruster);
+}
+
+.vessel-sprite__thruster-flare {
+  fill: var(--vessel-violet);
+  filter: drop-shadow(0 0 4px var(--vessel-violet));
+}
+
+.vessel-sprite__thruster-core {
+  fill: var(--vessel-cyan);
+}
+
+.vessel-sprite__alarm {
+  fill: #ff5369;
+  stroke: #ffb2bc;
+  stroke-width: 1.5;
+  opacity: var(--vessel-alarm);
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+.vessel-sprite__scanline {
+  stroke: var(--vessel-cyan);
+  stroke-width: 1;
+  stroke-dasharray: 1 8;
+  opacity: 0;
+}
+
+.vessel-sprite__runtime-badge rect {
+  fill: rgba(5, 14, 26, 0.86);
+  stroke: var(--vessel-cyan);
+  stroke-width: 1;
+}
+
+.vessel-sprite__runtime-badge text {
+  fill: var(--vessel-cyan);
+  font-family: var(--vscode-font-family, sans-serif);
+  font-size: 6px;
+  letter-spacing: 0.04em;
+}
+
+.vessel-sprite__selection-ring {
+  display: none;
+  fill: none;
+  stroke: var(--vessel-cyan);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 4;
+  opacity: 0.9;
+}
+
+.vessel-sprite__completion-pulse {
+  fill: none;
+  stroke: var(--vessel-cyan);
+  stroke-width: 2;
+  opacity: 0;
+}
+
+.vessel-sprite[data-selected='true'] .vessel-sprite__selection-ring {
+  display: block;
+  animation: vessel-selection 1.8s linear infinite;
+}
+
+.vessel-sprite[data-completion-pulse='true'] .vessel-sprite__completion-pulse {
+  animation: vessel-completion 800ms ease-out;
+}
+
+.vessel-sprite[data-role='coordinator'] [data-role-module]:not([data-role-module='coordinator']),
+.vessel-sprite[data-role='worker'] [data-role-module]:not([data-role-module='worker']),
+.vessel-sprite[data-role='reviewer'] [data-role-module]:not([data-role-module='reviewer']),
+.vessel-sprite[data-role='debugger'] [data-role-module]:not([data-role-module='debugger']),
+.vessel-sprite[data-role='subagent'] [data-role-module]:not([data-role-module='subagent']),
+.vessel-sprite[data-role='external'] [data-role-module]:not([data-role-module='external']) {
+  display: none;
+}
+
+.vessel-sprite[data-status='working'] {
+  --vessel-status: #5ee7ff;
+  --vessel-status-bright: #d9fbff;
+  --vessel-thruster: 0.9;
+  --vessel-glow: 1;
+}
+
+.vessel-sprite[data-status='starting'] {
+  --vessel-status: #5ee7ff;
+  --vessel-thruster: 0.9;
+  --vessel-glow: 1;
+}
+
+.vessel-sprite[data-status='starting'] .vessel-sprite__thruster-core {
+  animation: vessel-thruster 500ms ease-in-out infinite alternate;
+}
+
+.vessel-sprite[data-status='working'] .vessel-sprite__motion {
+  animation: vessel-cruise 4s ease-in-out infinite;
+}
+
+.vessel-sprite[data-status='working'] .vessel-sprite__thruster-core {
+  animation: vessel-thruster 680ms ease-in-out infinite alternate;
+}
+
+.vessel-sprite[data-status='working'] .vessel-sprite__status-light {
+  filter: drop-shadow(0 0 3px var(--vessel-status));
+}
+
+.vessel-sprite[data-status='working'] .vessel-sprite__scanline {
+  opacity: 0.35;
+  animation: vessel-scan 2.4s linear infinite;
+}
+
+.vessel-sprite[data-status='waiting'] {
+  --vessel-status: #ffc857;
+  --vessel-status-bright: #ffe5a0;
+  --vessel-thruster: 0.34;
+}
+
+.vessel-sprite[data-status='waiting'] .vessel-sprite__status-light {
+  animation: vessel-blink 2.8s ease-in-out infinite;
+}
+
+.vessel-sprite[data-status='error'] {
+  --vessel-status: #ff5369;
+  --vessel-status-bright: #ffd1d7;
+  --vessel-thruster: 0.08;
+  --vessel-alarm: 1;
+}
+
+.vessel-sprite[data-status='error'] .vessel-sprite__alarm {
+  animation: vessel-alarm 900ms ease-in-out infinite;
+}
+
+.vessel-sprite[data-status='idle'] {
+  --vessel-status: #7f9ab2;
+  --vessel-thruster: 0.22;
+}
+
+.vessel-sprite[data-status='stopped'] {
+  --vessel-status: #59697c;
+  --vessel-thruster: 0;
+  filter: saturate(0.45) brightness(0.74);
+}
+
+@keyframes vessel-cruise {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -2px, 0);
+  }
+}
+
+@keyframes vessel-thruster {
+  from {
+    transform: scaleX(0.82);
+  }
+  to {
+    transform: scaleX(1.12);
+  }
+}
+
+@keyframes vessel-scan {
+  from {
+    transform: translateX(-18px);
+  }
+  to {
+    transform: translateX(18px);
+  }
+}
+
+@keyframes vessel-blink {
+  0%,
+  65%,
+  100% {
+    opacity: 0.52;
+  }
+  75% {
+    opacity: 1;
+  }
+}
+
+@keyframes vessel-alarm {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes vessel-selection {
+  to {
+    stroke-dashoffset: -14;
+  }
+}
+
+@keyframes vessel-completion {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.55);
+    transform-origin: center;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.35);
+    transform-origin: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vessel-sprite__motion,
+  .vessel-sprite__thruster-core,
+  .vessel-sprite__scanline,
+  .vessel-sprite__status-light,
+  .vessel-sprite__alarm {
+    animation: none !important;
+  }
+
+  .vessel-sprite[data-selected='true'] .vessel-sprite__selection-ring {
+    animation: none !important;
+  }
+}
