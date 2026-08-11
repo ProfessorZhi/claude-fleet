@@ -33,6 +33,91 @@ function seed(overrides: Partial<FleetTelemetrySnapshot> = {}): Partial<FleetTel
 }
 
 describe('FleetTelemetryStore', () => {
+  it('projects tool lifecycle without heartbeat or duplicate-event pollution', () => {
+    const store = new FleetTelemetryStore();
+
+    store.consume(
+      event({
+        eventId: 'tool-started',
+        eventType: 'tool_started',
+        observedAt: 10,
+        status: 'working',
+        currentTool: 'Read',
+      }),
+    );
+    expect(store.getSnapshot('agent-1')).toMatchObject({
+      status: 'working',
+      currentTool: 'Read',
+      lastActivityAt: 10,
+    });
+
+    store.consume(event({ eventId: 'heartbeat-1', eventType: 'working', observedAt: 11 }));
+    expect(store.getSnapshot('agent-1')).toMatchObject({
+      status: 'working',
+      currentTool: 'Read',
+      lastActivityAt: 11,
+    });
+
+    store.consume(
+      event({
+        eventId: 'heartbeat-1',
+        eventType: 'waiting',
+        observedAt: 99,
+        currentTool: 'Edit',
+      }),
+    );
+    expect(store.getSnapshot('agent-1')).toMatchObject({
+      status: 'working',
+      currentTool: 'Read',
+      lastActivityAt: 11,
+    });
+
+    store.consume(
+      event({
+        eventId: 'tool-finished',
+        eventType: 'tool_finished',
+        observedAt: 12,
+        currentTool: 'Read',
+      }),
+    );
+    const snapshot = store.getSnapshot('agent-1');
+    expect(snapshot).toMatchObject({ status: 'working', lastActivityAt: 12 });
+    expect(snapshot?.currentTool).toBeUndefined();
+    expect(snapshot?.recentEvents.map((item) => item.eventId)).toEqual([
+      'tool-started',
+      'heartbeat-1',
+      'tool-finished',
+    ]);
+
+    store.consume(
+      event({ eventId: 'heartbeat-after-finish', eventType: 'working', observedAt: 13 }),
+    );
+    store.consume(
+      event({
+        eventId: 'tool-finished',
+        eventType: 'tool_finished',
+        observedAt: 100,
+        currentTool: 'Edit',
+      }),
+    );
+
+    const finalSnapshot = store.getSnapshot('agent-1');
+    expect(finalSnapshot).toMatchObject({ status: 'working', lastActivityAt: 13 });
+    expect(finalSnapshot?.currentTool).toBeUndefined();
+    expect(finalSnapshot?.recentEvents.map((item) => item.eventId)).toEqual([
+      'tool-started',
+      'heartbeat-1',
+      'tool-finished',
+      'heartbeat-after-finish',
+    ]);
+    expect(store.getProjection().recentEvents.map((item) => item.eventId)).toEqual([
+      'tool-started',
+      'heartbeat-1',
+      'tool-finished',
+      'heartbeat-after-finish',
+    ]);
+  });
+
   it('deduplicates event ids and bounds global and per-instance history', () => {
     const store = new FleetTelemetryStore(2);
 
