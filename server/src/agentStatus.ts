@@ -97,8 +97,10 @@ export function agentStateToUserStatus(agent: AgentState): UserFacingStatus {
  * - the transcript delivered data before (`linesProcessed > 0`) but the file
  *   is now gone → error;
  * - a terminal-launched (non-external, non-hooksOnly) agent never produced a
- *   transcript and `now - createdAt > JSONL_ERROR_GRACE_MS` → error (launch
- *   failure). Without `createdAt` (restored agents) this rule is skipped.
+ *   transcript and `now - createdAt > JSONL_ERROR_GRACE_MS`, after its
+ *   terminal has exited → error (launch failure). A live terminal is still
+ *   waiting for its first user input, so it remains starting. Without
+ *   `createdAt` (restored agents) this rule is skipped.
  */
 export const JSONL_ERROR_GRACE_MS = 30_000;
 
@@ -106,6 +108,8 @@ export function agentStateToUserStatusWithError(
   agent: AgentState,
   opts: { jsonlExists: boolean; createdAt: number | undefined; now: number },
 ): UserFacingStatus {
+  const terminalAlive =
+    agent.terminalRef !== undefined && agent.terminalRef.exitStatus === undefined;
   if (agent.linesProcessed > 0 && !opts.jsonlExists) {
     return normalizeAgentStatus({ error: true });
   }
@@ -114,7 +118,8 @@ export function agentStateToUserStatusWithError(
     !agent.hooksOnly &&
     !opts.jsonlExists &&
     opts.createdAt !== undefined &&
-    opts.now - opts.createdAt > JSONL_ERROR_GRACE_MS
+    opts.now - opts.createdAt > JSONL_ERROR_GRACE_MS &&
+    !terminalAlive
   ) {
     return normalizeAgentStatus({ error: true });
   }

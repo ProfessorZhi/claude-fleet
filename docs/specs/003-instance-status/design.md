@@ -85,8 +85,11 @@ export type UserFacingStatus =
 fs + 时间的地方）
 
 - JSONL 曾经有数据（`linesProcessed > 0`）但现在文件不存在 → `error`；
-- 非 external、非 hooksOnly、JSONL 从未出现且 `now - createdAt > 30_000` →
-  `error`（启动后 30s 连 transcript 都没有，判定启动失败）。
+- 非 external、非 hooksOnly、JSONL 从未出现、终端已经退出且
+  `now - createdAt > 30_000` → `error`（启动后 30s 连 transcript 都没有，且
+  终端已结束，判定启动失败）。
+- 终端仍存活（`terminalRef?.exitStatus === undefined`）时，即使超过 30s 仍无
+  transcript，也保持 `starting`，因为 Claude 可能还在等待用户的首条输入。
 - 其余情况交给 `normalizeAgentStatus` 的默认优先级。
 
 ### 广播
