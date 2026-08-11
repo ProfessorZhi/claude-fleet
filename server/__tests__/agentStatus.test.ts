@@ -166,6 +166,34 @@ describe('agentStateToUserStatusWithError — time-injected heuristics', () => {
     ).toBe('error');
   });
 
+  it('live terminal with no transcript remains starting after grace period', () => {
+    const agent = makeAgent({
+      createdAt: NOW - JSONL_ERROR_GRACE_MS - 1,
+      terminalRef: { exitStatus: undefined } as never,
+    });
+    expect(
+      agentStateToUserStatusWithError(agent, {
+        jsonlExists: false,
+        createdAt: NOW - JSONL_ERROR_GRACE_MS - 1,
+        now: NOW,
+      }),
+    ).toBe('starting');
+  });
+
+  it('exited terminal with no transcript still reports launch error', () => {
+    const agent = makeAgent({
+      createdAt: NOW - JSONL_ERROR_GRACE_MS - 1,
+      terminalRef: { exitStatus: { code: 1, reason: 1 } } as never,
+    });
+    expect(
+      agentStateToUserStatusWithError(agent, {
+        jsonlExists: false,
+        createdAt: NOW - JSONL_ERROR_GRACE_MS - 1,
+        now: NOW,
+      }),
+    ).toBe('error');
+  });
+
   it('within grace period with no transcript → starting (not yet error)', () => {
     const agent = makeAgent({ createdAt: NOW - 1_000 });
     expect(
