@@ -17,12 +17,12 @@
 
 ## C. Fleet identity contract
 
-- [ ] C1. 新增 `core/src/fleetContracts.ts`，定义 Fleet identity 和运行关联类型。
-- [ ] C2. 新增或扩展 JSON schema，覆盖 `fleet_run_id`、`fleet_task_id`、`fleet_worker_id`、
+- [x] C1. 新增 `core/src/fleetContracts.ts`，定义 Fleet identity 和运行关联类型。
+- [x] C2. 新增或扩展 JSON schema，覆盖 `fleet_run_id`、`fleet_task_id`、`fleet_worker_id`、
       `fleet_coordinator_id`、`parent_worker_id`、`worker_role`、`worktree_id`、`attempt`。
-- [ ] C3. 为 Python run context / sanitized summary 增加可选 `fleet` 字段，并保持旧 schema 兼容。
-- [ ] C4. 为 Python CLI 的 `start` 和 PowerShell runner 增加可选 Fleet identity 参数及环境变量透传。
-- [ ] C5. 增加精确关联和 identity 校验的回归测试。
+- [x] C3. 为 Python run context / sanitized summary 增加可选 `fleet` 字段，并保持旧 schema 兼容。
+- [x] C4. 为 Python CLI 的 `start` 和 PowerShell runner 增加可选 Fleet identity 参数及环境变量透传。
+- [x] C5. 增加精确关联和 identity 校验的回归测试。
 
 ## D. Claude Fleet 接入准备
 
@@ -32,8 +32,8 @@
 
 ## E. Validate / Review
 
-- [ ] E1. 运行原 agentmetrics Python test suite。
+- [x] E1. 运行原 agentmetrics Python test suite。
 - [ ] E2. 运行 Claude Fleet typecheck、lint、server/webview tests。
-- [ ] E3. 用 fake Codex / fake Claude runner 验证一次完整 Fleet identity → summary 链路。
-- [ ] E4. 检查 `git diff`，确认没有 `.git`、secret、raw transcript、`.local` 或用户路径泄露。
+- [x] E3. 用 fake Codex / fake Claude runner 验证一次完整 Fleet identity → summary 链路。
+- [x] E4. 检查 `git diff`，确认没有 `.git`、secret、raw transcript、`.local` 或用户路径泄露。
 - [ ] E5. 更新迁移说明和下一阶段 Scheduler/MCP Spec 的依赖关系。

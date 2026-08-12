@@ -22,9 +22,13 @@ describe('claudeHookInstaller', () => {
   beforeEach(() => {
     tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl-hook-test-'));
     fs.mkdirSync(path.join(tmpBase, '.claude'), { recursive: true });
+    // The host test process may itself use a profile; isolate installer tests
+    // from that external environment so the default-profile cases remain stable.
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '');
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     try {
       fs.rmSync(tmpBase, { recursive: true, force: true });
     } catch {
@@ -41,6 +45,21 @@ describe('claudeHookInstaller', () => {
     expect(hooks['Notification']).toHaveLength(1);
     expect(hooks['Stop']).toHaveLength(1);
     expect(hooks['PermissionRequest']).toHaveLength(1);
+  });
+
+  it('installs hooks into the active CLAUDE_CONFIG_DIR profile', () => {
+    const profile = path.join(tmpBase, '.claude-minimax');
+    fs.mkdirSync(profile, { recursive: true });
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '.claude-minimax');
+
+    installHooks();
+
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(profile, 'settings.json'), 'utf-8'),
+    ) as Record<string, unknown>;
+    expect(settings.hooks).toBeTruthy();
+    expect((settings.hooks as Record<string, unknown[]>).Notification).toHaveLength(1);
+    expect(fs.existsSync(path.join(tmpBase, '.claude', 'settings.json'))).toBe(false);
   });
 
   // 2. installHooks is idempotent

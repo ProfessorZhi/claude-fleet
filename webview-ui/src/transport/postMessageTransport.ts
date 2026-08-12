@@ -1,5 +1,6 @@
 import { TRANSPORT_STATE_CONNECTED } from '../../../core/src/constants.js';
 import type { ClientMessage, ServerMessage } from '../../../core/src/messages.js';
+import { isE2E } from '../runtime.js';
 import type { MessageTransport, TransportState } from './types.js';
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
@@ -22,6 +23,13 @@ export class PostMessageTransport implements MessageTransport {
   }
 
   send(message: ClientMessage): void {
+    if (isE2E && typeof window !== 'undefined' && window.__pixelAgentsTestHooks?.clientMessageLog) {
+      window.__pixelAgentsTestHooks.clientMessageLog.push({
+        at: Date.now(),
+        type: message.type,
+        id: 'id' in message && typeof message.id === 'number' ? message.id : undefined,
+      });
+    }
     this.vscodeApi.postMessage(message);
   }
 

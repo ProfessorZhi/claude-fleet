@@ -1,0 +1,26 @@
+export type { ScmAdapterOptions } from './scmAdapter.js';
+export { projectQualitySignals, ScmAdapter } from './scmAdapter.js';
+export type {
+  CheckConclusion,
+  CheckStatus,
+  CiCheckSnapshot,
+  GitBranchSnapshot,
+  GitCommitSnapshot,
+  GitStatusSnapshot,
+  PullRequestSnapshot,
+  PullRequestState,
+  ReviewSnapshot,
+  ReviewState,
+  ScmCiSource,
+  ScmEvidenceSnapshot,
+  ScmGitSource,
+  ScmObservation,
+  ScmProviderBinding,
+  ScmProviderKind,
+  ScmProviderStatus,
+  ScmProviderWiring,
+  ScmPullRequestSource,
+  ScmQualitySources,
+  ScmRepositoryContext,
+  ScmReviewSource,
+} from './types.js';

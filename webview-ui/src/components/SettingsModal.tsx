@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 
+import type { SceneId } from '../fleet/scene.js';
 import { isSoundEnabled, setSoundEnabled } from '../notificationSound.js';
 import { isBrowserRuntime } from '../runtime.js';
 import { transport } from '../transport/index.js';
@@ -11,6 +12,10 @@ import { Modal } from './ui/Modal.js';
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  scene: SceneId;
+  defaultScene: SceneId;
+  onSceneChange: (scene: SceneId) => void;
+  onDefaultSceneChange: (scene: SceneId) => void;
   isDebugMode: boolean;
   onToggleDebugMode: () => void;
   alwaysShowOverlay: boolean;
@@ -37,6 +42,10 @@ interface SettingsModalProps {
 export function SettingsModal({
   isOpen,
   onClose,
+  scene,
+  defaultScene,
+  onSceneChange,
+  onDefaultSceneChange,
   isDebugMode,
   onToggleDebugMode,
   alwaysShowOverlay,
@@ -59,7 +68,73 @@ export function SettingsModal({
   const [assetDirDraft, setAssetDirDraft] = useState('');
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Settings">
+    <Modal isOpen={isOpen} onClose={onClose} title={scene === 'pixel-office' ? 'Settings' : '设置'}>
+      <section
+        className="border-b border-border px-10 pb-5 mb-2"
+        data-testid="settings-scene-preferences"
+      >
+        <div className="text-accent-bright text-sm font-bold mb-3">前端</div>
+        <div className="text-xs text-text-muted mb-2">当前前端</div>
+        <div className="flex gap-2 mb-4">
+          <Button
+            variant={scene === 'control-center' ? 'active' : 'ghost'}
+            size="sm"
+            data-testid="settings-current-scene-control-center"
+            aria-pressed={scene === 'control-center'}
+            onClick={() => onSceneChange('control-center')}
+          >
+            任务控制中心
+          </Button>
+          <Button
+            variant={scene === 'fleet-command' ? 'active' : 'ghost'}
+            size="sm"
+            data-testid="settings-current-scene-fleet"
+            aria-pressed={scene === 'fleet-command'}
+            onClick={() => onSceneChange('fleet-command')}
+          >
+            舰队指挥
+          </Button>
+          <Button
+            variant={scene === 'pixel-office' ? 'active' : 'ghost'}
+            size="sm"
+            data-testid="settings-current-scene-pixel-office"
+            aria-pressed={scene === 'pixel-office'}
+            onClick={() => onSceneChange('pixel-office')}
+          >
+            像素办公室
+          </Button>
+        </div>
+        <div className="text-xs text-text-muted mb-2">默认前端（下次打开）</div>
+        <div className="flex gap-2">
+          <Button
+            variant={defaultScene === 'control-center' ? 'active' : 'ghost'}
+            size="sm"
+            data-testid="settings-default-scene-control-center"
+            aria-pressed={defaultScene === 'control-center'}
+            onClick={() => onDefaultSceneChange('control-center')}
+          >
+            任务控制中心
+          </Button>
+          <Button
+            variant={defaultScene === 'fleet-command' ? 'active' : 'ghost'}
+            size="sm"
+            data-testid="settings-default-scene-fleet"
+            aria-pressed={defaultScene === 'fleet-command'}
+            onClick={() => onDefaultSceneChange('fleet-command')}
+          >
+            舰队指挥
+          </Button>
+          <Button
+            variant={defaultScene === 'pixel-office' ? 'active' : 'ghost'}
+            size="sm"
+            data-testid="settings-default-scene-pixel-office"
+            aria-pressed={defaultScene === 'pixel-office'}
+            onClick={() => onDefaultSceneChange('pixel-office')}
+          >
+            像素办公室
+          </Button>
+        </div>
+      </section>
       {/* Open Sessions Folder opens an OS file manager — impossible in the browser. */}
       {!isBrowserRuntime && (
         <MenuItem

@@ -29,6 +29,7 @@ import { createCliProviderStore } from './cliProviderStore.js';
 import { resolveClaudeCli } from './cliResolver.js';
 import { readConfig } from './configPersistence.js';
 import { MAX_PORT, MIN_PORT, SERVER_JSON_DIR, SERVER_JSON_NAME, SERVERS_DIR } from './constants.js';
+import { CoordinatorBridge, type CoordinatorBridgePlan } from './coordinatorBridge.js';
 import { FileStateAdapter } from './fileStateAdapter.js';
 import { FleetControlClient } from './fleetControlClient.js';
 import { resolveClaudeLaunchConfig } from './launchConfig.js';
@@ -41,9 +42,13 @@ import { isServerConfig, isServerTarget, type ServerTarget } from './serverConfi
 
 export interface CliArgs {
   /** Local management subcommands or undefined (standalone server). */
-  command?: 'providers' | 'launch' | 'control';
+  command?: 'providers' | 'launch' | 'control' | 'coordinate';
   /** JSON FleetControlRequest passed to `control --request`. */
   controlRequest?: string;
+  /** JSON CoordinatorBridgePlan passed to `coordinate --plan`. */
+  coordinatorPlan?: string;
+  /** Workspace identity used to select one local Fleet server. */
+  workspace?: string;
   /** Unset -> ephemeral (OS-assigned) port, so multiple standalone instances
    *  can run at once without a collision. --port picks a fixed one. */
   port?: number;
@@ -67,10 +72,28 @@ export function parseArgs(argv: string[]): CliArgs {
       args.command = arg;
       continue;
     }
+    if (arg === 'coordinate') {
+      args.command = arg;
+      continue;
+    }
     if (arg === '--request') {
       const raw = argv[i + 1];
       if (!raw) throw new CliArgsError('Missing value for --request.');
       args.controlRequest = raw;
+      i++;
+      continue;
+    }
+    if (arg === '--plan') {
+      const raw = argv[i + 1];
+      if (!raw) throw new CliArgsError('Missing value for --plan.');
+      args.coordinatorPlan = raw;
+      i++;
+      continue;
+    }
+    if (arg === '--workspace') {
+      const raw = argv[i + 1];
+      if (!raw) throw new CliArgsError('Missing value for --workspace.');
+      args.workspace = raw;
       i++;
       continue;
     }
@@ -98,11 +121,13 @@ export function parseArgs(argv: string[]): CliArgs {
 Commands:
   providers              List configured Provider Profiles
   launch                 Interactively launch a native Claude Code session
-  control --request JSON Submit a local Fleet Control request to the running extension
+  control --workspace PATH --request JSON Submit a request to one running extension
+  coordinate --workspace PATH --plan JSON Launch and manage a plan in one running extension
 
 Options (standalone server):
   --port, -p <number>   Port to listen on (default: OS-assigned ephemeral port)
   --host <string>       Host to bind to (default: 127.0.0.1)
+  --workspace <path>    Select the Fleet server that owns this workspace
   --help                Show this help message`);
       process.exit(0);
     }
@@ -235,7 +260,10 @@ export async function runLaunchCommand(): Promise<void> {
 }
 
 /** Submit one JSON control request to the newest locally discovered Fleet server. */
-export async function runControlCommand(requestText: string | undefined): Promise<void> {
+export async function runControlCommand(
+  requestText: string | undefined,
+  workspaceId?: string,
+): Promise<void> {
   if (!requestText) {
     throw new CliArgsError('control requires --request <JSON>.');
   }
@@ -252,7 +280,7 @@ export async function runControlCommand(requestText: string | undefined): Promis
     );
   }
 
-  const server = discoverControlServer();
+  const server = selectControlServer(discoverControlServers(), workspaceId);
   if (!server) {
     throw new Error(
       'No running Claude Fleet server was found. Open the VS Code Fleet panel first.',
@@ -262,7 +290,49 @@ export async function runControlCommand(requestText: string | undefined): Promis
   process.stdout.write(JSON.stringify(response, null, 2) + '\n');
 }
 
-export function discoverControlServer(homeDir = os.homedir()): ServerTarget | undefined {
+/**
+ * Execute a bounded Coordinator plan against the newest local Fleet server.
+ * The plan contains metadata and WorkItem briefs only; it is never a raw
+ * prompt/transcript transport. All runtime side effects stay in the VS Code
+ * Extension Host behind FleetControlService.
+ */
+export async function runCoordinateCommand(
+  planText: string | undefined,
+  workspaceId?: string,
+): Promise<void> {
+  if (!planText) throw new CliArgsError('coordinate requires --plan <JSON>.');
+  let plan: CoordinatorBridgePlan;
+  try {
+    const parsed: unknown = JSON.parse(planText);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('plan must be a JSON object');
+    }
+    plan = parsed as CoordinatorBridgePlan;
+  } catch (error) {
+    throw new CliArgsError(
+      `Invalid coordinator plan JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!plan.requestedBy || !Array.isArray(plan.workers)) {
+    throw new CliArgsError('Coordinator plan requires requestedBy and workers[].');
+  }
+
+  const server = selectControlServer(discoverControlServers(), workspaceId);
+  if (!server) {
+    throw new Error(
+      'No running Claude Fleet server was found. Open the VS Code Fleet panel first.',
+    );
+  }
+  const bridge = new CoordinatorBridge(new FleetControlClient(server), plan.requestedBy, {
+    mode: plan.mode,
+    policy: plan.policy,
+  });
+  const result = await bridge.execute(plan);
+  process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+}
+
+/** Read every live server registry record, newest first. */
+export function discoverControlServers(homeDir = os.homedir()): ServerTarget[] {
   const registryDir = path.join(homeDir, SERVER_JSON_DIR, SERVERS_DIR);
   try {
     const entries = fs
@@ -278,7 +348,7 @@ export function discoverControlServer(homeDir = os.homedir()): ServerTarget | un
       .filter((value): value is unknown => value !== undefined)
       .filter(isServerConfig)
       .sort((a, b) => b.startedAt - a.startedAt);
-    if (entries[0]) return entries[0];
+    if (entries.length > 0) return entries;
   } catch {
     // Fall through to the legacy single-server pointer.
   }
@@ -287,10 +357,43 @@ export function discoverControlServer(homeDir = os.homedir()): ServerTarget | un
     const legacy = JSON.parse(
       fs.readFileSync(path.join(homeDir, SERVER_JSON_DIR, SERVER_JSON_NAME), 'utf8'),
     ) as unknown;
-    return isServerTarget(legacy) ? legacy : undefined;
+    return isServerTarget(legacy) ? [legacy] : [];
   } catch {
-    return undefined;
+    return [];
   }
+}
+
+/**
+ * Select a server without silently routing a Coordinator to another window.
+ * A workspace selector is required whenever more than one candidate exists.
+ */
+export function selectControlServer(
+  servers: readonly ServerTarget[],
+  workspaceId?: string,
+): ServerTarget | undefined {
+  if (workspaceId?.trim()) {
+    const requested = normalizeWorkspaceId(workspaceId);
+    const match = servers.find(
+      (server) => server.workspaceId && normalizeWorkspaceId(server.workspaceId) === requested,
+    );
+    if (match) return match;
+    throw new Error(`No running Claude Fleet server owns workspace: ${workspaceId}`);
+  }
+  if (servers.length <= 1) return servers[0];
+  throw new Error(
+    `Multiple Claude Fleet servers are running (${servers.length}). Re-run with --workspace <path>.`,
+  );
+}
+
+function normalizeWorkspaceId(value: string): string {
+  return path
+    .resolve(value.trim())
+    .replace(/[\\/]+/g, '/')
+    .toLowerCase();
+}
+
+export function discoverControlServer(homeDir = os.homedir()): ServerTarget | undefined {
+  return discoverControlServers(homeDir)[0];
 }
 
 // ── Main ──────────────────────────────────────────────────────
@@ -314,7 +417,11 @@ async function main(): Promise<void> {
     return;
   }
   if (args.command === 'control') {
-    await runControlCommand(args.controlRequest);
+    await runControlCommand(args.controlRequest, args.workspace);
+    return;
+  }
+  if (args.command === 'coordinate') {
+    await runCoordinateCommand(args.coordinatorPlan, args.workspace);
     return;
   }
 

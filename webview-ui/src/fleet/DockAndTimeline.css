@@ -1,0 +1,489 @@
+.fleet-terminal-dock,
+.fleet-timeline-region {
+  position: relative;
+  z-index: 1;
+  border-top: 2px solid rgba(116, 111, 255, 0.65);
+  background:
+    linear-gradient(180deg, rgba(18, 22, 45, 0.98), rgba(12, 15, 31, 0.98)), var(--color-bg-dark);
+  box-shadow: 0 -3px 0 rgba(7, 9, 22, 0.7);
+}
+
+.fleet-terminal-dock {
+  padding: 18px 24px 22px;
+}
+
+.fleet-timeline-region {
+  padding: 22px 24px 28px;
+}
+
+.fleet-bottom-section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 0 auto 14px;
+  max-width: 1440px;
+}
+
+.fleet-section-kicker {
+  color: var(--color-accent-bright);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  line-height: 1.2;
+}
+
+.fleet-section-title {
+  margin: 4px 0 0;
+  color: var(--color-text);
+  font-size: 20px;
+  line-height: 1.15;
+}
+
+.fleet-section-caption {
+  max-width: 620px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: right;
+}
+
+.fleet-terminal-dock-list {
+  display: flex;
+  gap: 10px;
+  margin: 0 auto;
+  max-width: 1440px;
+  overflow-x: auto;
+  padding: 2px 2px 5px;
+  scrollbar-color: var(--color-border) var(--color-bg-dark);
+  scrollbar-width: thin;
+}
+
+.fleet-terminal-entry {
+  display: grid;
+  min-width: 190px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 2px solid var(--color-border);
+  background: rgba(30, 30, 46, 0.86);
+  box-shadow: var(--shadow-pixel);
+}
+
+.fleet-terminal-entry-selected {
+  border-color: var(--color-accent-bright);
+  background: rgba(44, 43, 109, 0.9);
+}
+
+.fleet-terminal-select,
+.fleet-terminal-focus,
+.fleet-terminal-new-agent {
+  border: 0;
+  border-radius: 0;
+  color: var(--color-text);
+  font: inherit;
+}
+
+.fleet-terminal-select {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 8px 11px 12px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.fleet-terminal-select:hover,
+.fleet-terminal-select:focus-visible,
+.fleet-terminal-focus:hover,
+.fleet-terminal-focus:focus-visible,
+.fleet-terminal-new-agent:hover,
+.fleet-terminal-new-agent:focus-visible {
+  outline: 2px solid var(--color-accent-bright);
+  outline-offset: -2px;
+}
+
+.fleet-terminal-select-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fleet-terminal-instance-label,
+.fleet-terminal-instance-role,
+.fleet-terminal-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-terminal-instance-label {
+  font-size: 14px;
+}
+
+.fleet-terminal-instance-role,
+.fleet-terminal-name {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.fleet-terminal-name {
+  grid-column: 1 / -1;
+  padding: 0 10px 8px;
+}
+
+.fleet-terminal-focus {
+  align-self: stretch;
+  padding: 0 10px;
+  border-left: 1px solid rgba(116, 111, 255, 0.45);
+  background: rgba(9, 12, 27, 0.45);
+  color: var(--color-accent-bright);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.fleet-terminal-focus:disabled {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.fleet-terminal-status-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.fleet-terminal-status-dot[data-status='working'],
+.fleet-terminal-status-dot[data-status='running'],
+.fleet-terminal-status-dot[data-status='starting'] {
+  background: var(--color-status-active);
+  box-shadow: 0 0 9px rgba(55, 148, 255, 0.85);
+}
+
+.fleet-terminal-status-dot[data-status='waiting'] {
+  background: var(--color-status-permission);
+}
+
+.fleet-terminal-status-dot[data-status='error'] {
+  background: var(--color-status-error);
+}
+
+.fleet-terminal-status-dot[data-status='idle'] {
+  background: #6c86ad;
+}
+
+.fleet-terminal-new-agent {
+  display: flex;
+  min-width: 150px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 2px dashed var(--color-accent-bright);
+  background: rgba(96, 48, 255, 0.12);
+  color: var(--color-accent-bright);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.fleet-terminal-new-agent-mark {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.fleet-timeline-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr);
+  gap: 14px;
+  margin: 0 auto;
+  max-width: 1440px;
+}
+
+.fleet-timeline-panel,
+.fleet-recommendation-panel {
+  min-width: 0;
+  border: 2px solid rgba(74, 74, 106, 0.9);
+  background: rgba(24, 24, 40, 0.72);
+  box-shadow: var(--shadow-pixel);
+  padding: 15px 17px;
+}
+
+.fleet-subsection-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(116, 111, 255, 0.3);
+  padding-bottom: 9px;
+}
+
+.fleet-subsection-heading h3 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 15px;
+}
+
+.fleet-subsection-heading > span:not(.fleet-recommendation-badge) {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.fleet-recommendation-badge {
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 3px 5px;
+}
+
+.fleet-timeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fleet-timeline-event {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  border-left: 2px solid var(--color-accent);
+  padding: 3px 0 3px 10px;
+}
+
+.fleet-timeline-event time {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.fleet-timeline-event-copy {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 8px;
+  line-height: 1.4;
+}
+
+.fleet-timeline-event-agent {
+  color: var(--color-accent-bright);
+  font-size: 12px;
+}
+
+.fleet-timeline-event-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.fleet-timeline-event-detail {
+  flex-basis: 100%;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-timeline-event[data-status='error'] {
+  border-left-color: var(--color-status-error);
+}
+
+.fleet-timeline-event[data-status='waiting'] {
+  border-left-color: var(--color-status-permission);
+}
+
+.fleet-timeline-empty,
+.fleet-recommendation-empty {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.fleet-recommendation-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fleet-recommendation-title {
+  margin: 0;
+  color: var(--color-accent-bright);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.fleet-recommendation-field {
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.fleet-recommendation-field > span {
+  color: var(--color-text-muted);
+}
+
+.fleet-recommendation-field p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 800px) {
+  .fleet-bottom-section-heading {
+    align-items: start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .fleet-section-caption {
+    max-width: none;
+    text-align: left;
+  }
+
+  .fleet-timeline-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Spec 011 — thin bottom access and observability strips. */
+.fleet-terminal-dock-compact {
+  padding: 7px 14px 8px;
+  border-top-width: 1px;
+}
+
+.fleet-terminal-dock-compact .fleet-bottom-section-heading,
+.fleet-timeline-region-compact .fleet-bottom-section-heading {
+  margin-bottom: 5px;
+}
+
+.fleet-terminal-dock-compact .fleet-section-title,
+.fleet-timeline-region-compact .fleet-section-title {
+  display: inline;
+  margin: 0;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.fleet-terminal-dock-compact .fleet-section-kicker,
+.fleet-timeline-region-compact .fleet-section-kicker {
+  display: inline;
+  margin-right: 8px;
+  font-size: 9px;
+}
+
+.fleet-terminal-dock-compact .fleet-section-caption,
+.fleet-timeline-region-compact .fleet-section-caption {
+  font-size: 10px;
+}
+
+.fleet-terminal-dock-compact .fleet-terminal-dock-list {
+  gap: 6px;
+  padding: 0 1px 2px;
+}
+
+.fleet-terminal-dock-compact .fleet-terminal-entry {
+  min-width: 142px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  border-width: 1px;
+  box-shadow: none;
+}
+
+.fleet-terminal-dock-compact .fleet-terminal-select {
+  gap: 6px;
+  padding: 6px 6px 6px 8px;
+}
+
+.fleet-terminal-dock-compact .fleet-terminal-instance-label {
+  font-size: 11px;
+}
+
+.fleet-terminal-dock-compact .fleet-terminal-instance-role,
+.fleet-terminal-dock-compact .fleet-terminal-name {
+  display: none;
+}
+
+.fleet-terminal-dock-compact .fleet-terminal-focus {
+  padding: 0 7px;
+  font-size: 10px;
+}
+
+.fleet-terminal-dock-compact .fleet-terminal-new-agent {
+  min-width: 102px;
+  border-width: 1px;
+  font-size: 11px;
+}
+
+.fleet-terminal-dock-compact .fleet-terminal-new-agent-mark {
+  font-size: 15px;
+}
+
+.fleet-timeline-region-compact {
+  padding: 8px 14px 10px;
+  border-top-width: 1px;
+}
+
+.fleet-timeline-region-compact .fleet-timeline-grid {
+  grid-template-columns: minmax(0, 1.6fr) minmax(220px, 1fr);
+  gap: 7px;
+}
+
+.fleet-timeline-region-compact .fleet-timeline-panel,
+.fleet-timeline-region-compact .fleet-recommendation-panel {
+  padding: 7px 9px;
+  border-width: 1px;
+  box-shadow: none;
+}
+
+.fleet-timeline-region-compact .fleet-subsection-heading {
+  margin-bottom: 5px;
+  padding-bottom: 4px;
+}
+
+.fleet-timeline-region-compact .fleet-subsection-heading h3 {
+  font-size: 11px;
+}
+
+.fleet-timeline-region-compact .fleet-timeline-list {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.fleet-timeline-region-compact .fleet-timeline-event {
+  min-width: 160px;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 6px;
+  border-left-width: 1px;
+  padding: 1px 0 1px 6px;
+}
+
+.fleet-timeline-region-compact .fleet-timeline-event-label,
+.fleet-timeline-region-compact .fleet-recommendation-field,
+.fleet-timeline-region-compact .fleet-recommendation-empty,
+.fleet-timeline-region-compact .fleet-timeline-empty {
+  font-size: 10px;
+}
+
+.fleet-timeline-region-compact .fleet-recommendation-content {
+  gap: 3px;
+}
+
+.fleet-timeline-region-compact .fleet-recommendation-title {
+  font-size: 11px;
+}

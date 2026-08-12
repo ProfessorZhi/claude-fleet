@@ -8,6 +8,7 @@ Note:
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Union
 
@@ -20,15 +21,100 @@ class PricingEngine:
             pricing_file = Path(__file__).resolve().parent.parent.parent / "config" / "model-pricing.json"
         self.pricing_file = Path(pricing_file)
         self.pricing_registry = self._load_registry()
+        subscription_file = os.environ.get("AGENTMETRICS_SUBSCRIPTION_PRICING_FILE")
+        if subscription_file:
+            self.subscription_file = Path(subscription_file)
+        else:
+            self.subscription_file = self.pricing_file.parent / "subscription-pricing.json"
+        self.subscription_registry = self._load_json(self.subscription_file)
 
     def _load_registry(self) -> Dict[str, Any]:
-        if not self.pricing_file.exists():
+        return self._load_json(self.pricing_file)
+
+    @staticmethod
+    def _load_json(path: Path) -> Dict[str, Any]:
+        if not path.exists():
             return {}
         try:
-            with open(self.pricing_file, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
+
+    def calculate_subscription_cost(
+        self,
+        *,
+        provider: Optional[str],
+        plan_type: Optional[str],
+        consumed_percentage: Optional[float],
+        actual_price: Optional[float] = None,
+        actual_currency: Optional[str] = None,
+        amortization_period: str = "weekly",
+    ) -> Optional[Dict[str, Any]]:
+        """Allocate a quota delta to a subscription-equivalent amount.
+
+        The result is explicitly an estimate unless the caller supplies an
+        invoice/user price. It never turns missing quota into token usage.
+        Monthly plans use four weeks for the user-facing weekly comparison;
+        the divisor is recorded in the catalog contract rather than hidden.
+        """
+        if not provider or not plan_type or consumed_percentage is None:
+            return None
+        if isinstance(consumed_percentage, bool) or not 0 <= float(consumed_percentage) <= 100:
+            return None
+        normalized_provider = "OpenAI" if str(provider).lower() in {"codex", "openai", "openai-codex"} else provider
+        entry = self._find_subscription_plan(normalized_provider, plan_type)
+        price_source = str((entry or {}).get("source") or "official-list")
+        if actual_price is not None:
+            if isinstance(actual_price, bool) or not isinstance(actual_price, (int, float)) or actual_price < 0:
+                return None
+            price = float(actual_price)
+            currency = actual_currency or (entry or {}).get("currency") or "USD"
+            price_source = "user-entered"
+        elif entry:
+            price = float(entry.get("price"))
+            currency = str(entry.get("currency") or "USD")
+        else:
+            return None
+
+        catalog_period = str((entry or {}).get("billing_period") or "monthly")
+        period_price = price
+        if amortization_period == "weekly" and catalog_period == "monthly":
+            period_price = price / 4.0
+        elif amortization_period == "weekly" and catalog_period == "yearly":
+            period_price = price / 52.0
+        elif amortization_period != catalog_period:
+            return None
+        fraction = float(consumed_percentage) / 100.0
+        return {
+            "amount": round(period_price * fraction, 8),
+            "currency": currency,
+            "basis": "subscription-amortized",
+            "plan_type": plan_type,
+            "billing_period": amortization_period,
+            "period_price": round(period_price, 8),
+            "price_source": price_source,
+            "fraction_of_period": fraction,
+            "consumed_percentage": float(consumed_percentage),
+            "confidence": "high" if price_source == "user-entered" else "medium",
+            "availability": "available",
+            "estimate_or_actual": "actual" if price_source == "user-entered" else "estimate",
+        }
+
+    def _find_subscription_plan(self, provider: str, plan_type: str) -> Optional[Dict[str, Any]]:
+        plans = self.subscription_registry.get("plans", [])
+        if not isinstance(plans, list):
+            return None
+        target = str(plan_type).strip().lower()
+        for plan in plans:
+            if not isinstance(plan, dict):
+                continue
+            if str(plan.get("provider", "")).lower() != str(provider).lower():
+                continue
+            names = [str(plan.get("plan_type", ""))] + [str(v) for v in plan.get("aliases", [])]
+            if any(name.lower() == target for name in names):
+                return plan
+        return None
 
     def find_model_pricing(self, provider_or_model: Optional[str] = None, model_name: Optional[str] = None, **kwargs) -> Optional[Dict[str, Any]]:
         target_model = model_name or provider_or_model

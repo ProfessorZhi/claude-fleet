@@ -101,6 +101,18 @@ class TestPricingEngine(unittest.TestCase):
         self.assertEqual(res.status, "USAGE_NOT_AVAILABLE")
         self.assertIsNone(res.api_equivalent_cost_usd)
 
+    def test_subscription_allocation_uses_weekly_amortization(self):
+        result = self.pricing.calculate_subscription_cost(
+            provider="OpenAI",
+            plan_type="Plus",
+            consumed_percentage=50,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result["billing_period"], "weekly")
+        self.assertEqual(result["period_price"], 5.0)
+        self.assertEqual(result["amount"], 2.5)
+        self.assertEqual(result["price_source"], "official-list")
+
 
 if __name__ == "__main__":
     unittest.main()

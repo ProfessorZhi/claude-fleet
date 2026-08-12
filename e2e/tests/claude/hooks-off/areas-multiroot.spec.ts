@@ -44,7 +44,7 @@ async function startArea(frame: Frame, label: string): Promise<void> {
 }
 
 test.describe('Areas (multi-root)', () => {
-  test.use({ workspaceFolders: [ALPHA, BETA] });
+  test.use({ scene: 'pixel-office', workspaceFolders: [ALPHA, BETA] });
 
   test('painting an area labels tiles in the layout @area:areas', async ({ pixelAgents }) => {
     const { frame, narrator } = pixelAgents;

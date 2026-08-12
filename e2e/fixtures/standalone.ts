@@ -43,7 +43,13 @@ async function attachText(
   }
 }
 
-export const test = base.extend<{ standalone: StandaloneContext; _allureLabels: void }>({
+export const test = base.extend<{
+  standalone: StandaloneContext;
+  _allureLabels: void;
+  /** Standalone UI projection; legacy behavior tests use Pixel Office explicitly. */
+  scene: 'control-center' | 'fleet-command' | 'pixel-office';
+}>({
+  scene: ['control-center', { option: true }],
   // Auto-fixture: tag every test with Allure epic + feature derived from its
   // @area: annotation and enclosing describe path. Runs before standalone.
   _allureLabels: [
@@ -53,10 +59,23 @@ export const test = base.extend<{ standalone: StandaloneContext; _allureLabels: 
     },
     { auto: true },
   ],
-  standalone: async ({ page }, use, testInfo) => {
+  standalone: async ({ page, scene }, use, testInfo) => {
     const standalone = await launchStandalone(page);
 
     try {
+      if (scene === 'pixel-office') {
+        await page.getByTestId('fleet-settings').click();
+        await page.getByTestId('settings-current-scene-pixel-office').click();
+        await page.getByTestId('settings-close').click();
+        await expect(page.getByTestId('empty-state-new-agent')).toBeVisible();
+      } else if (scene === 'fleet-command') {
+        await page.getByTestId('fleet-settings').click();
+        await page.getByTestId('settings-current-scene-fleet').click();
+        await page.getByTestId('settings-close').click();
+        await expect(page.getByTestId('fleet-command-scene')).toBeVisible();
+      } else {
+        await expect(page.getByTestId('task-control-center')).toBeVisible();
+      }
       await use(standalone);
     } finally {
       await attachText(testInfo, 'standalone-host-log', standalone.getHostLogs(), 'text/plain');

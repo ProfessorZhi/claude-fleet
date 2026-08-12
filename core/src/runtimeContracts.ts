@@ -25,6 +25,26 @@ export type FleetManagement = 'fleet' | 'external';
 
 export type FleetStatus = 'starting' | 'working' | 'waiting' | 'idle' | 'stopped' | 'error';
 
+/** How much of the runtime startup interaction Fleet may automate. */
+export type RuntimeAutomationMode = 'interactive' | 'unattended';
+
+/** Runtime permission policy; this does not bypass a provider's trust gate. */
+export type RuntimePermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+
+export type RuntimeBootstrapState =
+  'starting' | 'ready' | 'needs_user_interaction' | 'failed' | 'stopped';
+
+export type RuntimeBootstrapReason =
+  'startup_interaction' | 'workspace_trust' | 'authentication' | 'unknown';
+
+/** Runtime readiness evidence, separate from the four user-facing state axes. */
+export interface RuntimeBootstrapSnapshot {
+  state: RuntimeBootstrapState;
+  reason?: RuntimeBootstrapReason;
+  detail?: string;
+  observedAt: number;
+}
+
 export type FleetControlMode = 'observe' | 'suggest' | 'approve' | 'autonomous';
 
 export interface RuntimeCapabilities {
@@ -61,6 +81,21 @@ export interface Mission {
   completedAt?: number;
 }
 
+export type WorkItemResultOutcome = 'completed' | 'blocked' | 'failed';
+
+/** Bounded, secret-free result metadata returned by a Worker. */
+export interface WorkItemResult {
+  workItemId: string;
+  instanceId: string;
+  outcome: WorkItemResultOutcome;
+  summary?: string;
+  artifactRefs?: string[];
+  capturedAt: number;
+  source: 'runtime' | 'scm' | 'user' | 'system';
+  availability: 'available' | 'partial' | 'unavailable';
+  confidence: 'exact' | 'high' | 'medium' | 'low' | 'unknown';
+}
+
 export interface WorkItem {
   workItemId: string;
   missionId: string;
@@ -74,13 +109,76 @@ export interface WorkItem {
   allowedRuntimeTypes?: FleetRuntime[];
   allowedRoles?: AgentRole[];
   assignedInstanceId?: string;
+  result?: WorkItemResult;
   createdAt: number;
   startedAt?: number;
   completedAt?: number;
 }
 
+export type WorktreeStatus = 'reserved' | 'active' | 'released';
+
+/** Safe metadata describing one isolated repository worktree. */
+export interface WorktreeRecord {
+  worktreeId: string;
+  repo: string;
+  worktreePath: string;
+  branch?: string;
+  missionId?: string;
+  workItemId?: string;
+  instanceId?: string;
+  status: WorktreeStatus;
+  createdAt: number;
+  releasedAt?: number;
+}
+
+export interface WorktreeCreateRequest {
+  worktreeId: string;
+  repo: string;
+  worktreePath: string;
+  branch?: string;
+  missionId?: string;
+  workItemId?: string;
+  instanceId?: string;
+  createdAt: number;
+}
+
+export interface WorktreeConflictCheckRequest {
+  repo: string;
+  worktreePath: string;
+  branch?: string;
+  worktreeId?: string;
+  missionId?: string;
+  workItemId?: string;
+  instanceId?: string;
+}
+
+export interface WorktreeConflict {
+  worktreeId: string;
+  reason: 'path' | 'branch';
+  worktreePath: string;
+  branch?: string;
+}
+
+export interface WorktreeConflictCheck {
+  conflict: boolean;
+  conflicts: WorktreeConflict[];
+}
+
+/**
+ * Worktree lifecycle boundary. Implementations may provision a real Git
+ * worktree, while the management plane only depends on these safe metadata
+ * operations.
+ */
+export interface WorktreeManager {
+  create(request: WorktreeCreateRequest): Promise<WorktreeRecord>;
+  record(record: WorktreeRecord): Promise<void>;
+  checkConflict(request: WorktreeConflictCheckRequest): Promise<WorktreeConflictCheck>;
+}
+
 export interface FleetInstance {
   instanceId: string;
+  /** User-facing label; separate from Team role metadata. */
+  displayName?: string;
   runtime: FleetRuntime;
   role: AgentRole;
   managedByFleet: boolean;
@@ -99,7 +197,21 @@ export interface FleetInstance {
   providerProfileId?: string;
   providerDisplayName?: string;
   modelId?: string;
+  requestedProviderProfileId?: string;
+  resolvedProviderProfileId?: string;
+  requestedModelId?: string;
+  resolvedModelId?: string;
+  credential?: 'present' | 'absent';
+  refPresent?: boolean;
+  refResolution?: 'success' | 'not_required';
+  authConfigured?: boolean;
+  authInjected?: boolean;
+  authVariableNames?: string[];
+  baseUrlHost?: string;
   fleet?: FleetIdentity;
+  automationMode?: RuntimeAutomationMode;
+  permissionMode?: RuntimePermissionMode;
+  bootstrap?: RuntimeBootstrapSnapshot;
   status: FleetStatus;
   parentAgentId?: string;
   leadAgentId?: string;
@@ -117,6 +229,8 @@ export interface RuntimeLaunchRequest {
   terminalName?: string;
   launchSource?: string;
   requestedBy?: string;
+  automationMode?: RuntimeAutomationMode;
+  permissionMode?: RuntimePermissionMode;
   signal?: AbortSignal;
 }
 
@@ -129,8 +243,67 @@ export interface RuntimeLaunchResult {
   workspaceId?: string;
   launchSource?: string;
   requestedBy?: string;
+  requestedProviderProfileId?: string;
+  resolvedProviderProfileId?: string;
+  requestedModelId?: string;
+  resolvedModelId?: string;
+  credential?: 'present' | 'absent';
+  refPresent?: boolean;
+  refResolution?: 'success' | 'not_required';
+  authConfigured?: boolean;
+  authInjected?: boolean;
+  authVariableNames?: string[];
+  baseUrlHost?: string;
   startedAt: number;
 }
+
+/**
+ * Bounded, secret-free work brief accepted by a managed runtime terminal.
+ *
+ * This is deliberately not a prompt/transcript transport contract. Runtime
+ * adapters may add their own native delivery implementation, but the Fleet
+ * control plane only sends these four fields.
+ */
+export interface RuntimeTaskBrief {
+  workItemId: string;
+  title: string;
+  objective: string;
+  acceptanceCriteria: string[];
+}
+
+export interface RuntimeTaskDeliveryRequest {
+  instanceId: string;
+  task: RuntimeTaskBrief;
+}
+
+/** Transport result retained for API compatibility with the Alpha contract. */
+export type RuntimeTaskDeliveryStatus =
+  'queued' | 'delivered' | 'unavailable' | 'rejected' | 'cancelled';
+
+/** Authoritative lifecycle for a WorkItem's runtime delivery. */
+export type RuntimeTaskDeliveryLifecycle =
+  | 'assigned'
+  | 'queued_for_runtime'
+  | 'delivering'
+  | 'delivered_to_runtime'
+  | 'failed'
+  | 'cancelled';
+
+export type RuntimeTaskDeliveryReason = 'boundary_unavailable' | 'host_failed' | 'invalid_brief';
+
+export interface RuntimeTaskDeliveryResult {
+  instanceId: string;
+  workItemId: string;
+  status: RuntimeTaskDeliveryStatus;
+  lifecycle: RuntimeTaskDeliveryLifecycle;
+  deliveredAt?: number;
+  reason?: RuntimeTaskDeliveryReason;
+}
+
+export type RuntimeBootstrapListener = (
+  instanceId: string,
+  snapshot: RuntimeBootstrapSnapshot,
+) => void;
 
 export interface FleetRuntimeHost<Request extends RuntimeLaunchRequest = RuntimeLaunchRequest> {
   readonly hostId: string;
@@ -139,6 +312,12 @@ export interface FleetRuntimeHost<Request extends RuntimeLaunchRequest = Runtime
   launch(request: Request): Promise<RuntimeLaunchResult>;
   stop(instanceId: string): Promise<void>;
   focus(instanceId: string): Promise<void>;
+  /** Optional bounded task-delivery boundary; hosts without it fail closed. */
+  sendTask?(instanceId: string, task: RuntimeTaskBrief): Promise<void>;
+  /** Optional runtime-ready gate. Hosts without it retain the legacy direct-send path. */
+  getBootstrapStatus?(instanceId: string): RuntimeBootstrapSnapshot | undefined;
+  /** Emits readiness transitions so queued WorkItems can be flushed exactly once. */
+  subscribeBootstrap?(listener: RuntimeBootstrapListener): () => void;
 }
 
 export interface RuntimeAdapter {

@@ -29,6 +29,7 @@ import { computeNormalModeCursor } from './officeCanvasCursor.js';
 interface OfficeCanvasProps {
   officeState: OfficeState;
   onClick: (agentId: number) => void;
+  onDoubleClick: (agentId: number) => void;
   isEditMode: boolean;
   editorState: EditorState;
   onEditorTileAction: (col: number, row: number) => void;
@@ -50,6 +51,7 @@ interface OfficeCanvasProps {
 export function OfficeCanvas({
   officeState,
   onClick,
+  onDoubleClick,
   isEditMode,
   editorState,
   onEditorTileAction,
@@ -729,7 +731,7 @@ export function OfficeCanvas({
           officeState.selectedAgentId = hitId;
           officeState.cameraFollowId = hitId;
         }
-        onClick(hitId); // still focus terminal
+        onClick(hitId); // single click only selects and opens details
         return;
       }
 
@@ -793,6 +795,17 @@ export function OfficeCanvas({
       }
     },
     [officeState, onClick, screenToWorld, screenToTile, isEditMode],
+  );
+
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (isEditMode) return;
+      const pos = screenToWorld(e.clientX, e.clientY);
+      if (!pos) return;
+      const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY);
+      if (hitId !== null) onDoubleClick(hitId);
+    },
+    [isEditMode, officeState, onDoubleClick, screenToWorld],
   );
 
   const handleMouseLeave = useCallback(() => {
@@ -883,6 +896,7 @@ export function OfficeCanvas({
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
         onAuxClick={handleAuxClick}
         onMouseLeave={handleMouseLeave}
         onContextMenu={handleContextMenu}

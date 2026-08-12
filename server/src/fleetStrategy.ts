@@ -2,7 +2,6 @@ import type { FleetContextUsage } from '../../core/src/fleetTelemetry.js';
 import type {
   AssignmentAction,
   LedgerMeasurement,
-  QuotaValue,
   ResourceMetrics,
 } from '../../core/src/ledgerContracts.js';
 import type { FleetInstance, FleetRuntime, WorkItem } from '../../core/src/runtimeContracts.js';
@@ -485,7 +484,7 @@ export class FleetStrategyAdapter implements StrategyAdapter {
 
   private expectedQuota(
     expected: LedgerMeasurement<ResourceMetrics> | undefined,
-  ): LedgerMeasurement<QuotaValue> | undefined {
+  ): LedgerMeasurement<NonNullable<ResourceMetrics['quotaImpact']>> | undefined {
     const quotaImpact = expected?.value.quotaImpact;
     if (!quotaImpact) return undefined;
     return {

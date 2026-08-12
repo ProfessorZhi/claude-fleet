@@ -85,6 +85,7 @@ declare global {
         toolId?: string;
         parentToolId?: string;
       }>;
+      clientMessageLog?: Array<{ at: number; type: string; id?: number }>;
       selectAgent?: (id: number) => void;
     };
   }
@@ -114,6 +115,7 @@ export function installTestHooks(officeStateRef: { current: OfficeState | null }
   if (!window.__pixelAgentsTestHooks) window.__pixelAgentsTestHooks = {};
   const hooks = window.__pixelAgentsTestHooks;
   if (!hooks.addAgentLog) hooks.addAgentLog = [];
+  if (!hooks.clientMessageLog) hooks.clientMessageLog = [];
 
   hooks.getCharacters = () => {
     const os = officeStateRef.current;

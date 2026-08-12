@@ -168,11 +168,14 @@ export async function addAgentForFolder(
   await expect(folderItem).toBeVisible({ timeout: INTERNAL_AGENT_TIMEOUT_MS });
   await folderItem.click();
 
-  // Spec 005: the flow then shows native QuickPicks — workspace folder
-  // (multi-root), Provider, Model. Narrow the folder picker to the target
-  // folder, then accept the seeded provider profile and its default model.
+  // The New Agent flow first chooses the runtime, then the workspace folder,
+  // and then asks for the display name. Keep this helper aligned with that
+  // native flow so Areas tests exercise the current product contract rather
+  // than the pre-runtime-picker ordering.
   const page = frame.page();
+  await acceptQuickPick(page, 'Claude Fleet: Choose Runtime', 'Claude Code');
   await acceptQuickPick(page, 'Claude Fleet: Choose workspace folder', folderName);
+  await acceptQuickPick(page, 'Claude Fleet: Name this Agent');
   await acceptQuickPick(page, 'Claude Fleet: Choose Provider');
   await acceptQuickPick(page, 'Claude Fleet: Choose Model');
 

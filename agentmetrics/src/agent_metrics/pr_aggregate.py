@@ -146,6 +146,10 @@ def build_pr_aggregate(
     finished_values: List[datetime.datetime] = []
     agent_process_seconds_sum = 0.0
     model_event_span_seconds_sum = 0.0
+    subscription_totals: Dict[str, float] = {}
+    subscription_records = 0
+    subscription_plan_types: List[str] = []
+    session_aggregates: Dict[str, Dict[str, Any]] = {}
 
     for summary in matching:
         run_id = summary.get("run_id")
@@ -156,6 +160,15 @@ def build_pr_aggregate(
         status = usage.get("collection_status") or "NOT_AVAILABLE"
         shell = str(agent.get("shell") or "")
         provider = str(agent.get("provider") or "")
+        fleet = summary.get("fleet") if isinstance(summary.get("fleet"), dict) else {}
+        session_record = summary.get("session") if isinstance(summary.get("session"), dict) else {}
+        session_id = (
+            session_record.get("agent_session_id")
+            or summary.get("session_id")
+            or fleet.get("fleet_session_id")
+            or run_id
+        )
+        turn_id = fleet.get("fleet_turn_id") or run_id
 
         started = _parse_dt(timing.get("started_at"))
         finished = _parse_dt(timing.get("finished_at"))
@@ -186,6 +199,17 @@ def build_pr_aggregate(
                 value = usage.get(field)
                 if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                     usage_totals[field] += value
+            session_entry = session_aggregates.setdefault(
+                str(session_id),
+                {"session_id": session_id, "turns_count": 0, "usage_totals": {field: 0 for field in TOKEN_FIELDS}, "agent_process_seconds": 0.0, "api_equivalent_cost_usd": 0.0},
+            )
+            session_entry["turns_count"] += 1
+            for field in TOKEN_FIELDS:
+                value = usage.get(field)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    session_entry["usage_totals"][field] += value
+            if agent_process is not None:
+                session_entry["agent_process_seconds"] += agent_process
         else:
             unresolved = {
                 "run_id": run_id,
@@ -206,14 +230,41 @@ def build_pr_aggregate(
             if cost is not None:
                 pricing_total += cost
                 calculated_cost_runs += 1
+                session_entry = session_aggregates.setdefault(
+                    str(session_id),
+                    {"session_id": session_id, "turns_count": 0, "usage_totals": {field: 0 for field in TOKEN_FIELDS}, "agent_process_seconds": 0.0, "api_equivalent_cost_usd": 0.0},
+                )
+                session_entry["api_equivalent_cost_usd"] += cost
+
+        subscription = pricing.get("subscription")
+        if isinstance(subscription, dict):
+            amount = _num(subscription.get("amount"))
+            currency = subscription.get("currency") or "USD"
+            if amount is not None and isinstance(currency, str):
+                subscription_totals[currency] = subscription_totals.get(currency, 0.0) + amount
+                subscription_records += 1
+                plan_type = subscription.get("plan_type")
+                if isinstance(plan_type, str) and plan_type not in subscription_plan_types:
+                    subscription_plan_types.append(plan_type)
+                session_entry = session_aggregates.setdefault(
+                    str(session_id),
+                    {"session_id": session_id, "turns_count": 0, "usage_totals": {field: 0 for field in TOKEN_FIELDS}, "agent_process_seconds": 0.0, "api_equivalent_cost_usd": 0.0},
+                )
+                session_entry.setdefault("subscription_totals", {})[currency] = session_entry.setdefault("subscription_totals", {}).get(currency, 0.0) + amount
 
         run_refs.append({
             "run_id": run_id,
+            "session_id": session_id,
+            "turn_id": turn_id,
             "work_package": summary.get("work_package"),
             "agent_shell": shell,
             "provider": provider,
             "usage_status": status,
             "pricing_status": pricing.get("status"),
+            "tokens": {field: usage.get(field) for field in TOKEN_FIELDS if usage.get(field) is not None},
+            "agent_process_seconds": agent_process,
+            "api_equivalent_cost_usd": _num(pricing.get("api_equivalent_cost_usd")),
+            "subscription_cost": _num(subscription.get("amount")) if isinstance(subscription, dict) else None,
         })
 
     pr_started = min(started_values).isoformat() if started_values else None
@@ -251,6 +302,24 @@ def build_pr_aggregate(
             "actual_billed_cost_usd": None,
             "calculated_cost_runs": calculated_cost_runs,
         },
+        "subscription_totals": {
+            "by_currency": {key: round(value, 8) for key, value in subscription_totals.items()},
+            "records": subscription_records,
+            "plan_types": subscription_plan_types,
+        },
+        "session_aggregates": [
+            {
+                **entry,
+                "agent_process_seconds": round(entry.get("agent_process_seconds", 0.0), 6),
+                "api_equivalent_cost_usd": round(entry.get("api_equivalent_cost_usd", 0.0), 8),
+                "subscription_totals": {
+                    key: round(value, 8)
+                    for key, value in (entry.get("subscription_totals") or {}).items()
+                },
+            }
+            for entry in session_aggregates.values()
+        ],
+        "turns": run_refs,
         "timing": {
             "pr_started_at": pr_started,
             "pr_finished_at": pr_finished,

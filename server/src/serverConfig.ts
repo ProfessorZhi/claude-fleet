@@ -8,6 +8,8 @@ export interface ServerTarget {
   pid: number;
   token: string;
   debugLog?: string;
+  /** Stable local workspace identity used to route Coordinator requests. */
+  workspaceId?: string;
 }
 
 /** Complete per-server discovery record stored in the multi-server registry. */
@@ -35,7 +37,9 @@ export function isServerTarget(value: unknown): value is ServerTarget {
     (value.pid as number) > 0 &&
     typeof value.token === 'string' &&
     value.token.length > 0 &&
-    (value.debugLog === undefined || typeof value.debugLog === 'string')
+    (value.debugLog === undefined || typeof value.debugLog === 'string') &&
+    (value.workspaceId === undefined ||
+      (typeof value.workspaceId === 'string' && value.workspaceId.trim().length > 0))
   );
 }
 

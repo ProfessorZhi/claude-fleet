@@ -97,17 +97,27 @@ MVP Spec Set
 Agent Fleet 是新文档和新 Spec 的 canonical brand。旧目录中的 Claude Fleet 名称仅表示
 历史迁移或兼容上下文；本索引不再规划第二轮品牌迁移。
 
-| Slug                                       | 状态   | 概要                                                      |
-| ------------------------------------------ | ------ | --------------------------------------------------------- |
-| `001-multi-instance-runtime`               | 已实现 | Claude Code 多实例 Runtime                                |
-| `002-provider-model-isolation`             | 已实现 | Provider / Model 隔离                                     |
-| `003-instance-status`                      | 已实现 | Agent 状态与事件                                          |
-| `004-minimal-control-ui`                   | 已实现 | 最小控制 UI                                               |
-| `005-provider-registry-session-continuity` | 已实现 | Provider Registry / Session Continuity                    |
-| `006-branding-discovery-migration`         | 已实现 | 品牌、迁移、Discovery upsert                              |
-| `agentmetrics-integration`                 | 进行中 | agentmetrics 合并与 Fleet identity 合同（非编号迁移基础） |
-| `007-fleet-observability-workflow`         | 进行中 | 当前 Codex Client + Claude Code Worker 拓扑与 FleetEvent  |
-| `008-fleet-command-scene`                  | 设计中 | 可切换 Fleet Command / Pixel Office Scene                 |
+| Slug                                         | 状态     | 概要                                                          |
+| -------------------------------------------- | -------- | ------------------------------------------------------------- |
+| `001-multi-instance-runtime`                 | 已实现   | Claude Code 多实例 Runtime                                    |
+| `002-provider-model-isolation`               | 已实现   | Provider / Model 隔离                                         |
+| `003-instance-status`                        | 已实现   | Agent 状态与事件                                              |
+| `004-minimal-control-ui`                     | 已实现   | 最小控制 UI                                                   |
+| `005-provider-registry-session-continuity`   | 已实现   | Provider Registry / Session Continuity                        |
+| `006-branding-discovery-migration`           | 已实现   | 品牌、迁移、Discovery upsert                                  |
+| `agentmetrics-integration`                   | 进行中   | agentmetrics 合并与 Fleet identity 合同（非编号迁移基础）     |
+| `007-fleet-observability-workflow`           | 进行中   | 当前 Codex Client + Claude Code Worker 拓扑与 FleetEvent      |
+| `008-fleet-command-scene`                    | 已实现   | 可切换 Fleet Command / Pixel Office Scene                     |
+| `009-fleet-command-control-center`           | 已实现   | Mission / Instance / Terminal / Timeline 控制中心             |
+| `010-fleet-scene-visual-system`              | 部分实现 | 角色舰型、状态映射与确定性视觉 fallback；sprite/Canvas 待后续 |
+| `011-fleet-command-information-architecture` | 进行中   | Scene First、Mission Rail、按需详情与紧凑观测区               |
+| `012-fleet-command-localization`             | 进行中   | Fleet Command 简体中文显示层                                  |
+| `013-configurable-scene-preference`          | 进行中   | 办公室默认前端、设置页切换与场景入口                          |
+| `014-coordinator-management-api`             | 进行中   | Coordinator 多 Agent 生命周期与安全查询                       |
+| `015-runtime-choice-new-agent`               | 进行中   | 新建 Agent 选择 Claude Code / Codex CLI 与本地登录复用        |
+| `016-coordinator-workflow`                   | 进行中   | Coordinator 的 WorkItem 分配与结果回收边界                    |
+| `017-delivery-closure`                       | 进行中   | Scheduler、任务投递、Telemetry、SCM 与交付验收                |
+| `018-production-closure`                     | 进行中   | Coordinator Session、结果闭环、真实边界、安全恢复与发布       |
 
 完整 MVP Spec Index 在 Phase 1 完成后由 [`docs/ROADMAP.md`](../ROADMAP.md) 引用并
 在此处同步。

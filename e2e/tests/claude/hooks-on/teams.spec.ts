@@ -61,6 +61,7 @@ async function expectTeammateActivity(frame: Frame, text: string): Promise<void>
 // ones. Inline teammates share the lead transcript; tmux teammates have a
 // separate session and send hooks with that session's identity.
 test.describe('Hooks ON / teams', () => {
+  test.use({ scene: 'pixel-office' });
   test('internal terminal lead with inline teammate routes tools to teammate @area:teams', async ({
     pixelAgents,
   }) => {

@@ -115,6 +115,10 @@ export function activate(context: vscode.ExtensionContext) {
             providerProfileStore: provider.providerProfileStore,
             secretStorageProvider: provider.secretStorageProvider,
           },
+          codexCliCheck: () => provider.checkCodexCli(),
+          codexLauncher: async (options) => {
+            await provider.launchCodexFromFlow(options);
+          },
         },
         async (options) => {
           await provider.launchFromFlow(options);

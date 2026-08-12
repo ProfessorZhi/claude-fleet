@@ -18,6 +18,7 @@ import {
   SERVER_REGISTRY_PROTOCOL_VERSION,
   SERVERS_DIR,
 } from './constants.js';
+import type { CoordinatorSession } from './coordinatorSession.js';
 import { createHttpServer } from './httpServer.js';
 import type { ServerConfig } from './serverConfig.js';
 import { isServerConfig, isServerTarget } from './serverConfig.js';
@@ -71,9 +72,13 @@ export class ClaudeFleetServer {
     onSetHooksEnabled?: SetHooksEnabledSideEffect;
     onReloadAssets?: ReloadAssetsSideEffect;
     controlApi?: FleetControlApi;
+    coordinatorSession?: CoordinatorSession;
+    /** Stable workspace identity for multi-window Coordinator routing. */
+    workspaceId?: string;
   }): Promise<ServerConfig> {
     const embedded = options?.embedded ?? true;
     const wantsSpa = !embedded;
+    const workspaceId = options?.workspaceId?.trim() || undefined;
 
     // Capability-based reuse: an embedded (VS Code) caller only reuses another
     // embedded server (today's multi-window sharing); a standalone caller only
@@ -82,7 +87,11 @@ export class ClaudeFleetServer {
     // server (blank page). Prune dead entries first so a crashed server's
     // stale file never blocks discovery of a live one.
     const registry = this.readAndPruneRegistry();
-    const candidate = registry.find((e) => e.servesSpa === wantsSpa);
+    const candidate = registry.find(
+      (entry) =>
+        entry.servesSpa === wantsSpa &&
+        (workspaceId === undefined || sameWorkspaceId(entry.workspaceId, workspaceId)),
+    );
     if (candidate) {
       this.config = candidate;
       this.ownsServer = false;
@@ -109,6 +118,7 @@ export class ClaudeFleetServer {
       onSetHooksEnabled: options?.onSetHooksEnabled,
       onReloadAssets: options?.onReloadAssets,
       controlApi: options?.controlApi,
+      coordinatorSession: options?.coordinatorSession,
     });
 
     this.app = app;
@@ -119,6 +129,7 @@ export class ClaudeFleetServer {
       startedAt: Date.now(),
       servesSpa: wantsSpa,
       protocol: SERVER_REGISTRY_PROTOCOL_VERSION,
+      ...(workspaceId ? { workspaceId } : {}),
       // Diagnostic-only: forward the debug-log path to the hook script via
       // server.json (env vars don't reach the spawned hook reliably).
       ...((process.env['CLAUDE_FLEET_DEBUG_LOG'] ?? process.env['PIXEL_AGENTS_DEBUG_LOG'])
@@ -283,6 +294,16 @@ export class ClaudeFleetServer {
       // File may already be gone
     }
   }
+}
+
+function sameWorkspaceId(left: string | undefined, right: string): boolean {
+  if (!left) return false;
+  const normalize = (value: string) =>
+    value
+      .trim()
+      .replace(/[\\/]+/g, '/')
+      .toLowerCase();
+  return normalize(left) === normalize(right);
 }
 
 /** Check if a process is alive by sending signal 0 (no-op, just checks existence). */

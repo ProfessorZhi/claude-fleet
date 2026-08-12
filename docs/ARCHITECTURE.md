@@ -244,6 +244,14 @@ interface FleetInstance {
 
 例如 Provider/Profile 是 Claude Code 当前已有的重要能力；不要假装 Codex CLI 一定具有完全相同的 Provider 模型。
 
+### Terminal 与 Session 的边界
+
+`FleetInstance` 的身份是可控制的终端/Runtime 实例，`sessionId` 只是该实例
+当前会话以及遥测归属。不能因为发现一个新的 Codex JSONL session 就凭空创建
+一个新的 Worker：Codex Desktop 的 session 属于 Coordinator 活动，不是 VS Code
+终端；Fleet 创建的 Codex 终端才是可 Focus/Stop 的 Agent 身份。没有可靠终端绑定
+的外部 session 不得被标记为可管理终端，Token、耗时和 PR 证据仍按 session 保存。
+
 ---
 
 ## 7. Runtime Adapter 层
@@ -333,6 +341,23 @@ Fleet 不应依赖私有协议：
 - 没有稳定官方能力时不声称能控制该 Thread。
 
 因此 v1 的核心能力不依赖 Codex Desktop；最完整模式是全部使用 Fleet-managed Claude Code / Codex CLI。
+
+### 当前 New Agent 工作流
+
+主控 Codex Session 负责 Mission / WorkItem 规划、分配、状态汇总与接管，不被当作
+Worker 计数。VS Code 中的 `New Agent` 先选择 Runtime，再为 Worker 创建独立终端：
+
+```text
+Coordinator Session
+        ↓ New Agent
+Choose Runtime
+   ├── Claude Code → Repo → Provider → Model → Claude terminal + hooks
+   └── Codex CLI   → Repo → local CLI check → Codex terminal + local login
+```
+
+Codex CLI 分支不读取或保存 Fleet API Key；登录态由本机 Codex 管理。Fleet 只记录
+runtime、repo、terminal、session、status 和 usage 等安全元数据，并将 Worker 投影到
+Office / Fleet Command 与 ControlService 的同一份 roster。
 
 ---
 
@@ -429,6 +454,39 @@ Pixel Office Scene
 ```
 
 关键约束：UI 不直接解析 Claude JSONL 或 Codex-specific raw event。
+
+### 10.5 当前 Coordinator 控制闭环
+
+当前已交付的管理面动作是：
+
+```text
+create_mission
+  → create_work_item
+  → recommend_assignment
+  → assign_work_item
+  → deliver_work_item (bounded task brief)
+  → collect_result
+  → record_telemetry
+  → record_quality
+```
+
+`CoordinatorScheduler` 在显式 `plan()` / `tick()` 边界内负责依赖、并发上限、Runtime/Role
+约束、幂等 requestId 和有上限的重试；它只执行 `approve` / `autonomous` 策略，不是后台
+无限自治进程。`FleetControlService` 负责策略校验、状态投影、Assignment Decision 审计和
+安全的 `UsageRecord` / `QuotaSnapshot` 写入；`FleetLedgerStore` 支持注入快照持久化，
+Worktree 管理器负责路径/Branch 冲突检查。
+
+`deliver_work_item` 只向已注册的 Runtime Host 发送四个 bounded、secret-free 字段：
+`workItemId`、`title`、`objective`、`acceptanceCriteria`。Host 可以把简报写入已存在的
+受管理终端；没有 Host 或 Host 不支持该边界时 fail closed，返回 `unavailable`。控制面不
+传递任意 Prompt、raw transcript 或 Secret。
+
+Telemetry ingestion 先将 Claude/Codex/agentmetrics 的输入规范化为 Fleet Usage/Quota
+事实，再通过 Ledger 的幂等边界写入；SCM/PR/CI 只读适配器只返回 branch、commit、PR、CI
+和 review 的安全元数据，Coordinator 通过 `record_quality` 写入并按 WorkItem 查询这些
+证据。Metrics 可按 Instance 或 WorkItem 查询；成本只有在币种和计费 basis 兼容时才汇总，
+否则保留单条证据而不伪造总额。真实 Provider、GitHub/CI 连接器和真实 CLI smoke task
+仍是外部环境能力，不在 fake contract 验证中启动。
 
 ---
 
@@ -593,7 +651,21 @@ External manually launched Claude
 
 同 native Session 在 Restart / Switch / Resume 后必须 upsert，不重复创建 Instance。
 
-v1 Codex CLI Adapter 应尽可能提供等价 discovery；如果 Codex CLI 暂时没有可靠 discovery 信号，则明确标记 capability 缺失，不使用脆弱猜测。
+Codex CLI 现在通过独立的 session scanner 提供只读 Auto Discovery：
+
+```text
+~/.codex/sessions/**/*.jsonl
+        ↓ session_meta + 有界尾部事件
+工作区 cwd 过滤
+        ↓
+External Codex Instance
+```
+
+该 scanner 不把 Codex envelope JSONL 送入 Claude transcript parser，也不读取或显示
+prompt / response / Secret；只提取 session id、cwd、model、provider、最近活动时间和
+working/waiting/idle 状态。外部 Desktop/CLI Session 目前是只读观察对象，Focus/Stop
+能力仍只对 Fleet-managed terminal 生效。用户关闭外部 Codex 投影后，scanner 会复用
+统一 dismissal cooldown，直到冷却结束前不会因为 session 文件仍在增长而立即复活同一艘船。
 
 ---
 
@@ -713,30 +785,55 @@ Runtime / Telemetry
        ↓
     Scene Model
        │
- ┌─────┴──────────┐
- ↓                ↓
-Pixel Office   Fleet Command
+ ┌─────┼──────────────┬─────┐
+ ↓     ↓              ↓
+Task Control   Fleet Command   Pixel Office
 ```
 
-两种 Scene 使用相同 Instance / Telemetry / Command 数据。
+三种 Scene 使用相同 Instance / Telemetry / Command 数据。
 
 设置：
 
 ```text
 Visual Scene
-● Fleet Command
+● Task Control Center
+○ Fleet Command
 ○ Pixel Office
 ```
 
-Pixel Office 保留为正式可选 Scene。
+Task Control Center 当前是默认 Scene；Fleet Command 与 Pixel Office 保留为可选 Scene。
+三者切换不改变 Agent/Telemetry/Command 数据源。
 
 ---
 
 ## 18. Fleet Command Scene
 
+### 当前实现边界（2026-08）
+
+当前 Webview 已实现三种共享数据投影：
+
+- Task Control Center 是当前默认 Scene，Fleet Command 和 Pixel Office 作为可选投影保留；三者通过 Settings 切换；
+- 三种 Scene 都从现有 `OfficeState`、Agent 状态、工具状态和 Fleet Telemetry projection
+  读取数据，不创建第二份 Runtime roster；
+- Task Control Center 是信息优先的普通开发者 Dashboard：任务摘要、Agent 进度表、状态、当前工作、
+  Token/上下文、最近活动和管理动作是主内容，不渲染像素办公室或舰队场景；
+- 左侧 Mission/Coordinator、中央稳定 Vessel 编队、右侧 Instance Detail、底部 Terminal
+  Dock/Timeline 已具备真实选择和 Focus/Stop/Restart/Switch Provider/New Agent 命令入口；
+- Fleet Command 已收敛为 Scene First 信息架构：紧凑 Command Bar、约 220px Mission Rail、
+  无选择时的 `Rail + Scene` 两列布局，以及选择 Agent 后才挂载的 Details-on-Demand 详情栏；
+- 舰船常驻标签只显示身份、舰型和状态，Repo 路径、Provider/Model、Session、Tool 等工程
+  细节只在详情栏显示；Terminal Dock 与 Timeline/Recommendation 为底部薄条；
+- 角色到舰型、Runtime badge、状态到 engine/beacon/motion 的映射已确定性实现；Asset Manifest、
+  Canvas 编队/命中区、有限时长事件动画和 reduced-motion/后台节流已接入，当前仍使用
+  SVG/CSS/Canvas greybox fallback，避免依赖生图或运行时网络资源。
+
+当前舰队美术使用确定性的 SVG/CSS/Canvas fallback 和统一 Asset Manifest，已覆盖舰型、引擎、
+beacon、选中和完成脉冲；正式 64px bitmap sprite 与人工 pixel cleanup 仍是可独立替换的
+美术升级项，不阻塞控制中心的状态与控制链路。
+
 推荐视觉：
 
-> **Pixel Sci-Fi Scene + Modern Developer Dashboard**
+> **Minimal Task Control Center + Optional Fleet/Pixel Projections**
 
 而不是全页面游戏化。
 
@@ -827,6 +924,18 @@ Subagent 动画必须来自真实事件，而不是随机模拟。
 ```
 
 左侧 Coordinator 不是必须嵌入聊天内容；它只是当前 Mission 主线程的入口与状态卡。
+
+当前 Webview 的信息架构实现为：
+
+```text
+Command Bar
+Mission Rail │ Fleet Scene │ Detail (only when selected)
+Terminal Dock (compact)
+Timeline / Recommendation (compact)
+```
+
+无选择时 Detail 列不挂载，Fleet Scene 获得释放的宽度；选择 Vessel 后才显示 Runtime、Repo、
+Session、Provider/Model、Telemetry 与控制动作。左侧 Mission Rail 只承担 Mission 组织与摘要职责。
 
 ---
 
@@ -945,15 +1054,15 @@ v1 架构达到目标至少需要：
 [ ] Focus 能打开正确真实 Terminal
 [ ] Stop A 不影响 B
 [ ] Restart/Resume 遵循对应 Runtime 的原生语义
-[ ] Auto Discovery 在有可靠能力的 Runtime 上工作
-[ ] Pixel Office 仍可用
-[ ] Fleet Command 成为新的默认 Scene
-[ ] Scene 切换不影响 Runtime
-[ ] Telemetry 不泄漏 Secret
+[x] Auto Discovery 在有可靠能力的 Runtime 上工作
+[x] Pixel Office 仍可用
+[x] Task Control Center 成为默认 Scene，Fleet Command 与 Pixel Office 可选
+[x] Scene 切换不影响 Runtime
+[x] Telemetry 不泄漏 Secret
 [ ] 多 writer checkout 风险可以被识别或明确无法判断
-[ ] Token / Cost / Quota 数据模型彼此分离
+[x] Token / Cost / Quota 数据模型彼此分离
 [ ] Fleet Ledger 可以保存任务 / Session / PR 的长期元信息
-[ ] Assignment / Recommendation 有可解释理由与审计记录
+[x] Assignment / Recommendation 有可解释理由与审计记录
 ```
 
 ---

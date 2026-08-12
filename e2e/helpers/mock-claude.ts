@@ -360,6 +360,9 @@ export async function spawnExternalClaudeScenario(options: {
     // Switches the runner's narration to the magenta [external·tag] style.
     PIXEL_AGENTS_MOCK_EXTERNAL: '1',
   };
+  // External mock sessions are part of the same isolated E2E world. Do not
+  // inherit a developer's real Claude profile selector.
+  delete env.CLAUDE_CONFIG_DIR;
 
   // Pipe stderr so we can surface diagnostics on timeout. stdout (the mock's
   // step-by-step narration) appends to the per-test external-narration log,

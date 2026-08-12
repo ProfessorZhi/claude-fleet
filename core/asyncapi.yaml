@@ -191,6 +191,21 @@ components:
         hueShift:
           type: integer
           description: Server-assigned hue shift in degrees (0-360).
+        displayName:
+          type: string
+          description: User-facing Fleet label, independent from Team role name.
+        providerProfileId:
+          type: string
+        providerDisplayName:
+          type: string
+        modelId:
+          type: string
+        runtime:
+          type: string
+        createdAt:
+          type: integer
+        managedByFleet:
+          type: boolean
 
     AgentClosed:
       description: An agent has been removed from the office.
@@ -243,6 +258,30 @@ components:
           description: Map of agent ID (string) to external flag.
           additionalProperties:
             type: boolean
+        displayNames:
+          type: object
+          additionalProperties:
+            type: string
+        providerDisplayNames:
+          type: object
+          additionalProperties:
+            type: string
+        modelIds:
+          type: object
+          additionalProperties:
+            type: string
+        runtimes:
+          type: object
+          additionalProperties:
+            type: string
+        createdAt:
+          type: object
+          additionalProperties:
+            type: integer
+        managedByFleet:
+          type: object
+          additionalProperties:
+            type: boolean
 
     AgentStatus:
       description: Active vs waiting state for an agent (drives character animation).
@@ -284,9 +323,9 @@ components:
           type: string
         status:
           type: string
-          description: Human-readable status to display (e.g. "Reading foo.ts").
         toolName:
           type: string
+          description: Human-readable status to display (e.g. "Reading foo.ts").
         permissionActive:
           type: boolean
         runInBackground:
@@ -359,6 +398,8 @@ components:
         toolId:
           type: string
         status:
+          type: string
+        toolName:
           type: string
 
     SubagentToolDone:
@@ -444,6 +485,10 @@ components:
           type: integer
         maxContextTokens:
           type: integer
+        usage:
+          type: object
+          additionalProperties:
+            type: integer
 
     LayoutLoaded:
       description: |

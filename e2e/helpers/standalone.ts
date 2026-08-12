@@ -180,7 +180,9 @@ async function drainRecordedMessages(page: Page): Promise<RecordedServerMessage[
 
 async function openStandalonePage(page: Page, hostUrl: string): Promise<void> {
   await page.goto(`${hostUrl}/`);
-  await expect(page.getByRole('button', { name: 'Settings' })).toBeVisible({ timeout: 30_000 });
+  await expect(
+    page.locator('[data-testid="fleet-settings"], button[title="Settings"]'),
+  ).toBeVisible({ timeout: 30_000 });
 }
 
 export async function launchStandalone(

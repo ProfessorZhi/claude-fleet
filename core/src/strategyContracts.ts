@@ -14,6 +14,7 @@ import type {
   LaunchTemplate,
   LedgerMeasurement,
   QuotaSnapshot,
+  QuotaUsageImpact,
   QuotaValue,
   ResourceMetrics,
 } from './ledgerContracts.js';
@@ -120,7 +121,7 @@ export interface StrategyRecommendation {
   proposedLaunchTemplate?: LaunchTemplate;
   expected?: LedgerMeasurement<ResourceMetrics>;
   /** Present only when an adapter supplied explicit quota evidence. */
-  expectedQuota?: LedgerMeasurement<QuotaValue>;
+  expectedQuota?: LedgerMeasurement<QuotaUsageImpact | QuotaValue>;
   factors: StrategyFactor[];
   constraints: StrategyConstraint[];
   confidence: 'high' | 'medium' | 'low' | 'unknown';

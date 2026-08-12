@@ -15,6 +15,7 @@ import {
   sessionStartClear,
   sessionStartResume,
   sessionStartStartup,
+  stop,
   subagentStart,
   taskCompleted,
   teammateIdle,
@@ -80,6 +81,7 @@ function otherOverlayId(ids: number[], knownId: number): number {
 }
 
 test.describe('Hooks ON / lifecycle', () => {
+  test.use({ scene: 'pixel-office' });
   test('/clear on internal agent reassigns the same character to the new JSONL @area:lifecycle', async ({
     pixelAgents,
   }) => {
@@ -1028,9 +1030,9 @@ test.describe('Hooks ON / lifecycle', () => {
   // verify playDoneSound() fires on agentStatus: 'waiting'.
   // The webview's notificationSound.ts records every invocation into
   // window.__pixelAgentsTestHooks.playedSounds (a test-only marker that runs BEFORE the
-  // soundEnabled gate). We trigger waiting state by sending an idle_prompt
-  // notification hook (the same hook path the spawn-paths test uses to surface "Might be waiting for
-  // input") and assert the sound was dispatched.
+  // soundEnabled gate). We trigger a completed turn with the Stop hook and
+  // assert the sound was dispatched. An idle_prompt is deliberately a
+  // different state: it means "waiting for input" and is not completion.
   test('done sound chime fires on agentStatus waiting @area:cross-cutting', async ({
     pixelAgents,
   }) => {
@@ -1069,7 +1071,7 @@ test.describe('Hooks ON / lifecycle', () => {
     narrator.check('external agent active — "Running: npm test"');
 
     // Reset the marker AFTER active-state dispatch so we only capture sounds
-    // triggered by the idle_prompt under test.
+    // triggered by the Stop hook under test.
     await frame.evaluate(() => {
       const w = window as Window & {
         __pixelAgentsTestHooks?: { playedSounds?: unknown[] };
@@ -1077,10 +1079,10 @@ test.describe('Hooks ON / lifecycle', () => {
       if (w.__pixelAgentsTestHooks) w.__pixelAgentsTestHooks.playedSounds = [];
     });
 
-    narrator.step('sending an idle_prompt to flip the agent to waiting');
-    await sendHookEvent(serverConfig, idlePrompt(sessionId));
-    await expectOverlayVisible(frame, 'Waiting for input');
-    narrator.check('overlay shows "Waiting for input"');
+    narrator.step('sending Stop to flip the agent to completed waiting');
+    await sendHookEvent(serverConfig, stop(sessionId));
+    await expect(frame.getByTestId('agent-completion-unread')).toBeVisible();
+    narrator.check('completed agent shows the unread completion marker');
 
     narrator.step(
       'checking a "done" chime was dispatched (test hook — the chime is not audible in the video)',

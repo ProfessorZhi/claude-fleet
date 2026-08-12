@@ -55,14 +55,14 @@ describe('ProviderRegistry — Spec 005', () => {
     expect(d).toBeDefined();
     expect(d.providerType).toBe('anthropic-compatible');
     expect(d.authStrategy).toBe('auth-token');
-    expect(d.defaultEndpoint).toBe('https://api.minimax.io/anthropic');
+    expect(d.defaultEndpoint).toBe('https://api.minimaxi.com/anthropic');
     expect(d.supportedModelHints).toContain('MiniMax-M3[1m]');
     expect(d.requiredEnv).toMatchObject({
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
       ANTHROPIC_MODEL: 'MiniMax-M3[1m]',
     });
     expect(d.verified).toBe(true);
-    expect(d.source?.url).toContain('platform.minimax.io');
+    expect(d.source?.url).toContain('platform.minimaxi.com');
   });
 
   it('native providers use external credential chains without endpoints', () => {

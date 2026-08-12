@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "pricing_date": "2026-08-10",
+  "source": "official-list-catalog",
+  "override_path_env": "AGENTMETRICS_SUBSCRIPTION_PRICING_FILE",
+  "plans": [
+    {
+      "provider": "OpenAI",
+      "plan_type": "Plus",
+      "aliases": ["plus", "chatgpt-plus"],
+      "billing_period": "monthly",
+      "price": 20,
+      "currency": "USD",
+      "source": "official-list",
+      "source_url": "https://openai.com/chatgpt/pricing"
+    },
+    {
+      "provider": "OpenAI",
+      "plan_type": "Pro",
+      "aliases": ["pro", "chatgpt-pro"],
+      "billing_period": "monthly",
+      "price": 200,
+      "currency": "USD",
+      "source": "official-list",
+      "source_url": "https://openai.com/chatgpt/pricing"
+    },
+    {
+      "provider": "MiniMax",
+      "plan_type": "Standard Starter",
+      "aliases": ["starter", "standard-starter"],
+      "billing_period": "monthly",
+      "price": 29,
+      "currency": "CNY",
+      "source": "official-list",
+      "source_url": "https://platform.minimaxi.com/docs/guides/pricing-token-plan"
+    },
+    {
+      "provider": "MiniMax",
+      "plan_type": "Plus",
+      "aliases": ["plus", "token-plan-plus"],
+      "billing_period": "monthly",
+      "price": 49,
+      "currency": "CNY",
+      "source": "official-list",
+      "source_url": "https://platform.minimaxi.com/docs/guides/pricing-token-plan"
+    },
+    {
+      "provider": "MiniMax",
+      "plan_type": "Max",
+      "aliases": ["max", "token-plan-max"],
+      "billing_period": "monthly",
+      "price": 119,
+      "currency": "CNY",
+      "source": "official-list",
+      "source_url": "https://platform.minimaxi.com/docs/guides/pricing-token-plan"
+    }
+  ]
+}

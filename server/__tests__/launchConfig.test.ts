@@ -15,7 +15,11 @@ import {
   makeInheritProviderProfile,
   validateProviderProfile,
 } from '../../core/src/providerProfiles.js';
-import { MissingSecretError, resolveClaudeLaunchConfig } from '../src/launchConfig.js';
+import {
+  MissingSecretError,
+  ModelRequiredError,
+  resolveClaudeLaunchConfig,
+} from '../src/launchConfig.js';
 
 const SECRET_A = 'sk-ant-secret-AAAA-AAAA-AAAA-AAAA';
 const SECRET_B = 'sk-ant-secret-BBBB-BBBB-BBBB-BBBB';
@@ -40,6 +44,79 @@ function makeCustomProfile(opts: {
 }
 
 describe('resolveClaudeLaunchConfig — Spec 002 isolation', () => {
+  it('resolves a provider default model and records safe requested/resolved diagnostics', () => {
+    const profile = makeCustomProfile({
+      id: 'deepseek-profile',
+      name: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+      authMode: 'authToken',
+      secretRef: 'deepseek-secret',
+      defaultModelId: 'deepseek-v4-flash',
+    });
+    const result = resolveClaudeLaunchConfig(
+      profile,
+      undefined,
+      '/repo',
+      'session',
+      () => SECRET_A,
+    );
+
+    expect(result.args).toContain('--model');
+    expect(result.args).toContain('deepseek-v4-flash');
+    expect(result.safeMetadata).toMatchObject({
+      requestedProviderProfileId: 'deepseek-profile',
+      resolvedProviderProfileId: 'deepseek-profile',
+      requestedModelId: undefined,
+      resolvedModelId: 'deepseek-v4-flash',
+      modelId: 'deepseek-v4-flash',
+      credential: 'present',
+      refPresent: true,
+      refResolution: 'success',
+      authConfigured: true,
+      authInjected: true,
+      authVariableNames: ['ANTHROPIC_AUTH_TOKEN'],
+      baseUrlHost: 'api.deepseek.com',
+    });
+    expect(JSON.stringify(result.safeMetadata)).not.toContain(SECRET_A);
+  });
+
+  it('rejects a configured provider without a requested or default model', () => {
+    const profile = makeCustomProfile({
+      id: 'missing-model',
+      name: 'Missing Model',
+      authMode: 'apiKey',
+      secretRef: 'missing-model-secret',
+    });
+    expect(() =>
+      resolveClaudeLaunchConfig(profile, undefined, '/repo', 'session', () => SECRET_A),
+    ).toThrow(ModelRequiredError);
+    expect(() =>
+      resolveClaudeLaunchConfig(profile, undefined, '/repo', 'session', () => SECRET_A),
+    ).toThrow('MODEL_REQUIRED');
+  });
+
+  it('keeps explicit Inherit credential-free and allows native model selection', () => {
+    const result = resolveClaudeLaunchConfig(
+      makeInheritProviderProfile(),
+      undefined,
+      '/repo',
+      'session',
+      () => SECRET_A,
+    );
+    expect(result.env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(result.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(result.safeMetadata).toMatchObject({
+      requestedProviderProfileId: INHERIT_PROVIDER_PROFILE_ID,
+      resolvedProviderProfileId: INHERIT_PROVIDER_PROFILE_ID,
+      credential: 'absent',
+      refPresent: false,
+      refResolution: 'not_required',
+      authConfigured: false,
+      authInjected: false,
+      authVariableNames: [],
+    });
+  });
+
   it('two profiles produce independent env objects (Test 1)', () => {
     const profileA = makeCustomProfile({
       id: 'a',
@@ -145,11 +222,22 @@ describe('resolveClaudeLaunchConfig — Spec 002 isolation', () => {
 
     const result = resolveClaudeLaunchConfig(profileA, 'model-a', '/repo-a', 'sa', () => SECRET_A);
 
-    // safeMetadata has only id, name, modelId.
+    // Diagnostics are safe to serialize and contain no credential material.
     expect(Object.keys(result.safeMetadata).sort()).toEqual([
+      'authConfigured',
+      'authInjected',
+      'authVariableNames',
+      'baseUrlHost',
+      'credential',
       'modelId',
       'providerDisplayName',
       'providerProfileId',
+      'refPresent',
+      'refResolution',
+      'requestedModelId',
+      'requestedProviderProfileId',
+      'resolvedModelId',
+      'resolvedProviderProfileId',
     ]);
 
     // safeMetadata JSON MUST NOT contain the secret.
@@ -260,7 +348,7 @@ describe('resolveClaudeLaunchConfig — Spec 002 isolation', () => {
         authMode: c.authMode,
         secretRef: c.authMode === 'inherit' ? undefined : 'claude-fleet.provider.case',
       };
-      const r = resolveClaudeLaunchConfig(profile, undefined, '/wd', 's', () => SECRET_A);
+      const r = resolveClaudeLaunchConfig(profile, 'model', '/wd', 's', () => SECRET_A);
       expect(r.env.PWD).toBe('/wd');
       expect(JSON.stringify(r.safeMetadata)).not.toContain(SECRET_A);
     }
@@ -389,7 +477,7 @@ describe('resolveClaudeLaunchConfig — Spec 005 provider types', () => {
       presetId: 'anthropic-account',
       authMode: 'inherit',
     };
-    const r = resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', noSecret);
+    const r = resolveClaudeLaunchConfig(profile, 'claude-sonnet', '/repo', 's', noSecret);
     expect(r.env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(r.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(r.env.ANTHROPIC_BASE_URL).toBeUndefined();
@@ -426,8 +514,22 @@ describe('resolveClaudeLaunchConfig — Spec 005 provider types', () => {
       secretRef: 'claude-fleet.provider.minimax.1',
     };
     const r = resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', () => 'mm-key');
-    expect(r.env.ANTHROPIC_BASE_URL).toBe('https://api.minimax.io/anthropic');
+    expect(r.env.ANTHROPIC_BASE_URL).toBe('https://api.minimaxi.com/anthropic');
     expect(r.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('1000000');
+  });
+
+  it('trims an existing auth token before injecting it into the terminal', () => {
+    const profile: ProviderProfile = {
+      id: 'minimax.trimmed',
+      name: 'MiniMax - Trimmed',
+      kind: 'anthropic-compatible',
+      providerType: 'anthropic-compatible',
+      presetId: 'minimax',
+      authMode: 'authToken',
+      secretRef: 'claude-fleet.provider.minimax.trimmed',
+    };
+    const r = resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', () => '  mm-key\r\n');
+    expect(r.env.ANTHROPIC_AUTH_TOKEN).toBe('mm-key');
   });
 
   it('explicit baseUrl overrides the preset default; explicit model wins via args', () => {
@@ -458,7 +560,7 @@ describe('resolveClaudeLaunchConfig — Spec 005 provider types', () => {
         presetId: preset,
         authMode: 'inherit',
       };
-      const r = resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', noSecret);
+      const r = resolveClaudeLaunchConfig(profile, 'claude-sonnet', '/repo', 's', noSecret);
       expect(r.env.ANTHROPIC_API_KEY, preset).toBeUndefined();
       expect(r.env.ANTHROPIC_AUTH_TOKEN, preset).toBeUndefined();
       expect(r.env.ANTHROPIC_BASE_URL, preset).toBeUndefined();
@@ -475,7 +577,7 @@ describe('resolveClaudeLaunchConfig — Spec 005 provider types', () => {
       authMode: 'apiKey',
       secretRef: 'claude-fleet.provider.api.1',
     };
-    const r = resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', () => 'sk-ant-123');
+    const r = resolveClaudeLaunchConfig(profile, 'claude-sonnet', '/repo', 's', () => 'sk-ant-123');
     expect(r.env.ANTHROPIC_API_KEY).toBe('sk-ant-123');
   });
 
@@ -489,8 +591,8 @@ describe('resolveClaudeLaunchConfig — Spec 005 provider types', () => {
       authMode: 'authToken',
       secretRef: 'claude-fleet.provider.deepseek.3',
     };
-    expect(() => resolveClaudeLaunchConfig(profile, undefined, '/repo', 's', noSecret)).toThrow(
-      MissingSecretError,
-    );
+    expect(() =>
+      resolveClaudeLaunchConfig(profile, 'claude-sonnet', '/repo', 's', noSecret),
+    ).toThrow(MissingSecretError);
   });
 });

@@ -7,6 +7,7 @@ import type { RecordedServerMessage } from '../../helpers/standalone';
 import { setSettings } from '../../helpers/webview';
 
 test.describe('Standalone / hooks', () => {
+  test.use({ scene: 'pixel-office' });
   test('propagates hook-driven lifecycle into the browser UI @area:standalone', async ({
     page,
     standalone,
@@ -50,7 +51,7 @@ test.describe('Standalone / hooks', () => {
     expect(toolStart).toBeTruthy();
     expect(
       preToolMessages.some(
-        (message) => message.type === 'agentStatus' && message.status === 'active',
+        (message) => message.type === 'agentStatus' && message.status === 'working',
       ),
     ).toBe(true);
 

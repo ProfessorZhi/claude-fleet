@@ -19,7 +19,11 @@ import {
   validateProviderProfile,
 } from '../../core/src/providerProfiles.js';
 import { getProviderDefinition } from '../../core/src/providerRegistry.js';
-import { type LaunchAgentFlowDeps, runCreateCustomProviderFlow } from './launchAgentFlow.js';
+import {
+  type LaunchAgentFlowDeps,
+  normalizeProviderSecret,
+  runCreateCustomProviderFlow,
+} from './launchAgentFlow.js';
 import type { ProviderProfileStore } from './providerProfileStore.js';
 import type { SecretStorageProvider } from './secretStorageProvider.js';
 
@@ -220,12 +224,14 @@ export async function runEditProviderFlow(
 
   let newSecret: string | undefined;
   if (secretAction === 'replace') {
-    newSecret = await vscode.window.showInputBox({
-      title: `Edit Provider: New Secret for "${profile.name}"`,
-      password: true,
-      placeHolder: 'paste secret…',
-      ignoreFocusOut: true,
-    });
+    newSecret = normalizeProviderSecret(
+      await vscode.window.showInputBox({
+        title: `Edit Provider: New Secret for "${profile.name}"`,
+        password: true,
+        placeHolder: 'paste secret…',
+        ignoreFocusOut: true,
+      }),
+    );
     if (!newSecret) return undefined;
   }
 

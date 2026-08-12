@@ -348,4 +348,151 @@ describe('transcriptParser: teammate spawn results (new-harness implicit teams)'
     expect(agent.teamName).toBeUndefined();
     expect(agent.isTeamLead).toBeUndefined();
   });
+
+  it('projects Claude thinking blocks as a transient reasoning activity', () => {
+    processTranscriptLine(
+      1,
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'thinking', thinking: 'not persisted in the projection' }] },
+      }),
+      agents,
+      waitingTimers,
+      permissionTimers,
+    );
+
+    expect(agent.reasoningToolId).toBe('reasoning-lead-session');
+    expect(agent.activeToolNames.get('reasoning-lead-session')).toBe('Thinking');
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: 'agentToolStart',
+        toolId: 'reasoning-lead-session',
+        toolName: 'Thinking',
+        status: 'Reasoning',
+      }),
+    );
+  });
+
+  it('keeps status, tool activity, and cumulative usage in sync across turns', () => {
+    const turn = (content: unknown[], usage: Record<string, number>) =>
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          model: 'claude-opus-5',
+          usage,
+          content,
+        },
+      });
+
+    processTranscriptLine(
+      1,
+      turn([{ type: 'thinking', thinking: 'private reasoning' }], {
+        input_tokens: 10,
+        cache_read_input_tokens: 20,
+        output_tokens: 5,
+      }),
+      agents,
+      waitingTimers,
+      permissionTimers,
+    );
+
+    expect(messages.slice(0, 3).map((message) => message.type)).toEqual([
+      'agentContextUsage',
+      'agentStatus',
+      'agentToolStart',
+    ]);
+    expect(messages[0]).toMatchObject({
+      type: 'agentContextUsage',
+      id: 1,
+      contextTokens: 35,
+      usage: { inputTokens: 10, cachedInputTokens: 20, outputTokens: 5, totalTokens: 35 },
+    });
+    expect(messages[2]).toMatchObject({ toolName: 'Thinking', status: 'Reasoning' });
+
+    processTranscriptLine(
+      1,
+      turn([{ type: 'tool_use', id: 'bash-1', name: 'Bash', input: { command: 'npm test' } }], {
+        input_tokens: 8,
+        cache_creation_input_tokens: 12,
+        output_tokens: 7,
+      }),
+      agents,
+      waitingTimers,
+      permissionTimers,
+    );
+
+    expect(messages).toContainEqual(
+      expect.objectContaining({ type: 'agentToolDone', id: 1, toolId: 'reasoning-lead-session' }),
+    );
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: 'agentToolStart',
+        id: 1,
+        toolId: 'bash-1',
+        toolName: 'Bash',
+      }),
+    );
+    expect(messages.at(-1)).toMatchObject({
+      type: 'agentToolStart',
+      toolId: 'bash-1',
+      toolName: 'Bash',
+    });
+
+    processTranscriptLine(
+      1,
+      JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 2500 }),
+      agents,
+      waitingTimers,
+      permissionTimers,
+    );
+
+    expect(messages.at(-1)).toMatchObject({
+      type: 'agentStatus',
+      id: 1,
+      status: 'waiting',
+      awaitingInput: false,
+    });
+    expect(agent.isWaiting).toBe(true);
+    expect(agent.activeToolIds.size).toBe(0);
+    expect(agent.usageTokens).toEqual({
+      inputTokens: 18,
+      cachedInputTokens: 32,
+      outputTokens: 12,
+      totalTokens: 62,
+    });
+
+    // A new prompt/turn must immediately make the same Fleet instance active
+    // again and replace the old reasoning activity instead of creating a ghost.
+    processTranscriptLine(
+      1,
+      JSON.stringify({ type: 'user', message: { content: 'continue' } }),
+      agents,
+      waitingTimers,
+      permissionTimers,
+    );
+    processTranscriptLine(
+      1,
+      turn([{ type: 'thinking', thinking: 'next turn' }], {
+        input_tokens: 3,
+        output_tokens: 4,
+      }),
+      agents,
+      waitingTimers,
+      permissionTimers,
+    );
+
+    expect(agent.isWaiting).toBe(false);
+    expect(agent.activeToolNames.get('reasoning-lead-session')).toBe('Thinking');
+    expect(messages.at(-1)).toMatchObject({
+      type: 'agentToolStart',
+      toolId: 'reasoning-lead-session',
+      toolName: 'Thinking',
+    });
+    expect(agent.usageTokens).toEqual({
+      inputTokens: 21,
+      cachedInputTokens: 32,
+      outputTokens: 16,
+      totalTokens: 69,
+    });
+  });
 });

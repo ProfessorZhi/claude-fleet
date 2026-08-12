@@ -51,6 +51,42 @@ describe('FleetControlClient', () => {
     expect(JSON.parse(String(init?.body))).toEqual(request);
   });
 
+  it('serializes provider and model identity without adding credential material', async () => {
+    const launchRequest: FleetControlRequest = {
+      requestId: 'launch-provider-1',
+      action: 'launch_instance',
+      mode: 'approve',
+      requestedBy: 'codex',
+      instanceId: 'agent-1',
+      createdAt: 1,
+      launch: {
+        runtime: 'claude-code',
+        role: 'worker',
+        repo: 'F:/repo',
+        cwd: 'F:/repo',
+        providerProfileId: 'deepseek.msk2hxew',
+        modelId: 'deepseek-v4-flash',
+        launchSource: 'coordinator',
+        requestedBy: 'codex',
+        policy: { mode: 'approve' },
+      },
+    };
+    let body = '';
+    await client(async (_input, init) => {
+      body = String(init?.body);
+      return response({ requestId: launchRequest.requestId, decision: 'accepted' });
+    }).submit(launchRequest);
+
+    expect(JSON.parse(body)).toMatchObject({
+      launch: {
+        providerProfileId: 'deepseek.msk2hxew',
+        modelId: 'deepseek-v4-flash',
+      },
+    });
+    expect(body).not.toContain('apiKey');
+    expect(body).not.toContain('authToken');
+  });
+
   it('gets an instance from the status endpoint and accepts an envelope', async () => {
     const instance: FleetInstance = {
       instanceId: 'instance-1',
@@ -75,6 +111,41 @@ describe('FleetControlClient', () => {
       'missing',
     );
     expect(result).toBeUndefined();
+  });
+
+  it('lists instances and queries token/time/quota metrics', async () => {
+    const urls: string[] = [];
+    const instances = [
+      {
+        instanceId: 'instance-1',
+        runtime: 'claude-code',
+        role: 'worker',
+        managedByFleet: true,
+        status: 'working',
+        createdAt: 10,
+      },
+    ];
+    const controlClient = client(async (input) => {
+      urls.push(input);
+      if (input.endsWith('/instances')) return response(instances);
+      return response({
+        capturedAt: 20,
+        instanceId: 'instance-1',
+        usage: [{ usageId: 'usage-1', tokens: { totalTokens: 42 }, capturedAt: 19 }],
+        sessions: [],
+        quotas: [{ snapshotId: 'quota-1', used: { amount: 42, unit: 'tokens' } }],
+        totals: { durationMs: 1200, tokens: { totalTokens: 42 } },
+      });
+    });
+
+    await expect(controlClient.listInstances()).resolves.toEqual(instances);
+    await expect(controlClient.getMetrics('instance-1')).resolves.toMatchObject({
+      totals: { durationMs: 1200, tokens: { totalTokens: 42 } },
+    });
+    expect(urls).toEqual([
+      'http://127.0.0.1:4321/api/control/instances',
+      'http://127.0.0.1:4321/api/control/metrics?instanceId=instance-1',
+    ]);
   });
 
   it('fails safely for HTTP errors without exposing the token', async () => {

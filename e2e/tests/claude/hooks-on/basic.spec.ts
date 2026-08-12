@@ -31,6 +31,7 @@ import {
 import { getPixelAgentsFrame, openPixelAgentsPanel, setSettings } from '../../../helpers/webview';
 
 test.describe('Hooks ON / spawn paths', () => {
+  test.use({ scene: 'pixel-office' });
   test('internal terminal spawns agent and Task subagent appears then despawns @area:spawn', async ({
     pixelAgents,
   }) => {
@@ -183,12 +184,14 @@ test.describe('Hooks ON / spawn paths', () => {
     await expectOverlayVisible(frame, 'Needs approval');
     narrator.check('"Needs approval" bubble on the agent');
 
-    // 3. Stop (t+8.5s) → finished turn shows ONLY the checkmark; the "Idle" label
-    //    surfaces once the checkmark fades (~2s later). The 5s gap before
-    //    SessionEnd is what guarantees "Idle" gets a visible window.
-    narrator.step('waiting for the t+8.5s Stop — checkmark, then "Idle" after the fade');
-    await expectOverlayVisible(frame, 'Idle');
-    narrator.check('turn finished — "Idle" after the green checkmark fades');
+    // 3. Stop (t+8.5s) → the control-plane attention model keeps the session
+    //    visible as Waiting/Completed-Unread until SessionEnd removes it. The
+    //    old Office-only contract expected an Idle label after the checkmark;
+    //    the current model intentionally preserves the actionable waiting
+    //    state instead of hiding it behind a generic idle label.
+    narrator.step('waiting for the t+8.5s Stop — the waiting state remains actionable');
+    await expectOverlayVisible(frame, 'Waiting');
+    narrator.check('turn finished — the waiting state remains actionable until SessionEnd');
 
     // 4. SessionEnd(exit) (t+13.5s) → agent is removed.
     narrator.step('waiting for the t+13.5s SessionEnd to remove the agent');

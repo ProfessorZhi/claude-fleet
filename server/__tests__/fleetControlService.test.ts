@@ -6,6 +6,8 @@ import {
   FleetControlService,
   type FleetControlServiceOptions,
 } from '../src/fleetControlService.js';
+import { FleetLedgerStore } from '../src/fleetLedgerStore.js';
+import { InMemoryFleetSnapshotPersistence } from '../src/persistence/fleetSnapshotPersistence.js';
 import {
   CodexFleetRuntimeHost,
   type CodexFleetRuntimeHostDependencies,
@@ -118,6 +120,106 @@ describe('FleetControlService', () => {
     expect(workItem.workItem?.status).toBe('queued');
     expect(service.ledger.getMission('mission-1')?.coordinatorId).toBe('codex-primary');
     expect(service.ledger.getWorkItem('work-1')?.missionId).toBe('mission-1');
+  });
+
+  it('hydrates missions and work items from an injected ledger snapshot', async () => {
+    const persistence = new InMemoryFleetSnapshotPersistence();
+    const persistentService = new FleetControlService({
+      ledger: new FleetLedgerStore({ persistence }),
+      now: () => 10,
+    });
+
+    await persistentService.submit({
+      requestId: 'persist-mission',
+      action: 'create_mission',
+      mode: 'suggest',
+      requestedBy: 'codex-primary',
+      createdAt: 1,
+      mission: {
+        missionId: 'mission-persisted',
+        title: 'Persisted mission',
+        objective: 'Survive a restart',
+        policyMode: 'suggest',
+      },
+    });
+    await persistentService.submit({
+      requestId: 'persist-work',
+      action: 'create_work_item',
+      mode: 'suggest',
+      requestedBy: 'codex-primary',
+      missionId: 'mission-persisted',
+      createdAt: 2,
+      workItem: {
+        workItemId: 'work-persisted',
+        missionId: 'mission-persisted',
+        title: 'Persisted work',
+        objective: 'Restore metadata',
+        acceptanceCriteria: ['restored'],
+      },
+    });
+
+    const restored = new FleetControlService({
+      ledger: new FleetLedgerStore({ persistence }),
+      now: () => 10,
+    });
+    expect(await restored.getMission('mission-persisted')).toMatchObject({
+      title: 'Persisted mission',
+    });
+    expect(await restored.getWorkItem('work-persisted')).toMatchObject({
+      title: 'Persisted work',
+    });
+  });
+
+  it('exposes worktree lifecycle and rejects a conflicting WorkItem path', async () => {
+    const service = makeService();
+    await service.createWorktree({
+      worktreeId: 'wt-existing',
+      repo: 'F:/repo',
+      worktreePath: 'F:/repo/.worktrees/shared',
+      branch: 'fleet/shared',
+      workItemId: 'work-existing',
+      createdAt: 1,
+    });
+
+    await service.submit({
+      requestId: 'worktree-mission',
+      action: 'create_mission',
+      mode: 'suggest',
+      requestedBy: 'codex-primary',
+      createdAt: 2,
+      mission: {
+        missionId: 'mission-worktree',
+        title: 'Worktree',
+        objective: 'Keep workers isolated',
+        policyMode: 'suggest',
+      },
+    });
+    const response = await service.submit({
+      requestId: 'worktree-conflict',
+      action: 'create_work_item',
+      mode: 'suggest',
+      requestedBy: 'codex-primary',
+      missionId: 'mission-worktree',
+      createdAt: 3,
+      workItem: {
+        workItemId: 'work-conflict',
+        missionId: 'mission-worktree',
+        title: 'Conflicting work',
+        objective: 'Must not share a worktree',
+        acceptanceCriteria: ['rejected'],
+        repo: 'F:/repo',
+        worktree: 'F:/repo/.worktrees/shared',
+      },
+    });
+
+    await expect(
+      service.checkWorktreeConflict({
+        repo: 'F:/repo',
+        worktreePath: 'F:/repo/.worktrees/shared',
+        workItemId: 'work-conflict',
+      }),
+    ).resolves.toMatchObject({ conflict: true });
+    expect(response).toMatchObject({ decision: 'rejected' });
   });
 
   it('returns and records a strategy recommendation without launching a runtime', async () => {

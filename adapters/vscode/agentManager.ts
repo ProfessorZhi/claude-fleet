@@ -6,6 +6,10 @@ import * as vscode from 'vscode';
 import type { StateAdapter } from '../../core/src/adapter.js';
 import type { InstanceLaunchConfig } from '../../core/src/providerProfiles.js';
 import { INHERIT_PROVIDER_PROFILE_ID } from '../../core/src/providerProfiles.js';
+import type {
+  RuntimeAutomationMode,
+  RuntimePermissionMode,
+} from '../../core/src/runtimeContracts.js';
 import { AgentStateStore } from '../../server/src/agentStateStore.js';
 import { agentStateToUserStatus } from '../../server/src/agentStatus.js';
 import { resolveClaudeCli } from '../../server/src/cliResolver.js';
@@ -17,9 +21,10 @@ import {
   startFileWatching,
 } from '../../server/src/fileWatcher.js';
 import { resolveClaudeLaunchConfig } from '../../server/src/launchConfig.js';
-import { MissingSecretError } from '../../server/src/launchConfig.js';
+import { MissingSecretError, ModelRequiredError } from '../../server/src/launchConfig.js';
 import { loadLayout } from '../../server/src/layoutPersistence.js';
 import { assignPaletteIfNeeded } from '../../server/src/paletteAssigner.js';
+import { getClaudeConfigDir } from '../../server/src/providers/hook/claude/claudeConfigPath.js';
 import { CLAUDE_TERMINAL_NAME_PREFIX } from '../../server/src/providers/hook/claude/constants.js';
 import { claudeProvider } from '../../server/src/providers/index.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from '../../server/src/timerManager.js';
@@ -43,12 +48,17 @@ export interface LaunchNewTerminalOptions {
   launchConfig?: InstanceLaunchConfig;
   /** When true, pass `--dangerously-skip-permissions`. */
   bypassPermissions?: boolean;
+  /** Runtime startup policy; it does not bypass Claude's Workspace Trust gate. */
+  automationMode?: RuntimeAutomationMode;
+  permissionMode?: RuntimePermissionMode;
   /** When true, do not call `terminal.show()` (used by auto-spawn). */
   suppressShow?: boolean;
   /** Safe lifecycle provenance recorded with the managed instance. */
   launchSource?: string;
   /** Safe requester identity recorded with the managed instance. */
   requestedBy?: string;
+  /** External Fleet control-plane instance id, when launched by the coordinator. */
+  fleetInstanceId?: string;
   providerProfileStore: ProviderProfileStore;
   secretStorageProvider: SecretStorageProvider;
 }
@@ -70,6 +80,7 @@ async function resolveLaunchConfigFromStore(args: {
   providerProfileStore: ProviderProfileStore;
   secretStorageProvider: SecretStorageProvider;
   bypassPermissions?: boolean;
+  permissionMode?: RuntimePermissionMode;
 }): Promise<ReturnType<typeof resolveClaudeLaunchConfig>> {
   const profile = args.providerProfileStore.get(args.launchConfig.providerProfileId);
   if (!profile) {
@@ -103,7 +114,10 @@ async function resolveLaunchConfigFromStore(args: {
     args.launchConfig.cwd ?? '',
     '00000000-0000-0000-0000-000000000000',
     (_ref) => secret,
-    { bypassPermissions: args.bypassPermissions, fleet: args.launchConfig.fleet },
+    {
+      bypassPermissions: args.bypassPermissions || args.permissionMode === 'bypassPermissions',
+      fleet: args.launchConfig.fleet,
+    },
   );
 }
 
@@ -140,6 +154,7 @@ export async function launchNewTerminal(
     folderPath,
     launchConfig,
     bypassPermissions,
+    permissionMode,
     suppressShow,
     providerProfileStore,
     secretStorageProvider,
@@ -168,9 +183,10 @@ export async function launchNewTerminal(
       providerProfileStore,
       secretStorageProvider,
       bypassPermissions,
+      permissionMode,
     });
   } catch (e) {
-    if (e instanceof MissingSecretError) {
+    if (e instanceof MissingSecretError || e instanceof ModelRequiredError) {
       console.error(`[Claude Fleet] launch aborted: ${e.message}`);
       void vscode.window.showErrorMessage(e.message);
       // Roll back the terminal-index increment so the next launch uses
@@ -184,7 +200,10 @@ export async function launchNewTerminal(
   const terminal = vscode.window.createTerminal({
     name: `${CLAUDE_TERMINAL_NAME_PREFIX} #${idx}`,
     cwd,
-    env: resolved.env,
+    // VS Code may have inherited a literal `%USERPROFILE%` value from a
+    // launcher. Pass Claude an expanded absolute profile path so the CLI and
+    // Fleet derive the same JSONL location.
+    env: { ...resolved.env, CLAUDE_CONFIG_DIR: getClaudeConfigDir() },
   });
   // When suppressShow is set (auto-spawn + autoShowPanel), keep the panel view
   // on Pixel Agents instead of switching to Terminal. Claude Code still runs
@@ -199,7 +218,7 @@ export async function launchNewTerminal(
   const sessionMode = launchConfig?.sessionMode ?? 'new';
   const sessionId = launchConfig?.sessionId ?? crypto.randomUUID();
   const launch = claudeProvider.buildLaunchCommand?.(sessionId, cwd, {
-    bypassPermissions,
+    bypassPermissions: bypassPermissions || permissionMode === 'bypassPermissions',
     modelId: resolved.safeMetadata.modelId,
     sessionMode,
   });
@@ -241,6 +260,7 @@ export async function launchNewTerminal(
   const agent: AgentState = {
     id,
     sessionId,
+    runtime: 'claude-code',
     terminalRef: terminal,
     isExternal: false,
     projectDir,
@@ -250,8 +270,10 @@ export async function launchNewTerminal(
     hostId: 'vscode-integrated-terminal',
     workspaceId: cwd,
     terminalId: `terminal-agent-${id}`,
+    fleetInstanceId: options.fleetInstanceId,
     launchSource: options.launchSource ?? (sessionMode === 'resume' ? 'resume' : 'fleet-ui'),
     requestedBy: options.requestedBy ?? 'user',
+    displayName: launchConfig?.displayName,
     jsonlFile: expectedFile,
     fileOffset: 0,
     lineBuffer: '',
@@ -275,6 +297,17 @@ export async function launchNewTerminal(
     providerProfileId: resolved.safeMetadata.providerProfileId,
     providerDisplayName: resolved.safeMetadata.providerDisplayName,
     modelId: resolved.safeMetadata.modelId,
+    requestedProviderProfileId: resolved.safeMetadata.requestedProviderProfileId,
+    resolvedProviderProfileId: resolved.safeMetadata.resolvedProviderProfileId,
+    requestedModelId: resolved.safeMetadata.requestedModelId,
+    resolvedModelId: resolved.safeMetadata.resolvedModelId,
+    credential: resolved.safeMetadata.credential,
+    refPresent: resolved.safeMetadata.refPresent,
+    refResolution: resolved.safeMetadata.refResolution,
+    authConfigured: resolved.safeMetadata.authConfigured,
+    authInjected: resolved.safeMetadata.authInjected,
+    authVariableNames: resolved.safeMetadata.authVariableNames,
+    baseUrlHost: resolved.safeMetadata.baseUrlHost,
     fleet: resolved.safeMetadata.fleet,
     // Spec 003 — launch timestamp (transient; drives the "transcript never
     // appeared" error heuristic in agentStatus.ts).
@@ -446,6 +479,7 @@ export function persistAgents(agents: AgentStateStore, adapter: StateAdapter): v
     persisted.push({
       id: agent.id,
       sessionId: agent.sessionId,
+      runtime: agent.runtime,
       terminalName: agent.terminalRef?.name ?? '',
       isExternal: agent.isExternal || undefined,
       jsonlFile: agent.jsonlFile,
@@ -456,9 +490,11 @@ export function persistAgents(agents: AgentStateStore, adapter: StateAdapter): v
       hostId: agent.hostId,
       workspaceId: agent.workspaceId,
       terminalId: agent.terminalId,
+      fleetInstanceId: agent.fleetInstanceId,
       launchSource: agent.launchSource,
       requestedBy: agent.requestedBy,
       folderName: agent.folderName,
+      displayName: agent.displayName,
       teamName: agent.teamName,
       agentName: agent.agentName,
       isTeamLead: agent.isTeamLead,
@@ -471,9 +507,22 @@ export function persistAgents(agents: AgentStateStore, adapter: StateAdapter): v
       providerProfileId: agent.providerProfileId,
       providerDisplayName: agent.providerDisplayName,
       modelId: agent.modelId,
+      requestedProviderProfileId: agent.requestedProviderProfileId,
+      resolvedProviderProfileId: agent.resolvedProviderProfileId,
+      requestedModelId: agent.requestedModelId,
+      resolvedModelId: agent.resolvedModelId,
+      credential: agent.credential,
+      refPresent: agent.refPresent,
+      refResolution: agent.refResolution,
+      authConfigured: agent.authConfigured,
+      authInjected: agent.authInjected,
+      authVariableNames: agent.authVariableNames,
+      baseUrlHost: agent.baseUrlHost,
       fleet: agent.fleet,
       // Spec 005 — managed flag + pre-switch provider (NOT secrets).
       managedByFleet: agent.managedByFleet,
+      createdAt: agent.createdAt,
+      usageTokens: agent.usageTokens,
       lastProviderProfileId: agent.lastProviderProfileId,
     });
   }
@@ -522,6 +571,26 @@ export function restoreAgents(
     // skips stale entries written by older builds that persisted them).
     if (p.leadAgentId !== undefined && !p.teamName) continue;
 
+    // Older launches persisted a literal `%USERPROFILE%` in the transcript
+    // path when the host environment used cmd.exe-style expansion. Repair the
+    // path from the original repo cwd before starting watchers; otherwise the
+    // terminal is visible but remains permanently stuck at Starting.
+    if (p.runtime !== 'codex-cli' && p.cwd) {
+      const dirs = claudeProvider.getSessionDirs?.(p.cwd) ?? [];
+      const sessionId = p.sessionId || path.basename(p.jsonlFile, '.jsonl');
+      const preferredJsonl = dirs[0] ? path.join(dirs[0], `${sessionId}.jsonl`) : undefined;
+      if (preferredJsonl && !fs.existsSync(p.jsonlFile)) {
+        if (p.jsonlFile !== preferredJsonl || p.projectDir !== dirs[0]) {
+          console.warn(
+            `[Claude Fleet] Repairing persisted transcript path for Agent ${p.id}: ` +
+              `${p.jsonlFile} → ${preferredJsonl}`,
+          );
+          p.jsonlFile = preferredJsonl;
+          p.projectDir = dirs[0]!;
+        }
+      }
+    }
+
     let terminal: vscode.Terminal | undefined;
     const isExternal = p.isExternal ?? false;
 
@@ -541,6 +610,7 @@ export function restoreAgents(
     const agent: AgentState = {
       id: p.id,
       sessionId: p.sessionId || path.basename(p.jsonlFile, '.jsonl'),
+      runtime: p.runtime ?? 'claude-code',
       terminalRef: terminal,
       isExternal,
       projectDir: p.projectDir,
@@ -549,6 +619,7 @@ export function restoreAgents(
       hostId: p.hostId,
       workspaceId: p.workspaceId,
       terminalId: p.terminalId,
+      fleetInstanceId: p.fleetInstanceId,
       launchSource: p.launchSource,
       requestedBy: p.requestedBy,
       jsonlFile: p.jsonlFile,
@@ -569,6 +640,7 @@ export function restoreAgents(
       linesProcessed: 0,
       seenUnknownRecordTypes: new Set(),
       folderName: p.folderName,
+      displayName: p.displayName,
       hookDelivered: false,
       contextTokens: 0,
       maxContextTokens: DEFAULT_MAX_CONTEXT_TOKENS,
@@ -585,11 +657,24 @@ export function restoreAgents(
       providerProfileId: p.providerProfileId,
       providerDisplayName: p.providerDisplayName,
       modelId: p.modelId,
+      requestedProviderProfileId: p.requestedProviderProfileId,
+      resolvedProviderProfileId: p.resolvedProviderProfileId,
+      requestedModelId: p.requestedModelId,
+      resolvedModelId: p.resolvedModelId,
+      credential: p.credential,
+      refPresent: p.refPresent,
+      refResolution: p.refResolution,
+      authConfigured: p.authConfigured,
+      authInjected: p.authInjected,
+      authVariableNames: p.authVariableNames,
+      baseUrlHost: p.baseUrlHost,
       fleet: p.fleet,
       // Spec 005 — managed flag + pre-switch provider restored. Absent on
       // legacy / external agents.
       managedByFleet: p.managedByFleet,
       lastProviderProfileId: p.lastProviderProfileId,
+      createdAt: p.createdAt,
+      usageTokens: p.usageTokens,
     };
 
     assignPaletteIfNeeded(agent, store);
@@ -618,7 +703,11 @@ export function restoreAgents(
 
     // Start file watching if JSONL exists, skipping to end of file
     try {
-      if (fs.existsSync(p.jsonlFile)) {
+      if (p.runtime === 'codex-cli') {
+        // Codex session files use an envelope format that is not Claude's
+        // transcript protocol. The Codex scanner owns their polling/status;
+        // never feed them into the Claude file watcher.
+      } else if (fs.existsSync(p.jsonlFile)) {
         const stat = fs.statSync(p.jsonlFile);
         agent.fileOffset = stat.size;
         startFileWatching(
@@ -699,6 +788,8 @@ export function restoreAgents(
   }
 
   // Re-persist cleaned-up list (removes entries whose terminals are gone)
+  // This also writes any repaired `%USERPROFILE%` transcript paths back to
+  // vscode-state.json, so the next reload does not regress.
   store.persist();
 
   // Start project scan for /clear detection
@@ -737,6 +828,12 @@ export function sendExistingAgents(
   // Include folderName and isExternal per agent
   const folderNames: Record<number, string> = {};
   const externalAgents: Record<number, boolean> = {};
+  const displayNames: Record<number, string> = {};
+  const providerDisplayNames: Record<number, string> = {};
+  const modelIds: Record<number, string> = {};
+  const runtimes: Record<number, string> = {};
+  const createdAt: Record<number, number> = {};
+  const managedByFleet: Record<number, boolean> = {};
   for (const [id, agent] of agents) {
     if (agent.folderName) {
       folderNames[id] = agent.folderName;
@@ -744,6 +841,12 @@ export function sendExistingAgents(
     if (agent.isExternal) {
       externalAgents[id] = true;
     }
+    if (agent.displayName) displayNames[id] = agent.displayName;
+    if (agent.providerDisplayName) providerDisplayNames[id] = agent.providerDisplayName;
+    if (agent.modelId) modelIds[id] = agent.modelId;
+    if (agent.runtime) runtimes[id] = agent.runtime;
+    if (agent.createdAt) createdAt[id] = agent.createdAt;
+    if (agent.managedByFleet !== undefined) managedByFleet[id] = agent.managedByFleet;
   }
   console.log(
     `[Claude Fleet] sendExistingAgents: agents=${JSON.stringify(agentIds)}, meta=${JSON.stringify(agentMeta)}`,
@@ -755,6 +858,12 @@ export function sendExistingAgents(
     agentMeta,
     folderNames,
     externalAgents,
+    displayNames,
+    providerDisplayNames,
+    modelIds,
+    runtimes,
+    createdAt,
+    managedByFleet,
   });
   // Note: sendCurrentAgentStatuses is called separately AFTER layoutLoaded
   // so that agentStatus/agentToolStart messages arrive after characters are created.
@@ -799,12 +908,16 @@ export function sendCurrentAgentStatuses(
       });
     }
     // Re-send context usage
-    if (agent.contextTokens > 0) {
+    // Usage can be available before the context-window gauge is seeded (for
+    // example after restoring an agent or from Codex session metadata). Send
+    // either signal so the detail card does not falsely show "未采集".
+    if (agent.contextTokens > 0 || agent.usageTokens) {
       webview.postMessage({
         type: 'agentContextUsage',
         id: agentId,
         contextTokens: agent.contextTokens,
         maxContextTokens: agent.maxContextTokens,
+        usage: agent.usageTokens,
       });
     }
   }

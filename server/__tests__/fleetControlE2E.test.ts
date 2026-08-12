@@ -95,6 +95,11 @@ describe('Fleet Control recommendation workflow', () => {
       },
     });
     expect(service.ledger.listAssignments('work-e2e')).toHaveLength(1);
+    expect(service.ledger.listControlDecisions('e2e-recommendation')[0]).toMatchObject({
+      action: 'recommend_assignment',
+      decision: 'accepted',
+      workItemId: 'work-e2e',
+    });
     expect(JSON.stringify(recommendation)).not.toContain('local-test-token');
   });
 });

@@ -5,7 +5,13 @@ import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 
-import { CliArgsError, discoverControlServer, parseArgs } from '../src/cli.js';
+import {
+  CliArgsError,
+  discoverControlServer,
+  discoverControlServers,
+  parseArgs,
+  selectControlServer,
+} from '../src/cli.js';
 
 const CLI_BUNDLE = path.join(__dirname, '../../dist/cli.js');
 const CLI_START_TIMEOUT_MS = 10_000;
@@ -168,7 +174,14 @@ describe('dist/cli.js entry-point guard', () => {
       [CLI_BUNDLE, '--port', port.toString(), '--host', '127.0.0.1'],
       {
         cwd: workspaceDir,
-        env: { ...process.env, HOME: tmpHome, USERPROFILE: tmpHome },
+        env: {
+          ...process.env,
+          HOME: tmpHome,
+          USERPROFILE: tmpHome,
+          // Keep the child test home isolated from the developer's active
+          // Claude profile (for example .claude-deepseek).
+          CLAUDE_CONFIG_DIR: '',
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
@@ -234,6 +247,15 @@ describe('parseArgs — Spec 005 subcommands', () => {
     expect(args.controlRequest).toBe('{"action":"get_status"}');
   });
 
+  it('parses a Coordinator multi-worker plan without conflating it with a raw control request', () => {
+    const plan = '{"requestedBy":"codex-primary-session","workers":[]}';
+    const args = parseArgs(['coordinate', '--workspace', 'F:/repo-a', '--plan', plan]);
+    expect(args.command).toBe('coordinate');
+    expect(args.coordinatorPlan).toBe(plan);
+    expect(args.workspace).toBe('F:/repo-a');
+    expect(args.controlRequest).toBeUndefined();
+  });
+
   it('discovers the newest valid local Fleet server record', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-control-home-'));
     const registry = path.join(home, '.claude-fleet', 'servers');
@@ -263,6 +285,53 @@ describe('parseArgs — Spec 005 subcommands', () => {
 
     try {
       expect(discoverControlServer(home)).toMatchObject({ port: 3102, token: 'new-token' });
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('requires an explicit workspace when multiple Fleet servers are live', () => {
+    const servers = [
+      { port: 3101, pid: 1, token: 'a', workspaceId: 'F:/repo-a' },
+      { port: 3102, pid: 2, token: 'b', workspaceId: 'F:/repo-b' },
+    ];
+    expect(() => selectControlServer(servers)).toThrow(/--workspace/);
+    expect(selectControlServer(servers, 'f:\\repo-b')).toMatchObject({ port: 3102 });
+  });
+
+  it('discovers workspace identities without exposing tokens in selection logic', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-control-workspaces-'));
+    const registry = path.join(home, '.claude-fleet', 'servers');
+    fs.mkdirSync(registry, { recursive: true });
+    fs.writeFileSync(
+      path.join(registry, 'a.json'),
+      JSON.stringify({
+        port: 3101,
+        pid: process.pid,
+        token: 'token-a',
+        workspaceId: 'F:/repo-a',
+        startedAt: 1,
+        servesSpa: false,
+        protocol: 1,
+      }),
+    );
+    fs.writeFileSync(
+      path.join(registry, 'b.json'),
+      JSON.stringify({
+        port: 3102,
+        pid: process.pid,
+        token: 'token-b',
+        workspaceId: 'F:/repo-b',
+        startedAt: 2,
+        servesSpa: false,
+        protocol: 1,
+      }),
+    );
+    try {
+      expect(discoverControlServers(home).map((server) => server.workspaceId)).toEqual([
+        'F:/repo-b',
+        'F:/repo-a',
+      ]);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }

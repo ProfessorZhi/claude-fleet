@@ -203,7 +203,9 @@ async function findPixelAgentsFrameOnce(window: Page): Promise<Frame | null> {
       // count() resolves immediately (no waiting); a non-zero count means
       // this is the Pixel Agents frame.
       const buttonCount = await frame.locator('button', { hasText: '+ Agent' }).count();
-      if (buttonCount === 0) continue;
+      const fleetSceneCount = await frame.locator('[data-testid="fleet-command-scene"]').count();
+      const controlCenterCount = await frame.locator('[data-testid="task-control-center"]').count();
+      if (buttonCount === 0 && fleetSceneCount === 0 && controlCenterCount === 0) continue;
       const frameElement = await frame.frameElement();
       const box = await frameElement.boundingBox();
       await frameElement.dispose();
@@ -389,8 +391,8 @@ export async function arrangeReviewLayout(window: Page): Promise<void> {
  *
  * VS Code renders WebviewViewProvider content in an <iframe> whose URL
  * starts with "vscode-webview://". Because VS Code can have multiple
- * webviews, we wait until one frame exposes the "+ Agent" button before
- * returning it.
+ * webviews, we wait until one frame exposes the Office "+ Agent" button or
+ * the Fleet Command scene marker before returning it.
  */
 export async function getPixelAgentsFrame(window: Page): Promise<Frame> {
   let foundFrame: Frame | null = null;
@@ -402,7 +404,7 @@ export async function getPixelAgentsFrame(window: Page): Promise<Frame> {
         return foundFrame !== null;
       },
       {
-        message: 'Pixel Agents webview frame with "+ Agent" button not found',
+        message: 'Claude Fleet webview frame not found',
         timeout: WEBVIEW_TIMEOUT_MS,
         intervals: [250, 500, 1000],
       },
@@ -446,7 +448,10 @@ export async function acceptQuickPick(
   if (filterText) {
     await input.fill(filterText);
   }
-  await page.keyboard.press('Enter');
+  // Clicking the webview can leave workbench focus on the iframe. Sending the
+  // key through the visible QuickInput control makes acceptance deterministic
+  // for both QuickPick and showInputBox flows.
+  await input.press('Enter');
 }
 
 export async function clickAddAgent(frame: Frame): Promise<void> {
@@ -454,11 +459,16 @@ export async function clickAddAgent(frame: Frame): Promise<void> {
   await expect(btn).toBeVisible({ timeout: WEBVIEW_TIMEOUT_MS });
   await btn.click();
   // Spec 005: the +Agent button routes through the full New Agent flow
-  // (Provider/Model must come from configured profiles), so two native
-  // QuickPicks follow the click. The harness seeds one provider profile
-  // (CLAUDE_FLEET_E2E_SEED_PROVIDERS), making the first item of each picker
-  // the one to accept.
+  // (Runtime/Provider/Model must come from configured profiles), so three
+  // native QuickPicks follow the click. The harness seeds one provider
+  // profile (CLAUDE_FLEET_E2E_SEED_PROVIDERS), making the first item of each
+  // picker the one to accept.
   const page = frame.page();
+  await acceptQuickPick(page, 'Claude Fleet: Choose Runtime', 'Claude Code');
+  // New Agent asks for a stable display name before provider/model selection.
+  // The input box uses the same native quick-input surface, so accepting the
+  // suggested name keeps this helper focused on the lifecycle contract.
+  await acceptQuickPick(page, 'Claude Fleet: Name this Agent');
   await acceptQuickPick(page, 'Claude Fleet: Choose Provider');
   await acceptQuickPick(page, 'Claude Fleet: Choose Model');
 }

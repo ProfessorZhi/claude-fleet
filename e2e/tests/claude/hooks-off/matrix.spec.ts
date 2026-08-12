@@ -46,6 +46,7 @@ async function expectExternalAgentAdoption(frame: Frame): Promise<void> {
 }
 
 test.describe('Hooks OFF / matrix', () => {
+  test.use({ scene: 'pixel-office' });
   test('internal basic spawn adopted via JSONL polling @area:matrix', async ({ pixelAgents }) => {
     const { frame, window, tmpHome, mockLogFile, narrator } = pixelAgents;
 

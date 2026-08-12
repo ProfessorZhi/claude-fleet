@@ -1,0 +1,35 @@
+export {
+  assignFormationSlots,
+  compareFormationVessels,
+  computeFleetFormation,
+  DEFAULT_FORMATION_COLUMNS,
+  DEFAULT_FORMATION_SLOT_COUNT,
+  formationKey,
+  groupVesselsByRepo,
+  groupVesselsByRole,
+  hitTestFleetFormation,
+  pointInFormationHitbox,
+} from './formation.js';
+export {
+  createFleetCanvasRenderer,
+  drawFleetFormation,
+  type FleetCanvasContext,
+  type FleetCanvasFrame,
+  type FleetCanvasRenderer,
+  type FleetCanvasRendererOptions,
+} from './renderer.js';
+export type {
+  FleetFormationLayout,
+  FormationGroup,
+  FormationHitbox,
+  FormationId,
+  FormationLayoutOptions,
+  FormationNode,
+  FormationPoint,
+  FormationPointHitTestOptions,
+  FormationRect,
+  FormationSize,
+  FormationSlotAllocation,
+  FormationSlotState,
+  FormationVessel,
+} from './types.js';

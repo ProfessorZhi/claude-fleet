@@ -78,6 +78,13 @@ export interface AgentCreated {
   isExternal?: boolean;
   palette?: number;
   hueShift?: number;
+  displayName?: string;
+  providerProfileId?: string;
+  providerDisplayName?: string;
+  modelId?: string;
+  runtime?: string;
+  createdAt?: number;
+  managedByFleet?: boolean;
 }
 
 export interface AgentClosed {
@@ -96,6 +103,12 @@ export interface ExistingAgents {
   agentMeta: Record<string, AgentSeatMeta>;
   folderNames: Record<string, string>;
   externalAgents: Record<string, boolean>;
+  displayNames?: Record<string, string>;
+  providerDisplayNames?: Record<string, string>;
+  modelIds?: Record<string, string>;
+  runtimes?: Record<string, string>;
+  createdAt?: Record<string, number>;
+  managedByFleet?: Record<string, boolean>;
 }
 
 export interface AgentSeatMeta {
@@ -152,6 +165,7 @@ export interface SubagentToolStart {
   parentToolId: string;
   toolId: string;
   status: string;
+  toolName?: string;
 }
 
 export interface SubagentToolDone {
@@ -188,6 +202,7 @@ export interface AgentContextUsage {
   id: number;
   contextTokens: number;
   maxContextTokens: number;
+  usage?: Record<string, number>;
 }
 
 export interface LayoutLoaded {

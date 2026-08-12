@@ -11,6 +11,14 @@ export function clearAgentActivity(
 ): void {
   if (!agent) return;
 
+  // Thinking is represented as a synthetic tool activity. Clear it explicitly
+  // because hook-enabled agents do not receive the normal JSONL tools-clear
+  // broadcast at turn boundaries.
+  if (agent.reasoningToolId && agent.activeToolIds.has(agent.reasoningToolId)) {
+    agents.broadcast({ type: 'agentToolDone', id: agentId, toolId: agent.reasoningToolId });
+  }
+  agent.reasoningToolId = undefined;
+
   // Preserve background agent tools — only clear foreground state.
   // The subagent maps are keyed by parentToolId; deleting a non-parent key is a
   // safe no-op, so no tool-name check is needed here.

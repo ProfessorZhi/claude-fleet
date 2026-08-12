@@ -28,6 +28,7 @@ function hookDrivenScenario(name: string, command: string) {
 }
 
 test.describe('Standalone / multi-server hooks', () => {
+  test.use({ scene: 'pixel-office' });
   test('extension and standalone both stay hook-driven without cross-contamination @area:standalone', async ({
     page,
     pixelAgents,
@@ -43,6 +44,13 @@ test.describe('Standalone / multi-server hooks', () => {
 
     const standalone = await launchStandalone(page, { homeDir: tmpHome });
     try {
+      // Standalone now follows the product default (Task Control Center) too;
+      // this legacy hook-isolation scenario exercises the Office projection
+      // explicitly before asserting its Office empty state.
+      await page.getByTestId('fleet-settings').click();
+      await page.getByTestId('settings-current-scene-pixel-office').click();
+      await page.getByTestId('settings-close').click();
+      await expect(page.getByTestId('empty-state-new-agent')).toBeVisible();
       await setSettings(page, {
         alwaysShowLabels: true,
         hooksEnabled: true,

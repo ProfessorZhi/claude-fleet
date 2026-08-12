@@ -24,6 +24,10 @@ import type { AuthMode, ProviderProfile } from '../../core/src/providerProfiles.
 import { validateProviderProfile } from '../../core/src/providerProfiles.js';
 import type { ProviderDefinition } from '../../core/src/providerRegistry.js';
 import { getVerifiedProviderDefinitions } from '../../core/src/providerRegistry.js';
+import {
+  type CodexCliResolution,
+  resolveCodexCli,
+} from '../../server/src/providers/codex/codexRuntimeAdapter.js';
 import type { LaunchNewTerminalOptions } from './agentManager.js';
 import {
   claudeCliNotFoundMessage,
@@ -43,6 +47,24 @@ export interface LaunchAgentFlowDeps {
   baseLaunchOptions: Omit<LaunchNewTerminalOptions, 'launchConfig' | 'suppressShow'>;
   /** CLI availability check (Spec 004 FR-014); injectable for tests. */
   cliCheck?: () => Promise<CliCheckResult>;
+  /** Optional Codex CLI availability check; injectable and never receives a secret. */
+  codexCliCheck?: () => Promise<CodexCliResolution>;
+  /** When present, enables the Runtime picker in the New Agent flow. */
+  codexLauncher?: (options: CodexLaunchAgentOptions) => Promise<void>;
+}
+
+export interface CodexLaunchAgentOptions {
+  cwd: string;
+  command: string;
+  displayName?: string;
+  launchSource?: string;
+  requestedBy?: string;
+}
+
+/** Normalize secrets at the UI boundary without ever logging or displaying them. */
+export function normalizeProviderSecret(secret: string | undefined): string | undefined {
+  const normalized = secret?.trim();
+  return normalized ? normalized : undefined;
 }
 
 /**
@@ -55,9 +77,43 @@ export async function runLaunchAgentFlowWithLauncher(
   deps: LaunchAgentFlowDeps,
   launcher: (options: LaunchNewTerminalOptions) => Promise<void>,
 ): Promise<void> {
+  // The runtime picker is enabled only by the VS Code New Agent command. The
+  // provider-management flow reuses these deps but does not pass a Codex
+  // launcher, so it never gets an unrelated runtime prompt.
+  const runtime = deps.codexLauncher ? await pickRuntime() : 'claude-code';
+  if (runtime === undefined) return;
+
+  if (runtime === 'codex-cli') {
+    const cwd = await pickRepo();
+    if (cwd === undefined) return;
+    const displayName = await pickAgentDisplayName('Codex Worker');
+    if (displayName === null) return;
+    const cli = await (deps.codexCliCheck ?? resolveCodexCli)();
+    if (!cli.ok) {
+      void vscode.window.showErrorMessage(
+        `Claude Fleet: Codex CLI unavailable. ${cli.diagnostics}`,
+      );
+      return;
+    }
+    void vscode.window.showInformationMessage(
+      'Claude Fleet: Codex CLI 将使用本机登录态；Fleet 不读取或保存 API Key。',
+    );
+    await deps.codexLauncher?.({
+      cwd,
+      command: cli.command,
+      ...(displayName ? { displayName } : {}),
+      launchSource: 'fleet-ui',
+      requestedBy: 'user',
+    });
+    return;
+  }
+
   // ── Step 1: Repo ──────────────────────────────────────────
   const cwd = await pickRepo();
   if (cwd === undefined) return;
+
+  const displayName = await pickAgentDisplayName('Claude Worker');
+  if (displayName === null) return;
 
   // ── Step 2: Provider ──────────────────────────────────────
   // Spec 005 (FR-003): ONLY configured + enabled profiles appear. No
@@ -85,9 +141,36 @@ export async function runLaunchAgentFlowWithLauncher(
   // ── Step 5: Launch ────────────────────────────────────────
   await launcher({
     ...deps.baseLaunchOptions,
-    launchConfig: { cwd, providerProfileId: provider.id, modelId },
+    launchConfig: {
+      cwd,
+      providerProfileId: provider.id,
+      modelId,
+      ...(displayName ? { displayName } : {}),
+    },
     suppressShow: false,
   });
+}
+
+/**
+ * Collect the stable, user-facing label for a Fleet instance. `null` means
+ * the user cancelled the flow; `undefined` means accept automatic naming.
+ * The optional function guard keeps provider-flow unit tests and older VS Code
+ * hosts compatible while the real extension always exposes showInputBox.
+ */
+export async function pickAgentDisplayName(suggestion: string): Promise<string | undefined | null> {
+  const inputBox = vscode.window.showInputBox;
+  if (typeof inputBox !== 'function') return undefined;
+  const value = await inputBox({
+    title: 'Claude Fleet: Name this Agent',
+    prompt: '给这个 Agent 一个显示名称（可选）',
+    placeHolder: '例如 minimax1 / minimax2',
+    value: suggestion,
+    ignoreFocusOut: true,
+    validateInput: (input) => (input.trim().length > 64 ? '名称最多 64 个字符。' : undefined),
+  });
+  if (value === undefined) return null;
+  const normalized = value.trim();
+  return normalized || undefined;
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -96,7 +179,7 @@ async function pickRepo(): Promise<string | undefined> {
   const folders = vscode.workspace.workspaceFolders ?? [];
   if (folders.length === 0) {
     void vscode.window.showInformationMessage(
-      'Claude Fleet: No workspace folder open. Opening Claude Code in the home directory.',
+      'Claude Fleet: No workspace folder open. Opening the Worker terminal in the home directory.',
     );
     // Empty cwd signals to launchNewTerminal to fall back to homedir.
     return '';
@@ -109,6 +192,25 @@ async function pickRepo(): Promise<string | undefined> {
     { title: 'Claude Fleet: Choose workspace folder', ignoreFocusOut: true },
   );
   return picked?.fsPath;
+}
+
+export async function pickRuntime(): Promise<'claude-code' | 'codex-cli' | undefined> {
+  const picked = await vscode.window.showQuickPick(
+    [
+      {
+        label: 'Claude Code',
+        description: 'Claude Worker · Provider Profile / hooks / session continuity',
+        value: 'claude-code' as const,
+      },
+      {
+        label: 'Codex CLI',
+        description: 'Codex Worker · use the local Codex login, no Fleet API key',
+        value: 'codex-cli' as const,
+      },
+    ],
+    { title: 'Claude Fleet: Choose Runtime', ignoreFocusOut: true },
+  );
+  return picked?.value;
 }
 
 async function pickProvider(
@@ -233,12 +335,14 @@ export async function runCreateCustomProviderFlow(
     secretLabel = 'API Key (sent as Bearer token)';
   }
   if (definition.authStrategy === 'api-key' || definition.authStrategy === 'auth-token') {
-    secret = await vscode.window.showInputBox({
-      title: `${definition.displayName}: ${secretLabel}`,
-      password: true,
-      placeHolder: 'paste secret…',
-      ignoreFocusOut: true,
-    });
+    secret = normalizeProviderSecret(
+      await vscode.window.showInputBox({
+        title: `${definition.displayName}: ${secretLabel}`,
+        password: true,
+        placeHolder: 'paste secret…',
+        ignoreFocusOut: true,
+      }),
+    );
     if (!secret) return undefined;
   } else if (definition.authStrategy === 'external-credential-chain') {
     void vscode.window.showInformationMessage(
@@ -383,12 +487,14 @@ async function runCustomDefinitionFlow(
   if (!authModePick) return undefined;
   const authMode: AuthMode = authModePick.value;
 
-  const secret = await vscode.window.showInputBox({
-    title: `Custom Provider: ${authModePick.label}`,
-    password: true,
-    placeHolder: 'paste secret…',
-    ignoreFocusOut: true,
-  });
+  const secret = normalizeProviderSecret(
+    await vscode.window.showInputBox({
+      title: `Custom Provider: ${authModePick.label}`,
+      password: true,
+      placeHolder: 'paste secret…',
+      ignoreFocusOut: true,
+    }),
+  );
   if (!secret) return undefined;
 
   const defaultModelId = await pickDefaultModel('Custom Provider', []);
