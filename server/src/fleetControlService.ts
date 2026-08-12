@@ -27,6 +27,8 @@ import type {
   Mission,
   RuntimeAdapter,
   RuntimeLaunchRequest,
+  RuntimeTaskDeliveryRequest,
+  RuntimeTaskDeliveryResult,
   WorkItem,
   WorkItemResult,
   WorktreeConflictCheck,
@@ -80,6 +82,9 @@ export class FleetControlService implements FleetControlApi {
   private readonly responses = new Map<string, FleetControlResponse>();
   private readonly strategy: StrategyAdapter;
   private readonly coordinatorSessions = new Map<string, CoordinatorSession>();
+  private readonly pendingDeliveries = new Map<string, RuntimeTaskDeliveryRequest>();
+  private readonly deliveryStates = new Map<string, RuntimeTaskDeliveryResult>();
+  private readonly flushingInstances = new Set<string>();
 
   constructor(options: FleetControlServiceOptions = {}) {
     this.ledger = options.ledger ?? new FleetLedgerStore();
@@ -105,6 +110,23 @@ export class FleetControlService implements FleetControlApi {
 
   registerRuntime(registration: FleetRuntimeRegistration): void {
     this.registrations.set(registration.adapter.runtime, registration);
+    registration.host.subscribeBootstrap?.((instanceId, snapshot) => {
+      if (snapshot.state === 'ready') void this.flushPendingDeliveries(instanceId);
+    });
+  }
+
+  /** Read the latest delivery lifecycle without re-sending the WorkItem. */
+  getDeliveryStatus(
+    workItemId: string,
+    instanceId?: string,
+  ): RuntimeTaskDeliveryResult | undefined {
+    const matches = [...this.deliveryStates.values()].filter(
+      (delivery) =>
+        delivery.workItemId === workItemId &&
+        (instanceId === undefined || delivery.instanceId === instanceId),
+    );
+    const latest = matches[matches.length - 1];
+    return latest ? clone(latest) : undefined;
   }
 
   registerCoordinatorSession(session: CoordinatorSession): void {
@@ -845,7 +867,30 @@ export class FleetControlService implements FleetControlApi {
         reason: 'No runtime host is registered for task delivery.',
       };
     }
-    const delivery = await deliverRuntimeTask(registration.host, {
+    const deliveryKey = `${instance.instanceId}:${workItem.workItemId}`;
+    const previousDelivery = this.deliveryStates.get(deliveryKey);
+    if (previousDelivery?.lifecycle === 'delivered_to_runtime') {
+      return {
+        requestId: request.requestId,
+        decision: 'accepted',
+        instance: clone(instance),
+        workItem: clone(workItem),
+        delivery: clone(previousDelivery),
+        acceptedAt: previousDelivery.deliveredAt ?? this.now(),
+      };
+    }
+    if (previousDelivery?.lifecycle === 'queued_for_runtime') {
+      return {
+        requestId: request.requestId,
+        decision: 'accepted',
+        reason: 'WorkItem is already queued until the runtime becomes ready.',
+        instance: clone(instance),
+        workItem: clone(workItem),
+        delivery: clone(previousDelivery),
+        acceptedAt: this.now(),
+      };
+    }
+    const task = {
       instanceId: instance.instanceId,
       task: {
         workItemId: workItem.workItemId,
@@ -853,7 +898,37 @@ export class FleetControlService implements FleetControlApi {
         objective: workItem.objective,
         acceptanceCriteria: workItem.acceptanceCriteria,
       },
-    });
+    } satisfies RuntimeTaskDeliveryRequest;
+    const bootstrap = registration.host.getBootstrapStatus?.(instance.instanceId);
+    if (bootstrap && bootstrap.state !== 'ready') {
+      const blocked = bootstrap.state === 'stopped' || bootstrap.state === 'failed';
+      const gated: RuntimeTaskDeliveryResult = {
+        instanceId: instance.instanceId,
+        workItemId: workItem.workItemId,
+        status: blocked ? (bootstrap.state === 'stopped' ? 'cancelled' : 'unavailable') : 'queued',
+        lifecycle: blocked
+          ? bootstrap.state === 'stopped'
+            ? 'cancelled'
+            : 'failed'
+          : 'queued_for_runtime',
+        ...(blocked ? { reason: 'host_failed' as const } : {}),
+      };
+      this.deliveryStates.set(deliveryKey, gated);
+      if (!blocked) this.pendingDeliveries.set(deliveryKey, task);
+      return {
+        requestId: request.requestId,
+        decision: blocked ? 'unavailable' : 'accepted',
+        reason: blocked
+          ? 'Runtime is not ready for task delivery.'
+          : 'WorkItem queued until the runtime becomes ready.',
+        instance: clone(instance),
+        workItem: clone(workItem),
+        delivery: clone(gated),
+        acceptedAt: this.now(),
+      };
+    }
+    const delivery = await deliverRuntimeTask(registration.host, task);
+    this.deliveryStates.set(deliveryKey, delivery);
     if (delivery.status !== 'delivered') {
       return {
         requestId: request.requestId,
@@ -870,6 +945,49 @@ export class FleetControlService implements FleetControlApi {
       delivery,
       acceptedAt: delivery.deliveredAt ?? this.now(),
     };
+  }
+
+  private async flushPendingDeliveries(instanceId: string): Promise<void> {
+    if (this.flushingInstances.has(instanceId)) return;
+    this.flushingInstances.add(instanceId);
+    try {
+      const registration = [...this.registrations.values()].find(
+        (candidate) => candidate.host.getBootstrapStatus?.(instanceId)?.state === 'ready',
+      );
+      if (!registration) return;
+      const pending = [...this.pendingDeliveries.entries()].filter(
+        ([, delivery]) => delivery.instanceId === instanceId,
+      );
+      for (const [key, request] of pending) {
+        const current = this.deliveryStates.get(key);
+        if (!current || current.lifecycle !== 'queued_for_runtime') {
+          this.pendingDeliveries.delete(key);
+          continue;
+        }
+        this.deliveryStates.set(key, { ...current, lifecycle: 'delivering' });
+        const delivery = await deliverRuntimeTask(registration.host, request);
+        this.deliveryStates.set(key, delivery);
+        this.pendingDeliveries.delete(key);
+      }
+    } finally {
+      this.flushingInstances.delete(instanceId);
+    }
+  }
+
+  private cancelPendingDeliveries(instanceId: string): void {
+    for (const [key, pending] of this.pendingDeliveries) {
+      if (pending.instanceId !== instanceId) continue;
+      this.pendingDeliveries.delete(key);
+      const current = this.deliveryStates.get(key);
+      if (current) {
+        this.deliveryStates.set(key, {
+          ...current,
+          status: 'cancelled',
+          lifecycle: 'cancelled',
+          reason: 'host_failed',
+        });
+      }
+    }
   }
 
   private async invokeCoordinatorSession(
@@ -1010,6 +1128,11 @@ export class FleetControlService implements FleetControlApi {
       requestedBy: request.requestedBy,
       providerProfileId: template.providerProfileId,
       modelId: template.modelId,
+      requestedProviderProfileId: template.providerProfileId,
+      requestedModelId: template.modelId,
+      automationMode: template.automationMode ?? 'interactive',
+      permissionMode: template.permissionMode ?? 'default',
+      bootstrap: { state: 'starting', observedAt: createdAt },
       status: 'starting',
       createdAt,
       lastActivityAt: createdAt,
@@ -1021,6 +1144,8 @@ export class FleetControlService implements FleetControlApi {
       sessionId: template.sessionId,
       providerProfileId: template.providerProfileId,
       modelId: template.modelId,
+      automationMode: template.automationMode ?? 'interactive',
+      permissionMode: template.permissionMode ?? 'default',
       terminalName: instance.terminalName,
       launchSource: instance.launchSource,
       requestedBy: request.requestedBy,
@@ -1045,6 +1170,21 @@ export class FleetControlService implements FleetControlApi {
         workspaceId: result.workspaceId ?? instance.workspaceId,
         launchSource: result.launchSource ?? instance.launchSource,
         requestedBy: result.requestedBy ?? instance.requestedBy,
+        providerProfileId: result.resolvedProviderProfileId ?? instance.providerProfileId,
+        modelId: result.resolvedModelId ?? instance.modelId,
+        requestedProviderProfileId:
+          result.requestedProviderProfileId ?? instance.requestedProviderProfileId,
+        resolvedProviderProfileId:
+          result.resolvedProviderProfileId ?? instance.resolvedProviderProfileId,
+        requestedModelId: result.requestedModelId ?? instance.requestedModelId,
+        resolvedModelId: result.resolvedModelId ?? instance.resolvedModelId,
+        credential: result.credential ?? instance.credential,
+        refPresent: result.refPresent ?? instance.refPresent,
+        refResolution: result.refResolution ?? instance.refResolution,
+        authConfigured: result.authConfigured ?? instance.authConfigured,
+        authInjected: result.authInjected ?? instance.authInjected,
+        authVariableNames: result.authVariableNames ?? instance.authVariableNames,
+        baseUrlHost: result.baseUrlHost ?? instance.baseUrlHost,
         lastActivityAt: result.startedAt,
       } satisfies FleetInstance;
       this.instances.set(instanceId, started);
@@ -1208,6 +1348,7 @@ export class FleetControlService implements FleetControlApi {
   }
 
   private async stop(request: FleetControlRequest): Promise<FleetControlResponse> {
+    if (request.instanceId) this.cancelPendingDeliveries(request.instanceId);
     const response = await this.runInstanceCommand(request, 'stop', (registration, instance) =>
       registration.host.stop(instance.instanceId),
     );
@@ -1315,6 +1456,8 @@ export class FleetControlService implements FleetControlApi {
         sessionId: previous.sessionId,
         providerProfileId: previous.providerProfileId,
         modelId: previous.modelId,
+        automationMode: previous.automationMode ?? 'interactive',
+        permissionMode: previous.permissionMode ?? 'default',
         terminalName: previous.terminalName,
         launchSource: 'fleet-control-api',
         requestedBy: request.requestedBy,

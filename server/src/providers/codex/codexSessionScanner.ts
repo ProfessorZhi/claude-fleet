@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import type { TokenUsage } from '../../../../core/src/ledgerContracts.js';
 import { GLOBAL_SCAN_ACTIVE_MAX_AGE_MS } from '../../constants.js';
 
-export type CodexDiscoveredStatus = 'working' | 'waiting' | 'idle' | 'error';
+export type CodexDiscoveredStatus = 'starting' | 'working' | 'waiting' | 'idle' | 'error';
 
 export interface CodexSessionMetadata {
   sessionId: string;
@@ -309,7 +309,10 @@ function statusFromTail(
   initialModelId: string | undefined,
   initialContextWindow: number | undefined,
 ): Pick<CodexSessionMetadata, 'status' | 'modelId' | 'contextWindow' | 'tokens' | 'durationMs'> {
-  let status: CodexDiscoveredStatus = 'idle';
+  // A session_meta-only file means Codex has created a session but has not
+  // received the first user message yet. Do not call that idle: idle means a
+  // real turn completed and the runtime is ready for the next one.
+  let status: CodexDiscoveredStatus = 'starting';
   let modelId = initialModelId;
   let contextWindow = initialContextWindow;
   let tokens: TokenUsage | undefined;

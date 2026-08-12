@@ -15,6 +15,7 @@ interface TaskControlCenterProps {
   onAction: (action: FleetCommandAction, id: number) => void;
   onNewAgent: () => void;
   onClearSelection: () => void;
+  onViewAgent?: (id: number) => void;
   isSettingsOpen?: boolean;
   onToggleSettings?: () => void;
 }
@@ -65,6 +66,12 @@ function DetailField({ label, value }: { label: string; value: string }) {
   );
 }
 
+function agentActivityLabel(model: FleetSceneModel, agentId: number | undefined): string {
+  if (agentId === undefined) return 'Fleet';
+  const agent = model.agents.find((candidate) => candidate.id === agentId);
+  return agent?.displayName ?? `Agent #${agentId}`;
+}
+
 function AgentRow({
   agent,
   selected,
@@ -85,31 +92,47 @@ function AgentRow({
     >
       <span className="control-agent-identity">
         <span className="control-status-indicator" data-status={agent.status} aria-hidden="true" />
-        <span>
+        <span className="control-agent-identity-copy">
           <strong>{agent.displayName ?? `${roleLabel(agent.role)} #${agent.id}`}</strong>
-          <small>
+          <small className="control-agent-model">
             {agent.runtimeLabel} · {agent.model === '—' ? roleLabel(agent.role) : agent.model}
           </small>
         </span>
       </span>
       <span className="control-agent-progress">
-        <strong>{statusLabel(agent.status)}</strong>
-        <small>
-          {agent.currentTask !== '—' ? agent.currentTask : agent.executionLabel}
+        <strong>
+          {agent.attention.kind !== 'none' ? agent.attention.label : statusLabel(agent.status)}
+        </strong>
+        <small className="control-agent-task">
+          {agent.attention.kind !== 'none'
+            ? agent.attention.detail
+            : agent.currentTask !== '—'
+              ? agent.currentTask
+              : agent.executionLabel}
           {agent.currentTool !== '—' ? ` · ${agent.currentTool}` : ''}
         </small>
       </span>
-      <span className="control-agent-elapsed">
-        <strong>{formatElapsed(agent.createdAt, now)}</strong>
-        <small>运行时间</small>
-      </span>
-      <span className="control-agent-usage">
-        <strong>{valueOrPlaceholder(agent.usage)}</strong>
-        <small>Token 总量</small>
-      </span>
-      <span className="control-agent-connection" data-connection={agent.connection}>
-        <i aria-hidden="true" />
-        <span>{connectionLabel(agent.connection)}</span>
+      <span className="control-agent-meta">
+        <span className="control-agent-elapsed">
+          <strong>{formatElapsed(agent.createdAt, now)}</strong>
+          <small>运行时间</small>
+        </span>
+        <span className="control-agent-usage">
+          <strong>{agent.usageCompact}</strong>
+          <small>Token 总量（含缓存）</small>
+        </span>
+        <span
+          className="control-agent-connection"
+          data-connection={agent.connection}
+          title={
+            agent.status === 'Starting' && agent.terminalAvailable
+              ? 'Terminal 已连接；CLI 正在等待首次 Session 事件'
+              : undefined
+          }
+        >
+          <i aria-hidden="true" />
+          <span>{connectionLabel(agent.connection)}</span>
+        </span>
       </span>
       <span className="control-agent-chevron" aria-hidden="true">
         ›
@@ -126,7 +149,7 @@ function MissionSummary({ model }: { model: FleetSceneModel }) {
       : '未接入';
 
   return (
-    <section className="control-summary-card" data-testid="control-mission-summary">
+    <section className="control-mission-strip" data-testid="control-mission-summary">
       <div className="control-section-kicker">当前任务</div>
       <div className="control-mission-title">
         {mission.title === 'No active mission' ? '暂无活动任务' : mission.title}
@@ -159,12 +182,14 @@ function SelectedAgentPanel({
   onFocusAgent,
   onAction,
   onClose,
+  onViewAgent,
   now,
 }: {
   agent: FleetAgentModel;
   onFocusAgent: (id: number) => void;
   onAction: (action: FleetCommandAction, id: number) => void;
   onClose: () => void;
+  onViewAgent?: (id: number) => void;
   now: number;
 }) {
   return (
@@ -174,34 +199,94 @@ function SelectedAgentPanel({
           <div className="control-section-kicker">Agent 详情</div>
           <h2>{agent.displayName ?? `${roleLabel(agent.role)} #${agent.id}`}</h2>
           <p>
-            {roleLabel(agent.role)} · {statusLabel(agent.status)}
+            {roleLabel(agent.role)} ·{' '}
+            {agent.attention.kind !== 'none' ? agent.attention.label : statusLabel(agent.status)}
           </p>
         </div>
         <button type="button" className="control-close" aria-label="关闭详情" onClick={onClose}>
           ×
         </button>
       </div>
-      <div className="control-detail-grid">
-        <DetailField label="运行时" value={agent.runtimeLabel} />
-        <DetailField label="Provider" value={agent.provider} />
-        <DetailField label="Model" value={agent.model} />
-        <DetailField label="状态" value={statusLabel(agent.status)} />
-        <DetailField label="连接" value={connectionLabel(agent.connection)} />
-        <DetailField label="当前工作" value={agent.currentTask} />
-        <DetailField label="当前动作" value={agent.executionLabel} />
-        <DetailField label="当前工具" value={agent.currentTool} />
-        <DetailField
-          label="运行时间"
-          value={agent.createdAt ? formatElapsed(agent.createdAt, now) : '—'}
-        />
-        <DetailField label="仓库" value={agent.repo} />
-        <DetailField label="Token 总量" value={agent.usage} />
-        <DetailField label="输入 Token" value={agent.inputTokens} />
-        <DetailField label="缓存 Token" value={agent.cachedTokens} />
-        <DetailField label="输出 Token" value={agent.outputTokens} />
-        <DetailField label="上下文" value={agent.context} />
-        <DetailField label="会话" value={agent.session} />
-      </div>
+      {agent.attention.kind !== 'none' ? (
+        <div className="control-attention" data-testid="control-attention">
+          <strong>{agent.attention.label}</strong>
+          <span>{agent.attention.detail}</span>
+          {agent.attention.action !== 'none' ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid={`control-attention-action-${agent.id}`}
+              aria-label={
+                agent.attention.kind === 'needs-permission'
+                  ? '在 Agent 终端查看权限请求'
+                  : agent.attention.kind === 'needs-input'
+                    ? '在 Agent 终端回复'
+                    : agent.attention.kind === 'needs-startup-interaction'
+                      ? '聚焦 Claude 终端完成启动确认'
+                      : agent.attention.actionLabel
+              }
+              title={
+                agent.attention.kind === 'needs-permission'
+                  ? '在 Agent 终端查看权限请求'
+                  : agent.attention.kind === 'needs-input'
+                    ? '在 Agent 终端回复'
+                    : agent.attention.kind === 'needs-startup-interaction'
+                      ? '聚焦 Claude 终端完成启动确认'
+                      : undefined
+              }
+              onClick={() => {
+                if (agent.attention.action === 'view-result') {
+                  onViewAgent?.(agent.id);
+                } else if (agent.attention.action === 'restart') {
+                  onAction('restartAgent', agent.commandAgentId);
+                } else {
+                  onFocusAgent(agent.focusAgentId);
+                }
+              }}
+            >
+              {agent.attention.actionLabel}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      <section className="control-detail-section" aria-label="当前工作">
+        <div className="control-detail-section-title">当前工作</div>
+        <div className="control-detail-grid">
+          <DetailField label="运行时" value={agent.runtimeLabel} />
+          <DetailField label="Provider" value={agent.provider} />
+          <DetailField label="Model" value={agent.model} />
+          <DetailField
+            label="状态"
+            value={
+              agent.attention.kind !== 'none' ? agent.attention.label : statusLabel(agent.status)
+            }
+          />
+          <DetailField label="当前工作" value={agent.currentTask} />
+          <DetailField label="当前动作" value={agent.executionLabel} />
+          <DetailField label="当前工具" value={agent.currentTool} />
+          <DetailField
+            label="运行时间"
+            value={agent.createdAt ? formatElapsed(agent.createdAt, now) : '—'}
+          />
+        </div>
+      </section>
+      <section className="control-detail-section" aria-label="Usage">
+        <div className="control-detail-section-title">Usage</div>
+        <div className="control-detail-grid">
+          <DetailField label="Token 总量（含缓存）" value={agent.usage} />
+          <DetailField label="输入 Token" value={agent.inputTokens} />
+          <DetailField label="缓存 Token" value={agent.cachedTokens} />
+          <DetailField label="输出 Token" value={agent.outputTokens} />
+          <DetailField label="上下文" value={agent.context} />
+        </div>
+      </section>
+      <section className="control-detail-section" aria-label="Session">
+        <div className="control-detail-section-title">Session</div>
+        <div className="control-detail-grid">
+          <DetailField label="仓库" value={agent.repo} />
+          <DetailField label="会话" value={agent.session} />
+        </div>
+      </section>
       <div className="control-connection-stack">
         <div className="control-detail-section-title">连接诊断</div>
         {agent.connectionStack.map((check) => (
@@ -262,6 +347,7 @@ export function TaskControlCenter({
   onAction,
   onNewAgent,
   onClearSelection,
+  onViewAgent,
   isSettingsOpen,
   onToggleSettings,
 }: TaskControlCenterProps) {
@@ -295,8 +381,8 @@ export function TaskControlCenter({
             <span>工作中</span>
           </div>
           <div className="control-header-stat">
-            <strong>{model.waitingCount}</strong>
-            <span>等待</span>
+            <strong>{model.attentionCount}</strong>
+            <span>需处理</span>
           </div>
           <Button
             variant="accent"
@@ -311,6 +397,7 @@ export function TaskControlCenter({
             <Button
               variant="ghost"
               size="sm"
+              className="control-settings-action"
               data-testid="fleet-settings"
               aria-pressed={isSettingsOpen}
               onClick={onToggleSettings}
@@ -321,103 +408,108 @@ export function TaskControlCenter({
         </div>
       </header>
 
-      <div className="control-content">
-        <div className="control-main-column">
-          <MissionSummary model={model} />
-          <section
-            className="control-summary-card control-agent-list-card"
-            data-testid="control-agent-list-card"
-          >
-            <div className="control-section-heading">
-              <div>
-                <div className="control-section-kicker">运行队列</div>
-                <h2>Agent 进度</h2>
-              </div>
-              <span>
-                {model.agents.length === 0 ? '暂无实例' : `${model.agents.length} 个实例`}
-              </span>
-            </div>
-            {model.agents.length === 0 ? (
-              <div className="control-empty" data-testid="control-center-empty">
-                <strong>还没有运行中的 Agent</strong>
-                <span>从这里创建一个独立终端，开始受控执行。</span>
-                <Button
-                  variant="accent"
-                  size="sm"
-                  onClick={onNewAgent}
-                  data-testid="control-empty-new-agent"
-                >
-                  + 新建 Agent
-                </Button>
-              </div>
-            ) : (
-              <div className="control-agent-list">
-                {model.agents.map((agent) => (
-                  <AgentRow
-                    key={agent.id}
-                    agent={agent}
-                    selected={agent.id === selectedAgent}
-                    onSelect={onSelectAgent}
-                    now={now}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-        </div>
-
-        <aside className="control-side-column">
-          {selected ? (
-            <SelectedAgentPanel
-              agent={selected}
-              onFocusAgent={onFocusAgent}
-              onAction={onAction}
-              onClose={onClearSelection}
-              now={now}
-            />
-          ) : (
+      <MissionSummary model={model} />
+      <div className="control-content-shell">
+        <div className="control-workspace">
+          <div className="control-main-column">
             <section
-              className="control-summary-card control-info-card"
-              data-testid="control-overview-card"
+              className="control-summary-card control-agent-list-card"
+              data-testid="control-agent-list-card"
             >
-              <div className="control-section-kicker">运行总览</div>
-              <h2>选择一个 Agent 查看详情</h2>
-              <p>状态、当前工作、Token、上下文和终端操作会在这里集中显示。</p>
-              <div className="control-status-summary">
+              <div className="control-section-heading">
+                <div>
+                  <div className="control-section-kicker">运行队列</div>
+                  <h2>Agent 进度</h2>
+                </div>
                 <span>
-                  <i data-status="Working" />
-                  工作中 {model.workingCount}
-                </span>
-                <span>
-                  <i data-status="Waiting" />
-                  等待 {model.waitingCount}
-                </span>
-                <span>
-                  <i data-status="Idle" />
-                  空闲 {Math.max(0, model.agents.length - model.workingCount - model.waitingCount)}
+                  {model.agents.length === 0 ? '暂无实例' : `${model.agents.length} 个实例`}
                 </span>
               </div>
+              {model.agents.length === 0 ? (
+                <div className="control-empty" data-testid="control-center-empty">
+                  <strong>还没有运行中的 Agent</strong>
+                  <span>从这里创建一个独立终端，开始受控执行。</span>
+                  <Button
+                    variant="accent"
+                    size="sm"
+                    onClick={onNewAgent}
+                    data-testid="control-empty-new-agent"
+                  >
+                    + 新建 Agent
+                  </Button>
+                </div>
+              ) : (
+                <div className="control-agent-list">
+                  {model.agents.map((agent) => (
+                    <AgentRow
+                      key={agent.id}
+                      agent={agent}
+                      selected={agent.id === selectedAgent}
+                      onSelect={onSelectAgent}
+                      now={now}
+                    />
+                  ))}
+                </div>
+              )}
             </section>
-          )}
-          <section
-            className="control-summary-card control-events-card"
-            data-testid="control-recent-events"
-          >
-            <div className="control-section-kicker">最近活动</div>
-            {model.recentEvents.length === 0 ? (
-              <p className="control-muted">暂无实时事件</p>
+          </div>
+
+          <aside className="control-side-column">
+            {selected ? (
+              <SelectedAgentPanel
+                agent={selected}
+                onFocusAgent={onFocusAgent}
+                onAction={onAction}
+                onClose={onClearSelection}
+                onViewAgent={onViewAgent}
+                now={now}
+              />
             ) : (
-              <div className="control-events">
-                {model.recentEvents.slice(0, 6).map((event, index) => (
-                  <div key={`${event.label}-${event.observedAt ?? index}`}>
-                    <span>{event.agentId === undefined ? 'Fleet' : `Agent #${event.agentId}`}</span>
-                    <strong>{event.label}</strong>
-                  </div>
-                ))}
-              </div>
+              <section
+                className="control-summary-card control-info-card"
+                data-testid="control-overview-card"
+              >
+                <div className="control-section-kicker">运行总览</div>
+                <h2>选择一个 Agent 查看详情</h2>
+                <p>状态、当前工作、Token、上下文和终端操作会在这里集中显示。</p>
+                <div className="control-status-summary">
+                  <span>
+                    <i data-status="Working" />
+                    工作中 {model.workingCount}
+                  </span>
+                  <span>
+                    <i data-status="Waiting" />
+                    等待 {model.waitingCount}
+                  </span>
+                  <span>
+                    <i data-status="Idle" />
+                    空闲{' '}
+                    {Math.max(0, model.agents.length - model.workingCount - model.waitingCount)}
+                  </span>
+                </div>
+              </section>
             )}
-          </section>
-        </aside>
+          </aside>
+        </div>
+        <section
+          className="control-activity-bar"
+          data-testid="control-recent-events"
+          aria-label="最近活动"
+        >
+          <div className="control-section-kicker">最近活动</div>
+          {model.recentEvents.length === 0 ? (
+            <p className="control-muted">暂无实时事件</p>
+          ) : (
+            <div className="control-events">
+              {model.recentEvents.slice(0, 6).map((event, index) => (
+                <div key={`${event.label}-${event.observedAt ?? index}`}>
+                  <span>{agentActivityLabel(model, event.agentId)}</span>
+                  <strong>{event.label}</strong>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
     </main>
   );

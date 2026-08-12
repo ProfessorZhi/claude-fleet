@@ -13,6 +13,9 @@ function launch(overrides: Partial<FleetLaunchTemplate> = {}): FleetLaunchTempla
     role: 'worker',
     repo: 'F:/repo',
     cwd: 'F:/repo',
+    providerProfileId: 'claude-fleet.inherit',
+    modelId: 'claude-test-model',
+    launchSource: 'fleet-control-api',
     requestedBy: 'user',
     policy: { mode: 'suggest' },
     ...overrides,
@@ -91,5 +94,11 @@ describe('Fleet Control API contracts', () => {
     expect(validateFleetControlRequest(request({ launch: undefined }))).toContain(
       'launch is required',
     );
+  });
+
+  it('rejects a Claude API launch without an explicit provider profile', () => {
+    expect(
+      validateFleetControlRequest(request({ launch: launch({ providerProfileId: undefined }) })),
+    ).toBe('PROVIDER_PROFILE_REQUIRED');
   });
 });

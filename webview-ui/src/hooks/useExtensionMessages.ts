@@ -355,12 +355,15 @@ export function useExtensionMessages(
           for (const id of incoming) {
             next[id] = {
               ...next[id],
-              displayName: displayNames[id],
-              providerDisplayName: providerDisplayNames[id],
-              modelId: modelIds[id],
-              runtime: runtimes[id],
-              createdAt: createdAt[id],
-              managedByFleet: managedByFleet[id],
+              // Restore payloads can arrive in either order with live
+              // agentCreated/telemetry messages. Do not erase a known value
+              // just because this particular projection omitted it.
+              displayName: displayNames[id] ?? next[id]?.displayName,
+              providerDisplayName: providerDisplayNames[id] ?? next[id]?.providerDisplayName,
+              modelId: modelIds[id] ?? next[id]?.modelId,
+              runtime: runtimes[id] ?? next[id]?.runtime,
+              createdAt: createdAt[id] ?? next[id]?.createdAt,
+              managedByFleet: managedByFleet[id] ?? next[id]?.managedByFleet,
             };
           }
           return next;

@@ -28,6 +28,7 @@ import type {
   ResolvedLaunchConfig,
   ResolvedLaunchSafeMetadata,
 } from '../../core/src/providerProfiles.js';
+import { INHERIT_PROVIDER_PROFILE_ID } from '../../core/src/providerProfiles.js';
 import { getProviderDefinition } from '../../core/src/providerRegistry.js';
 
 /** Function that returns the plaintext secret for a given `secretRef`,
@@ -73,14 +74,30 @@ export function resolveClaudeLaunchConfig(
   const fleetError = validateFleetIdentity(opts.fleet);
   if (fleetError) throw new Error(`Claude Fleet: ${fleetError}`);
 
+  const presetId = profile.presetId;
+  const definition = presetId ? getProviderDefinition(presetId) : undefined;
+  const requestedModelId = normalizeOptional(modelId);
+  const presetDefaultModel =
+    typeof definition?.requiredEnv?.ANTHROPIC_MODEL === 'string'
+      ? normalizeOptional(definition.requiredEnv.ANTHROPIC_MODEL)
+      : undefined;
+  const resolvedModelId =
+    requestedModelId ?? normalizeOptional(profile.defaultModelId) ?? presetDefaultModel;
+  // Explicit Inherit means that Claude Code's native account/model selection
+  // remains in charge. Every configured/API-backed profile must resolve a
+  // concrete model before a terminal is created.
+  if (profile.id !== INHERIT_PROVIDER_PROFILE_ID && !resolvedModelId) {
+    throw new ModelRequiredError(profile.id, profile.name);
+  }
+
   // ── env (fresh object every call) ─────────────────────────
   const env: Record<string, string> = {};
+  const authVariableNames: string[] = [];
+  let refResolution: 'success' | 'not_required' = 'not_required';
 
   // Spec 005: preset requiredEnv（官方文档验证的推荐 env，不含 secret）。
   // 先合并 preset 值，profile 显式字段（baseUrl / secret）再覆盖 —— 与
   // Claude Code 官方"模型别名 env + 显式 --model 覆盖"语义一致。
-  const presetId = profile.presetId;
-  const definition = presetId ? getProviderDefinition(presetId) : undefined;
   if (definition?.requiredEnv) {
     for (const [k, v] of Object.entries(definition.requiredEnv)) {
       env[k] = v;
@@ -98,6 +115,8 @@ export function resolveClaudeLaunchConfig(
     profile.providerType === 'bedrock' ||
     profile.providerType === 'vertex' ||
     profile.providerType === 'foundry';
+  const authConfigured =
+    !noInject && (profile.authMode === 'apiKey' || profile.authMode === 'authToken');
 
   if (!noInject) {
     // baseUrl — always present and process-scoped if defined.
@@ -122,6 +141,8 @@ export function resolveClaudeLaunchConfig(
         throw new MissingSecretError(profile.id, profile.name, 'apiKey');
       }
       env.ANTHROPIC_API_KEY = normalizedSecret;
+      authVariableNames.push('ANTHROPIC_API_KEY');
+      refResolution = 'success';
     } else if (profile.authMode === 'authToken') {
       if (!profile.secretRef) {
         throw new MissingSecretError(profile.id, profile.name, 'authToken');
@@ -135,6 +156,8 @@ export function resolveClaudeLaunchConfig(
         throw new MissingSecretError(profile.id, profile.name, 'authToken');
       }
       env.ANTHROPIC_AUTH_TOKEN = normalizedSecret;
+      authVariableNames.push('ANTHROPIC_AUTH_TOKEN');
+      refResolution = 'success';
     }
     // authMode 'inherit' + 非 noInject（理论不存在，validator 保证）——
     // 不注入 auth env，仅 baseUrl。
@@ -145,8 +168,8 @@ export function resolveClaudeLaunchConfig(
 
   // ── args ──────────────────────────────────────────────────
   const args: string[] = ['--session-id', sessionId];
-  if (typeof modelId === 'string' && modelId.trim() !== '') {
-    args.push('--model', modelId);
+  if (resolvedModelId) {
+    args.push('--model', resolvedModelId);
   }
   if (opts.bypassPermissions) {
     // Upstream compatibility: keep the legacy flag name.
@@ -157,8 +180,30 @@ export function resolveClaudeLaunchConfig(
   const safeMetadata: ResolvedLaunchSafeMetadata = {
     providerProfileId: profile.id,
     providerDisplayName: profile.name,
-    modelId: typeof modelId === 'string' && modelId.trim() !== '' ? modelId : undefined,
+    modelId: resolvedModelId,
+    requestedProviderProfileId: profile.id,
+    resolvedProviderProfileId: profile.id,
+    requestedModelId,
+    resolvedModelId,
+    credential:
+      typeof env.ANTHROPIC_API_KEY === 'string' || typeof env.ANTHROPIC_AUTH_TOKEN === 'string'
+        ? 'present'
+        : 'absent',
+    refPresent: Boolean(profile.secretRef),
+    refResolution,
+    authConfigured,
+    authInjected: authVariableNames.length > 0,
+    authVariableNames,
   };
+  const effectiveBaseUrl = env.ANTHROPIC_BASE_URL;
+  if (effectiveBaseUrl) {
+    try {
+      safeMetadata.baseUrlHost = new URL(effectiveBaseUrl).host;
+    } catch {
+      // Provider profiles are validated before reaching this resolver. Keep
+      // diagnostics fail-safe if a legacy profile contains a malformed URL.
+    }
+  }
   if (opts.fleet) safeMetadata.fleet = opts.fleet;
 
   return { env, args, safeMetadata };
@@ -183,4 +228,22 @@ export class MissingSecretError extends Error {
     this.profileName = profileName;
     this.authMode = authMode;
   }
+}
+
+/** Raised before terminal creation when a configured profile has no model. */
+export class ModelRequiredError extends Error {
+  readonly profileId: string;
+  readonly profileName: string;
+
+  constructor(profileId: string, profileName: string) {
+    super(`MODEL_REQUIRED: Provider "${profileName}" has no modelId or defaultModelId.`);
+    this.name = 'ModelRequiredError';
+    this.profileId = profileId;
+    this.profileName = profileName;
+  }
+}
+
+function normalizeOptional(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
 }

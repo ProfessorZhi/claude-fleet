@@ -1,5 +1,5 @@
 import type { FleetIdentity } from './fleetContracts.js';
-import type { AgentRole, FleetRuntime } from './runtimeContracts.js';
+import type { AgentRole, FleetRuntime, RuntimeBootstrapSnapshot } from './runtimeContracts.js';
 
 export type { AgentRole, FleetRuntime } from './runtimeContracts.js';
 
@@ -43,6 +43,7 @@ export interface FleetEvent {
   workspaceId?: string;
   terminalId?: string;
   terminalName?: string;
+  displayName?: string;
   launchSource?: string;
   requestedBy?: string;
   sessionId?: string;
@@ -53,6 +54,7 @@ export interface FleetEvent {
   role?: AgentRole;
   parentAgentId?: string;
   leadAgentId?: string;
+  bootstrap?: RuntimeBootstrapSnapshot;
   status?: string;
   currentTool?: string;
   currentTask?: string;
@@ -71,6 +73,7 @@ export interface FleetTelemetrySnapshot {
   workspaceId?: string;
   terminalId?: string;
   terminalName?: string;
+  displayName?: string;
   launchSource?: string;
   requestedBy?: string;
   sessionId?: string;
@@ -87,6 +90,7 @@ export interface FleetTelemetrySnapshot {
   role?: AgentRole;
   parentAgentId?: string;
   leadAgentId?: string;
+  bootstrap?: RuntimeBootstrapSnapshot;
   /** Bounded events for this instance, newest last. */
   recentEvents: FleetEvent[];
 }
@@ -158,6 +162,7 @@ export class FleetTelemetryStore {
       workspaceId: event.workspaceId ?? previous?.workspaceId,
       terminalId: event.terminalId ?? previous?.terminalId,
       terminalName: event.terminalName ?? previous?.terminalName,
+      displayName: event.displayName ?? previous?.displayName,
       launchSource: event.launchSource ?? previous?.launchSource,
       requestedBy: event.requestedBy ?? previous?.requestedBy,
       sessionId: event.sessionId ?? previous?.sessionId,
@@ -174,6 +179,7 @@ export class FleetTelemetryStore {
       role: event.role ?? previous?.role,
       parentAgentId: event.parentAgentId ?? previous?.parentAgentId,
       leadAgentId: event.leadAgentId ?? previous?.leadAgentId,
+      bootstrap: event.bootstrap ?? previous?.bootstrap,
       recentEvents: [...(previous?.recentEvents ?? []), event].slice(-this.historyLimit),
     };
 
@@ -190,6 +196,7 @@ export class FleetTelemetryStore {
       ? {
           ...value,
           contextUsage: value.contextUsage && { ...value.contextUsage },
+          bootstrap: value.bootstrap && { ...value.bootstrap },
           recentEvents: [...value.recentEvents],
         }
       : undefined;
@@ -200,6 +207,7 @@ export class FleetTelemetryStore {
       snapshots: [...this.snapshotsByInstance.values()].map((snapshot) => ({
         ...snapshot,
         contextUsage: snapshot.contextUsage && { ...snapshot.contextUsage },
+        bootstrap: snapshot.bootstrap && { ...snapshot.bootstrap },
         recentEvents: [...snapshot.recentEvents],
       })),
       recentEvents: [...this.events],
@@ -242,6 +250,7 @@ export function normalizeAgentBroadcast(
     workspaceId: seed.workspaceId,
     terminalId: seed.terminalId,
     terminalName: seed.terminalName,
+    displayName: seed.displayName,
     launchSource: seed.launchSource,
     requestedBy: seed.requestedBy,
     sessionId: seed.sessionId,
@@ -252,6 +261,7 @@ export function normalizeAgentBroadcast(
     role: seed.role,
     parentAgentId: seed.parentAgentId,
     leadAgentId: seed.leadAgentId,
+    bootstrap: seed.bootstrap,
   } satisfies Partial<FleetEvent>;
 
   switch (type) {

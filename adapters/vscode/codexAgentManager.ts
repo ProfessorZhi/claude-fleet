@@ -20,6 +20,8 @@ export interface CodexTerminalLaunchOptions {
   suppressShow?: boolean;
   launchSource?: string;
   requestedBy?: string;
+  /** External Fleet control-plane instance id, when launched by the coordinator. */
+  fleetInstanceId?: string;
 }
 
 /**
@@ -69,6 +71,7 @@ export function launchCodexTerminal(
     hostId: 'codex-cli-host',
     workspaceId: cwd,
     terminalId: `terminal-agent-${id}`,
+    fleetInstanceId: options.fleetInstanceId,
     launchSource: options.launchSource ?? (sessionMode === 'resume' ? 'resume' : 'fleet-ui'),
     requestedBy: options.requestedBy ?? 'user',
     displayName: options.displayName,
@@ -88,9 +91,10 @@ export function launchCodexTerminal(
     permissionSent: false,
     hadToolsInTurn: false,
     lastDataAt: now,
-    // One synthetic lifecycle observation makes the Office card idle rather
-    // than reporting a missing Claude transcript as an error/starting state.
-    linesProcessed: 1,
+    // Do not synthesize transcript history here. A newly launched Codex CLI is
+    // waiting for its first user message, not idle after a completed turn.
+    // The native session scanner advances this once real session data appears.
+    linesProcessed: 0,
     seenUnknownRecordTypes: new Set(),
     hookDelivered: false,
     hooksOnly: true,

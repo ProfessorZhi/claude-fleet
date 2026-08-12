@@ -124,17 +124,30 @@ export async function deliverRuntimeTask(
   try {
     task = validateRuntimeTaskBrief(request?.task);
   } catch {
-    return { instanceId, workItemId, status: 'rejected', reason: 'invalid_brief' };
+    return {
+      instanceId,
+      workItemId,
+      status: 'rejected',
+      lifecycle: 'failed',
+      reason: 'invalid_brief',
+    };
   }
 
   if (!instanceId) {
-    return { instanceId, workItemId: task.workItemId, status: 'rejected', reason: 'invalid_brief' };
+    return {
+      instanceId,
+      workItemId: task.workItemId,
+      status: 'rejected',
+      lifecycle: 'failed',
+      reason: 'invalid_brief',
+    };
   }
   if (!host?.sendTask) {
     return {
       instanceId,
       workItemId: task.workItemId,
       status: 'unavailable',
+      lifecycle: 'failed',
       reason: 'boundary_unavailable',
     };
   }
@@ -145,6 +158,7 @@ export async function deliverRuntimeTask(
       instanceId,
       workItemId: task.workItemId,
       status: 'delivered',
+      lifecycle: 'delivered_to_runtime',
       deliveredAt: now(),
     };
   } catch {
@@ -152,6 +166,7 @@ export async function deliverRuntimeTask(
       instanceId,
       workItemId: task.workItemId,
       status: 'unavailable',
+      lifecycle: 'failed',
       reason: 'host_failed',
     };
   }

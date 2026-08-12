@@ -191,6 +191,26 @@ describe('ClaudeFleetServer', () => {
     server2.stop(); // should not delete server.json / the registry entry (not owner)
   });
 
+  it('routes embedded servers by workspace identity', async () => {
+    const configA = await server.start({ embedded: true, workspaceId: 'F:/repo-a' });
+    const sameWorkspace = new ClaudeFleetServer();
+    const sameConfig = await sameWorkspace.start({
+      embedded: true,
+      workspaceId: 'f:\\repo-a',
+    });
+    expect(sameConfig.port).toBe(configA.port);
+
+    const otherWorkspace = new ClaudeFleetServer();
+    const configB = await otherWorkspace.start({ embedded: true, workspaceId: 'F:/repo-b' });
+    expect(configB.port).not.toBe(configA.port);
+    expect(configA.workspaceId).toBe('F:/repo-a');
+    expect(configB.workspaceId).toBe('F:/repo-b');
+    expect(registryFiles()).toHaveLength(2);
+
+    sameWorkspace.stop();
+    otherWorkspace.stop();
+  });
+
   // 12. Second instance, same capability (standalone+standalone), reuses existing server
   it('second standalone instance reuses an existing standalone server', async () => {
     const config1 = await server.start({ embedded: false });

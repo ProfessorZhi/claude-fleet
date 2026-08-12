@@ -10,6 +10,7 @@ import type {
   FleetControlRequest,
   FleetControlResponse,
 } from '../../core/src/controlContracts.js';
+import type { FleetInstance } from '../../core/src/runtimeContracts.js';
 import type { AgentRuntime } from './agentRuntime.js';
 import type { AgentStateStore } from './agentStateStore.js';
 import type {
@@ -176,6 +177,26 @@ function registerControlRoutes(app: FastifyInstance, options: HttpServerOptions)
         // The HTTP boundary must not disclose adapter errors, request contents,
         // credentials, or stack traces to a local client.
         reply.code(500).send({ error: 'control_request_failed' });
+      }
+    },
+  );
+
+  app.get<{ Params: { instanceId: string } }>(
+    '/api/control/instances/:instanceId/diagnostics',
+    { preHandler: bearerAuth(options.token) },
+    async (request, reply) => {
+      try {
+        const instance = await options.controlApi!.getInstance(request.params.instanceId);
+        if (!instance) {
+          reply.code(404).send({ error: 'instance_not_found' });
+          return;
+        }
+        // This is an explicit allow-list, not the generic response sanitizer:
+        // all returned values are booleans, variable names, hosts, or bounded
+        // runtime state. Credential values never enter this projection.
+        reply.send(runtimeDiagnostics(instance));
+      } catch {
+        reply.code(500).send({ error: 'control_diagnostics_unavailable' });
       }
     },
   );
@@ -366,6 +387,47 @@ function invokeCoordinatorHttpSession(
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const SAFE_CLAUDE_CREDENTIAL_VARIABLES = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
+
+function runtimeDiagnostics(instance: FleetInstance): Record<string, unknown> {
+  const credentialVariableNames = (instance.authVariableNames ?? []).filter((name) =>
+    SAFE_CLAUDE_CREDENTIAL_VARIABLES.has(name),
+  );
+  const hasBaseUrl = Boolean(instance.baseUrlHost);
+
+  return {
+    instanceId: instance.instanceId,
+    runtime: instance.runtime,
+    providerProfileId: instance.providerProfileId,
+    requestedModel: instance.requestedModelId ?? instance.modelId,
+    resolvedModel: instance.resolvedModelId ?? instance.modelId,
+    secretRefPresent: instance.refPresent === true ? 'YES' : 'NO',
+    secretResolution: instance.refResolution === 'success' ? 'SUCCESS' : 'FAIL',
+    credentialConfigured: instance.authConfigured === true ? 'YES' : 'NO',
+    credentialInjectedIntoRuntime: instance.authInjected === true ? 'YES' : 'NO',
+    credentialVariableNames,
+    baseUrlHost: instance.baseUrlHost,
+    effectiveRuntimeEnvironment: {
+      ANTHROPIC_BASE_URL: hasBaseUrl ? 'PRESENT' : 'ABSENT',
+      ANTHROPIC_API_KEY: credentialVariableNames.includes('ANTHROPIC_API_KEY')
+        ? 'PRESENT'
+        : 'ABSENT',
+      ANTHROPIC_AUTH_TOKEN: credentialVariableNames.includes('ANTHROPIC_AUTH_TOKEN')
+        ? 'PRESENT'
+        : 'ABSENT',
+    },
+    bootstrap: instance.bootstrap
+      ? {
+          state: instance.bootstrap.state,
+          reason: instance.bootstrap.reason,
+          detail: instance.bootstrap.detail,
+          observedAt: instance.bootstrap.observedAt,
+        }
+      : undefined,
+    status: instance.status,
+  };
 }
 
 const SENSITIVE_FIELD =

@@ -110,9 +110,18 @@ export type {
   FleetStatus,
   Mission,
   RuntimeAdapter,
+  RuntimeAutomationMode,
+  RuntimeBootstrapListener,
+  RuntimeBootstrapReason,
+  RuntimeBootstrapSnapshot,
+  RuntimeBootstrapState,
   RuntimeCapabilities,
   RuntimeLaunchRequest,
   RuntimeLaunchResult,
+  RuntimePermissionMode,
+  RuntimeTaskDeliveryLifecycle,
+  RuntimeTaskDeliveryResult,
+  RuntimeTaskDeliveryStatus,
   WorkItem,
 } from './runtimeContracts.js';
 export type {

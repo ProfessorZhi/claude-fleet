@@ -71,6 +71,7 @@ describe('runtime task delivery boundary', () => {
       instanceId: 'agent-1',
       workItemId: 'work-17',
       status: 'unavailable',
+      lifecycle: 'failed',
       reason: 'boundary_unavailable',
     });
   });
@@ -94,6 +95,7 @@ describe('runtime task delivery boundary', () => {
       instanceId: 'agent-1',
       workItemId: 'work-17',
       status: 'delivered',
+      lifecycle: 'delivered_to_runtime',
       deliveredAt: 123,
     });
     expect(sendTask).toHaveBeenCalledWith('agent-1', task);
@@ -111,6 +113,7 @@ describe('runtime task delivery boundary', () => {
       instanceId: 'agent-1',
       workItemId: 'work-17',
       status: 'unavailable',
+      lifecycle: 'failed',
       reason: 'host_failed',
     });
     expect(JSON.stringify(result)).not.toContain('must-not-leak');

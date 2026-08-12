@@ -27,6 +27,10 @@ export interface FleetCharacterMetadata {
     outputTokens?: number;
     totalTokens?: number;
   };
+  /** The current turn is blocked waiting for explicit user input. */
+  waitingAwaitingInput?: boolean;
+  /** A completed turn has not been opened in the current projection. */
+  completionUnread?: boolean;
 }
 
 export interface FleetAgentFolder {
@@ -67,6 +71,7 @@ export interface FleetAgentModel {
   executionLabel: string;
   currentTask: string;
   usage: string;
+  usageCompact: string;
   inputTokens: string;
   cachedTokens: string;
   outputTokens: string;
@@ -75,6 +80,8 @@ export interface FleetAgentModel {
   session: string;
   terminalName: string;
   terminalAvailable: boolean;
+  /** Terminal is alive, but no runtime/session event proves a first turn yet. */
+  awaitingFirstInput: boolean;
   connection: 'connected' | 'connecting' | 'disconnected';
   connectionStack: FleetConnectionCheck[];
   context: string;
@@ -82,6 +89,25 @@ export interface FleetAgentModel {
   focusAgentId: number;
   commandAgentId: number;
   recentEvents: FleetRecentEvent[];
+  attention: FleetAttention;
+}
+
+export type FleetAttentionKind =
+  | 'none'
+  | 'needs-permission'
+  | 'needs-input'
+  | 'waiting-unknown'
+  | 'needs-startup-interaction'
+  | 'error'
+  | 'disconnected'
+  | 'completion-unread';
+
+export interface FleetAttention {
+  kind: FleetAttentionKind;
+  label: string;
+  detail: string;
+  action: 'none' | 'focus-terminal' | 'restart' | 'view-result';
+  actionLabel: string;
 }
 
 export type FleetConnectionCheckState = 'connected' | 'connecting' | 'disconnected' | 'unavailable';
@@ -125,6 +151,7 @@ export interface FleetSceneModel {
   recentEvents: FleetRecentEvent[];
   workingCount: number;
   waitingCount: number;
+  attentionCount: number;
   telemetryEvents: FleetEvent[];
 }
 
@@ -216,6 +243,15 @@ function tokenLabel(value: number | undefined): string {
   return value === undefined ? '—' : value.toLocaleString();
 }
 
+function compactTokenLabel(value: string): string {
+  if (value === '—') return '未采集';
+  const numeric = Number(value.replaceAll(',', ''));
+  if (!Number.isFinite(numeric)) return value;
+  if (numeric >= 1_000_000) return `${(numeric / 1_000_000).toFixed(1)}M`;
+  if (numeric >= 1_000) return `${(numeric / 1_000).toFixed(1)}k`;
+  return numeric.toLocaleString();
+}
+
 function usageLabels(character: FleetCharacterMetadata | undefined): {
   total: string;
   input: string;
@@ -240,7 +276,10 @@ function connectionState(
   status: string,
 ): FleetAgentModel['connection'] {
   if (status === 'Error' || status === 'Stopped') return 'disconnected';
-  if (status === 'Starting') return 'connecting';
+  // A managed Claude terminal is a real connection boundary even before the
+  // first prompt creates the native Session JSONL. CLI/Hook/Telemetry remain
+  // independently visible as "connecting" in connectionStack until that
+  // first runtime event arrives.
   if (snapshot?.terminalId || snapshot?.sessionId) return 'connected';
   return 'connecting';
 }
@@ -262,9 +301,16 @@ function currentTool(
   return display(snapshot?.currentTool ?? character?.currentTool ?? activeTool?.status);
 }
 
-function executionLabel(status: string, tool: string): string {
+function executionLabel(
+  status: string,
+  tool: string,
+  awaitingFirstInput = false,
+  bootstrapState?: NonNullable<FleetTelemetrySnapshot['bootstrap']>['state'],
+): string {
+  if (bootstrapState === 'needs_user_interaction') return '等待启动确认';
+  if (awaitingFirstInput) return '等待首条消息';
   if (status === 'Starting') return '启动运行时';
-  if (status === 'Waiting') return '等待输入或权限';
+  if (status === 'Waiting') return '等待交互';
   if (status === 'Error') return '运行错误';
   if (status === 'Stopped') return '已停止';
   if (status === 'Idle') return '空闲';
@@ -297,6 +343,110 @@ function executionLabel(status: string, tool: string): string {
   return '工作中';
 }
 
+function hasRuntimeActivity(snapshot: FleetTelemetrySnapshot | undefined): boolean {
+  return (
+    snapshot?.recentEvents.some(
+      (event) => event.eventType !== 'agent_started' && event.eventType !== 'session_started',
+    ) ?? false
+  );
+}
+
+function isAwaitingFirstInput(
+  snapshot: FleetTelemetrySnapshot | undefined,
+  status: string,
+  connection: FleetAgentModel['connection'],
+): boolean {
+  return status === 'Starting' && connection === 'connected' && !hasRuntimeActivity(snapshot);
+}
+
+function attentionFor(
+  snapshot: FleetTelemetrySnapshot | undefined,
+  status: string,
+  tool: string,
+  tools: ToolActivity[],
+  character: FleetCharacterMetadata | undefined,
+  connection: FleetAgentModel['connection'],
+  awaitingFirstInput: boolean,
+): FleetAttention {
+  if (snapshot?.bootstrap?.state === 'needs_user_interaction') {
+    return {
+      kind: 'needs-startup-interaction',
+      label: '等待启动确认',
+      detail:
+        snapshot.bootstrap.reason === 'workspace_trust'
+          ? 'Claude 需要确认当前工作区'
+          : '等待 Claude 启动交互',
+      action: 'focus-terminal',
+      actionLabel: '聚焦终端',
+    };
+  }
+  const permission = tools.some((item) => !item.done && item.permissionWait);
+  if (permission) {
+    return {
+      kind: 'needs-permission',
+      label: '等待权限',
+      detail: tool === '—' ? '运行时请求用户批准' : tool,
+      action: 'focus-terminal',
+      actionLabel: '查看请求',
+    };
+  }
+  if (status === 'Waiting' && character?.waitingAwaitingInput) {
+    return {
+      kind: 'needs-input',
+      label: '等待用户输入',
+      detail: '运行时正在等待回复',
+      action: 'focus-terminal',
+      actionLabel: '回复',
+    };
+  }
+  if (status === 'Error') {
+    return {
+      kind: 'error',
+      label: 'CLI 错误',
+      detail: '运行时报告错误或进程已退出',
+      action: 'restart',
+      actionLabel: '重新启动',
+    };
+  }
+  if (connection === 'disconnected') {
+    return {
+      kind: 'disconnected',
+      label: '连接断开',
+      detail: '终端或 CLI 不可用',
+      action: 'restart',
+      actionLabel: '重新启动',
+    };
+  }
+  if (awaitingFirstInput) {
+    return {
+      kind: 'needs-input',
+      label: '等待用户输入',
+      detail: '终端已启动，等待首条消息',
+      action: 'focus-terminal',
+      actionLabel: '回复',
+    };
+  }
+  if (status === 'Waiting') {
+    return {
+      kind: 'waiting-unknown',
+      label: '等待交互',
+      detail: '等待类型未确定',
+      action: 'focus-terminal',
+      actionLabel: '打开终端',
+    };
+  }
+  if (character?.completionUnread) {
+    return {
+      kind: 'completion-unread',
+      label: '完成 · 未查看',
+      detail: '任务已完成，结果尚未打开',
+      action: 'view-result',
+      actionLabel: '查看结果',
+    };
+  }
+  return { kind: 'none', label: '', detail: '', action: 'none', actionLabel: '' };
+}
+
 function contextLabel(
   snapshot: FleetTelemetrySnapshot | undefined,
   character: FleetCharacterMetadata | undefined,
@@ -322,7 +472,9 @@ function connectionStack(
     status === 'Error' || status === 'Stopped'
       ? { label: 'CLI', state: 'disconnected', detail: '进程已退出或已停止' }
       : status === 'Starting'
-        ? { label: 'CLI', state: 'connecting', detail: '等待运行时事件' }
+        ? snapshot?.bootstrap?.state === 'needs_user_interaction'
+          ? { label: 'CLI', state: 'connected', detail: '进程已启动' }
+          : { label: 'CLI', state: 'connecting', detail: '等待运行时事件' }
         : {
             label: 'CLI',
             state: 'connected',
@@ -374,10 +526,21 @@ function toAgentModel(input: FleetSceneInput, id: number): FleetAgentModel {
   const commandAgentId = character?.parentAgentId ?? id;
   const usage = usageLabels(character);
   const connections = connectionStack(snapshot, status);
+  const connection = connectionState(snapshot, status);
+  const awaitingFirstInput = isAwaitingFirstInput(snapshot, status, connection);
+  const attention = attentionFor(
+    snapshot,
+    status,
+    tool,
+    input.agentTools[id] ?? [],
+    character,
+    connection,
+    awaitingFirstInput,
+  );
 
   return {
     id,
-    displayName: character?.displayName ?? character?.agentName,
+    displayName: character?.displayName ?? character?.agentName ?? snapshot?.displayName,
     createdAt: character?.createdAt,
     role,
     roleLabel: ROLE_LABELS[role],
@@ -389,9 +552,10 @@ function toAgentModel(input: FleetSceneInput, id: number): FleetAgentModel {
     cwd: display(snapshot?.cwd ?? folder?.path),
     worktree: '—',
     currentTool: tool,
-    executionLabel: executionLabel(status, tool),
+    executionLabel: executionLabel(status, tool, awaitingFirstInput, snapshot?.bootstrap?.state),
     currentTask: display(snapshot?.currentTask),
     usage: usage.total,
+    usageCompact: compactTokenLabel(usage.total),
     inputTokens: usage.input,
     cachedTokens: usage.cached,
     outputTokens: usage.output,
@@ -400,13 +564,15 @@ function toAgentModel(input: FleetSceneInput, id: number): FleetAgentModel {
     session: display(snapshot?.sessionId),
     terminalName: display(snapshot?.terminalName),
     terminalAvailable: Boolean(snapshot?.terminalId),
-    connection: connectionState(snapshot, status),
+    awaitingFirstInput,
+    connection,
     connectionStack: connections,
     context: contextLabel(snapshot, character),
     managed: snapshot?.managedByFleet === false || character?.isHeadless ? 'External' : 'Fleet',
     focusAgentId: commandAgentId,
     commandAgentId,
     recentEvents: recentEvents(snapshot, status, tool),
+    attention,
   };
 }
 
@@ -464,6 +630,7 @@ export function buildFleetSceneModel(input: FleetSceneInput): FleetSceneModel {
     recentEvents,
     workingCount: agents.filter((agent) => agent.status === 'Working').length,
     waitingCount: agents.filter((agent) => agent.status === 'Waiting').length,
+    attentionCount: agents.filter((agent) => agent.attention.kind !== 'none').length,
     telemetryEvents: [...(input.telemetry?.recentEvents ?? [])],
   };
 }

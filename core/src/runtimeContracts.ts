@@ -25,6 +25,26 @@ export type FleetManagement = 'fleet' | 'external';
 
 export type FleetStatus = 'starting' | 'working' | 'waiting' | 'idle' | 'stopped' | 'error';
 
+/** How much of the runtime startup interaction Fleet may automate. */
+export type RuntimeAutomationMode = 'interactive' | 'unattended';
+
+/** Runtime permission policy; this does not bypass a provider's trust gate. */
+export type RuntimePermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+
+export type RuntimeBootstrapState =
+  'starting' | 'ready' | 'needs_user_interaction' | 'failed' | 'stopped';
+
+export type RuntimeBootstrapReason =
+  'startup_interaction' | 'workspace_trust' | 'authentication' | 'unknown';
+
+/** Runtime readiness evidence, separate from the four user-facing state axes. */
+export interface RuntimeBootstrapSnapshot {
+  state: RuntimeBootstrapState;
+  reason?: RuntimeBootstrapReason;
+  detail?: string;
+  observedAt: number;
+}
+
 export type FleetControlMode = 'observe' | 'suggest' | 'approve' | 'autonomous';
 
 export interface RuntimeCapabilities {
@@ -177,7 +197,21 @@ export interface FleetInstance {
   providerProfileId?: string;
   providerDisplayName?: string;
   modelId?: string;
+  requestedProviderProfileId?: string;
+  resolvedProviderProfileId?: string;
+  requestedModelId?: string;
+  resolvedModelId?: string;
+  credential?: 'present' | 'absent';
+  refPresent?: boolean;
+  refResolution?: 'success' | 'not_required';
+  authConfigured?: boolean;
+  authInjected?: boolean;
+  authVariableNames?: string[];
+  baseUrlHost?: string;
   fleet?: FleetIdentity;
+  automationMode?: RuntimeAutomationMode;
+  permissionMode?: RuntimePermissionMode;
+  bootstrap?: RuntimeBootstrapSnapshot;
   status: FleetStatus;
   parentAgentId?: string;
   leadAgentId?: string;
@@ -195,6 +229,8 @@ export interface RuntimeLaunchRequest {
   terminalName?: string;
   launchSource?: string;
   requestedBy?: string;
+  automationMode?: RuntimeAutomationMode;
+  permissionMode?: RuntimePermissionMode;
   signal?: AbortSignal;
 }
 
@@ -207,6 +243,17 @@ export interface RuntimeLaunchResult {
   workspaceId?: string;
   launchSource?: string;
   requestedBy?: string;
+  requestedProviderProfileId?: string;
+  resolvedProviderProfileId?: string;
+  requestedModelId?: string;
+  resolvedModelId?: string;
+  credential?: 'present' | 'absent';
+  refPresent?: boolean;
+  refResolution?: 'success' | 'not_required';
+  authConfigured?: boolean;
+  authInjected?: boolean;
+  authVariableNames?: string[];
+  baseUrlHost?: string;
   startedAt: number;
 }
 
@@ -229,7 +276,18 @@ export interface RuntimeTaskDeliveryRequest {
   task: RuntimeTaskBrief;
 }
 
-export type RuntimeTaskDeliveryStatus = 'delivered' | 'unavailable' | 'rejected';
+/** Transport result retained for API compatibility with the Alpha contract. */
+export type RuntimeTaskDeliveryStatus =
+  'queued' | 'delivered' | 'unavailable' | 'rejected' | 'cancelled';
+
+/** Authoritative lifecycle for a WorkItem's runtime delivery. */
+export type RuntimeTaskDeliveryLifecycle =
+  | 'assigned'
+  | 'queued_for_runtime'
+  | 'delivering'
+  | 'delivered_to_runtime'
+  | 'failed'
+  | 'cancelled';
 
 export type RuntimeTaskDeliveryReason = 'boundary_unavailable' | 'host_failed' | 'invalid_brief';
 
@@ -237,9 +295,15 @@ export interface RuntimeTaskDeliveryResult {
   instanceId: string;
   workItemId: string;
   status: RuntimeTaskDeliveryStatus;
+  lifecycle: RuntimeTaskDeliveryLifecycle;
   deliveredAt?: number;
   reason?: RuntimeTaskDeliveryReason;
 }
+
+export type RuntimeBootstrapListener = (
+  instanceId: string,
+  snapshot: RuntimeBootstrapSnapshot,
+) => void;
 
 export interface FleetRuntimeHost<Request extends RuntimeLaunchRequest = RuntimeLaunchRequest> {
   readonly hostId: string;
@@ -250,6 +314,10 @@ export interface FleetRuntimeHost<Request extends RuntimeLaunchRequest = Runtime
   focus(instanceId: string): Promise<void>;
   /** Optional bounded task-delivery boundary; hosts without it fail closed. */
   sendTask?(instanceId: string, task: RuntimeTaskBrief): Promise<void>;
+  /** Optional runtime-ready gate. Hosts without it retain the legacy direct-send path. */
+  getBootstrapStatus?(instanceId: string): RuntimeBootstrapSnapshot | undefined;
+  /** Emits readiness transitions so queued WorkItems can be flushed exactly once. */
+  subscribeBootstrap?(listener: RuntimeBootstrapListener): () => void;
 }
 
 export interface RuntimeAdapter {

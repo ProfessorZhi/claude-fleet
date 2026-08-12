@@ -20,7 +20,9 @@ import type {
   FleetInstance,
   FleetRuntime,
   Mission,
+  RuntimeAutomationMode,
   RuntimeLaunchResult,
+  RuntimePermissionMode,
   RuntimeTaskDeliveryResult,
   WorkItem,
   WorkItemResult,
@@ -65,6 +67,8 @@ export interface FleetLaunchTemplate {
   terminalPolicy?: 'reuse' | 'new';
   sessionMode?: 'new' | 'resume';
   sessionId?: string;
+  automationMode?: RuntimeAutomationMode;
+  permissionMode?: RuntimePermissionMode;
   launchSource?: string;
   requestedBy: string;
   policy: FleetControlPolicy;
@@ -447,6 +451,15 @@ export function validateLaunchTemplate(template: FleetLaunchTemplate): string | 
   if (!template.repo || !template.cwd) return 'launch repo and cwd are required.';
   const requesterError = validateRequiredId(template.requestedBy, 'launch.requestedBy');
   if (requesterError) return requesterError;
+
+  // A Coordinator/API Claude launch must state its provider identity. The
+  // Extension Host may resolve the profile's SecretRef, but it must never
+  // guess Anthropic/Inherit when the caller forgot the provider field.
+  const isApiControlledLaunch =
+    template.launchSource === 'coordinator' || template.launchSource === 'fleet-control-api';
+  if (template.runtime === 'claude-code' && isApiControlledLaunch && !template.providerProfileId) {
+    return 'PROVIDER_PROFILE_REQUIRED';
+  }
 
   if (template.sessionMode === 'resume' && !template.sessionId) {
     return 'resume launch requires sessionId.';

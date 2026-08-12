@@ -119,6 +119,7 @@ describe('Fleet Command scene model', () => {
           cwd: 'F:/work/fleet-repo',
           providerDisplayName: 'Anthropic',
           modelId: 'claude-sonnet',
+          displayName: 'astrid',
           sessionId: 'session-1',
           status: 'working',
           currentTool: 'Read',
@@ -142,6 +143,7 @@ describe('Fleet Command scene model', () => {
       currentTool: 'Read',
       provider: 'Anthropic',
       model: 'claude-sonnet',
+      displayName: 'astrid',
       session: 'session-1',
     });
     expect(agent.currentTask).toBe('—');
@@ -237,5 +239,185 @@ describe('Fleet Command scene model', () => {
     expect(model.agents).toEqual([]);
     expect(model.groups).toEqual([]);
     expect(model.selectedAgent).toBeNull();
+  });
+
+  test('projects distinct attention states instead of collapsing them into Waiting', () => {
+    const model = buildFleetSceneModel(
+      input({
+        agents: [1, 2, 3, 4, 5, 6],
+        agentStatuses: { 1: 'waiting', 2: 'waiting', 3: 'error', 4: 'idle', 5: 'stopped' },
+        agentTools: {
+          1: [{ toolId: 'permission', status: 'shell', done: false, permissionWait: true }],
+        },
+        characters: {
+          2: { waitingAwaitingInput: true },
+          4: { completionUnread: true },
+        },
+        telemetry: {
+          snapshots: [
+            {
+              instanceId: 'agent-5',
+              agentId: 5,
+              runtime: 'claude-code',
+              terminalId: 'terminal-5',
+              status: 'stopped',
+              recentEvents: [],
+            },
+          ],
+          recentEvents: [],
+        },
+      }),
+    );
+
+    expect(model.agents.map((agent) => agent.attention.kind)).toEqual([
+      'needs-permission',
+      'needs-input',
+      'error',
+      'completion-unread',
+      'disconnected',
+      'none',
+    ]);
+    expect(model.agents.map((agent) => agent.attention.actionLabel)).toEqual([
+      '查看请求',
+      '回复',
+      '重新启动',
+      '查看结果',
+      '重新启动',
+      '',
+    ]);
+    expect(model.attentionCount).toBe(5);
+  });
+
+  test('marks an untyped waiting state as waiting for interaction', () => {
+    const agent = buildFleetSceneModel(input({ agentStatuses: { 1: 'waiting' } })).agents[0];
+    expect(agent.attention).toMatchObject({
+      kind: 'waiting-unknown',
+      label: '等待交互',
+      actionLabel: '打开终端',
+    });
+  });
+
+  test('formats compact usage while preserving the exact total for the inspector', () => {
+    const agent = buildFleetSceneModel(
+      input({
+        characters: { 1: { usageTokens: { totalTokens: 205666 } } },
+      }),
+    ).agents[0];
+    expect(agent.usage).toBe('205,666');
+    expect(agent.usageCompact).toBe('205.7k');
+  });
+
+  test('treats a live terminal as connected before the first Claude prompt', () => {
+    const agent = buildFleetSceneModel(
+      input({
+        agentStatuses: { 1: 'starting' },
+        telemetry: {
+          snapshots: [
+            {
+              instanceId: 'agent-1',
+              agentId: 1,
+              runtime: 'claude-code',
+              terminalId: 'terminal-1',
+              terminalName: 'Claude Code #1',
+              sessionId: 'session-1',
+              status: 'starting',
+              recentEvents: [],
+            },
+          ],
+          recentEvents: [],
+        },
+      }),
+    ).agents[0];
+
+    expect(agent.connection).toBe('connected');
+    expect(agent.connectionStack).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: 'Terminal', state: 'connected' }),
+        expect.objectContaining({ label: 'CLI', state: 'connecting' }),
+        expect.objectContaining({ label: 'Hook', state: 'connecting' }),
+      ]),
+    );
+  });
+
+  test('shows the same first-input state for a live terminal with no runtime activity', () => {
+    const agent = buildFleetSceneModel(
+      input({
+        agentStatuses: { 1: 'starting' },
+        telemetry: {
+          snapshots: [
+            {
+              instanceId: 'agent-1',
+              agentId: 1,
+              runtime: 'claude-code',
+              terminalId: 'terminal-1',
+              status: 'starting',
+              recentEvents: [
+                {
+                  eventId: 'started',
+                  eventType: 'agent_started',
+                  observedAt: 100,
+                  source: 'agent-state',
+                },
+              ],
+            },
+          ],
+          recentEvents: [],
+        },
+      }),
+    ).agents[0];
+
+    expect(agent).toMatchObject({
+      awaitingFirstInput: true,
+      executionLabel: '等待首条消息',
+      attention: {
+        kind: 'needs-input',
+        label: '等待用户输入',
+        detail: '终端已启动，等待首条消息',
+        actionLabel: '回复',
+      },
+    });
+  });
+
+  test('projects runtime bootstrap interaction separately from a normal first prompt', () => {
+    const agent = buildFleetSceneModel(
+      input({
+        agentStatuses: { 1: 'starting' },
+        telemetry: {
+          snapshots: [
+            {
+              instanceId: 'agent-1',
+              agentId: 1,
+              runtime: 'claude-code',
+              terminalId: 'terminal-1',
+              terminalName: 'Claude Code #1',
+              status: 'starting',
+              bootstrap: {
+                state: 'needs_user_interaction',
+                reason: 'startup_interaction',
+                observedAt: 100,
+              },
+              recentEvents: [],
+            },
+          ],
+          recentEvents: [],
+        },
+      }),
+    ).agents[0];
+
+    expect(agent).toMatchObject({
+      executionLabel: '等待启动确认',
+      attention: {
+        kind: 'needs-startup-interaction',
+        label: '等待启动确认',
+        action: 'focus-terminal',
+        actionLabel: '聚焦终端',
+      },
+    });
+    expect(agent.connectionStack).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: 'CLI', state: 'connected', detail: '进程已启动' }),
+        expect.objectContaining({ label: 'Hook', state: 'connecting' }),
+      ]),
+    );
   });
 });

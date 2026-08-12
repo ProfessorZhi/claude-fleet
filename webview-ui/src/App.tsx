@@ -229,6 +229,10 @@ function App() {
   }, []);
 
   const handleSelectFleetAgent = useCallback((id: number) => {
+    // Opening an agent is the acknowledgement boundary for a completed turn.
+    // OfficeState owns this mutable projection state; the control center only
+    // selects the same agent and does not create a second lifecycle source.
+    getOfficeState().markCompletionViewed(id);
     setFleetSelection(id);
   }, []);
 
@@ -338,20 +342,26 @@ function App() {
     const characters: Record<number, FleetCharacterMetadata | undefined> = {};
     for (const id of agents) {
       const character = officeState.characters.get(id);
-      if (!character) continue;
+      const info = agentInfo[id];
+      // A coordinator launch can reach the control projection before the
+      // office character is restored. Preserve metadata such as displayName
+      // so the control center does not fall back to Agent #N.
+      if (!character && !info) continue;
       characters[id] = {
-        folderName: character.folderName,
-        createdAt: agentInfo[id]?.createdAt,
-        currentTool: character.currentTool,
-        isSubagent: character.isSubagent,
-        parentAgentId: character.parentAgentId,
-        isTeamLead: character.isTeamLead,
-        agentName: character.agentName,
-        isHeadless: character.isHeadless,
-        displayName: character.displayName,
-        contextTokens: character.contextTokens,
-        maxContextTokens: character.maxContextTokens,
-        usageTokens: agentInfo[id]?.usageTokens ?? character.usageTokens,
+        folderName: character?.folderName,
+        createdAt: info?.createdAt,
+        currentTool: character?.currentTool,
+        isSubagent: character?.isSubagent,
+        parentAgentId: character?.parentAgentId,
+        isTeamLead: character?.isTeamLead,
+        agentName: character?.agentName,
+        isHeadless: character?.isHeadless,
+        displayName: character?.displayName ?? info?.displayName,
+        contextTokens: character?.contextTokens,
+        maxContextTokens: character?.maxContextTokens,
+        usageTokens: info?.usageTokens ?? character?.usageTokens,
+        waitingAwaitingInput: character?.waitingAwaitingInput,
+        completionUnread: character?.completionUnread,
       };
     }
     return characters;
@@ -481,6 +491,7 @@ function App() {
           onSelectAgent={handleSelectFleetAgent}
           onFocusAgent={handleSelectAgent}
           onAction={handleFleetAction}
+          onViewAgent={handleSelectFleetAgent}
           onNewAgent={() => transport.send({ type: 'newAgent' })}
           onClearSelection={() => setFleetSelection(null)}
           isSettingsOpen={isSettingsOpen}

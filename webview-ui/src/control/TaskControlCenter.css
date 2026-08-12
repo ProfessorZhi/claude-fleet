@@ -1,7 +1,11 @@
 .task-control-center {
   position: absolute;
   inset: 0;
-  overflow: auto;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--vscode-editor-background, #f7f8fa);
   color: var(--vscode-foreground, #24292f);
   font-family: var(--vscode-font-family, 'Segoe UI', system-ui, sans-serif);
@@ -48,6 +52,7 @@ body.vscode-high-contrast .task-control-center {
   justify-content: space-between;
   gap: 20px;
   min-height: 58px;
+  flex: 0 0 auto;
   padding: 9px 20px;
   border-bottom: 1px solid var(--control-border);
   background: var(--vscode-sideBar-background, var(--control-surface));
@@ -122,21 +127,120 @@ body.vscode-high-contrast .task-control-center {
   border-color: var(--control-accent-hover) !important;
 }
 
-.control-content {
+.control-settings-action {
+  background: transparent !important;
+  border-color: var(--control-border) !important;
+  color: var(--control-fg) !important;
+}
+
+.control-settings-action:hover,
+.control-settings-action:focus-visible {
+  background: var(--control-surface-hover) !important;
+  border-color: var(--control-border) !important;
+  color: var(--control-fg) !important;
+}
+
+.control-mission-strip {
   display: grid;
+  grid-template:
+    'kicker metrics' auto 'title metrics' auto 'objective metrics' auto / minmax(0, 1fr)
+    auto;
+  align-items: center;
+  gap: 0 20px;
+  min-height: 64px;
+  flex: 0 0 auto;
+  margin: 12px 20px 0;
+  padding: 9px 16px;
+  border: 1px solid var(--control-border);
+  background: var(--control-surface);
+}
+
+.control-mission-strip > .control-section-kicker {
+  grid-area: kicker;
+}
+
+.control-mission-strip > .control-mission-title {
+  grid-area: title;
+}
+
+.control-mission-strip > .control-mission-objective {
+  grid-area: objective;
+  overflow: hidden;
+  margin-top: 1px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-mission-strip > .control-mission-metrics {
+  grid-area: metrics;
+  margin: 0;
+  padding: 0;
+  border-top: 0;
+}
+
+.control-content-shell {
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 20px 10px;
+  overflow: hidden;
+}
+
+.control-workspace {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
   gap: 14px;
-  max-width: 1500px;
-  margin: 0 auto;
-  padding: 16px 20px 12px;
+  max-width: none;
+  margin: 0;
+  width: 100%;
 }
 
 .control-main-column,
 .control-side-column {
   display: flex;
   min-width: 0;
+  min-height: 0;
+  container-type: inline-size;
+  container-name: control-main;
   flex-direction: column;
   gap: 14px;
+  overflow-x: hidden;
+}
+
+/* The agent list owns the main-column scroll boundary. Keeping the column
+   itself clipped prevents a second scrollbar from competing with it. */
+.control-main-column {
+  overflow: hidden;
+}
+
+/* The inspector is an independent surface: its diagnostics and actions remain
+   reachable while the agent list grows. */
+.control-side-column {
+  overflow-y: auto;
+}
+
+.control-activity-bar {
+  display: flex;
+  align-self: stretch;
+  width: 100%;
+  min-height: 0;
+  height: 96px;
+  max-height: 96px;
+  box-sizing: border-box;
+  flex: 0 0 96px;
+  flex-direction: column;
+  gap: 6px;
+  max-width: none;
+  margin: 0;
+  padding: 10px 14px;
+  overflow: auto;
+  border: 1px solid var(--control-border);
+  background: var(--control-surface);
 }
 
 .control-summary-card,
@@ -147,6 +251,22 @@ body.vscode-high-contrast .task-control-center {
 
 .control-summary-card {
   padding: 15px 16px;
+}
+
+.control-agent-list-card {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.control-agent-list-card .control-agent-list {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.control-agent-list-card .control-empty {
+  flex: 1 1 auto;
 }
 
 .control-mission-title {
@@ -213,16 +333,23 @@ body.vscode-high-contrast .task-control-center {
 .control-agent-list {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid var(--control-border);
 }
 
 .control-agent-row {
   display: grid;
-  grid-template-columns: minmax(170px, 1.25fr) minmax(190px, 1.45fr) 82px 90px 118px 16px;
+  grid-template-columns:
+    minmax(0, 1.35fr) minmax(0, 1.4fr) minmax(72px, 0.55fr) minmax(76px, 0.6fr)
+    minmax(92px, 0.7fr) 20px;
   align-items: center;
   gap: 12px;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   min-height: 70px;
   padding: 10px 12px;
   border: 0;
@@ -231,6 +358,10 @@ body.vscode-high-contrast .task-control-center {
   color: var(--control-fg);
   text-align: left;
   cursor: pointer;
+}
+
+.control-agent-row > * {
+  min-width: 0;
 }
 
 .control-agent-row:last-child {
@@ -261,6 +392,12 @@ body.vscode-high-contrast .task-control-center {
   gap: 9px;
 }
 
+.control-agent-identity-copy {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .control-agent-identity strong,
 .control-agent-progress strong,
 .control-agent-usage strong,
@@ -284,8 +421,66 @@ body.vscode-high-contrast .task-control-center {
   white-space: nowrap;
 }
 
+.control-agent-model,
+.control-agent-task {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-agent-meta {
+  display: contents;
+}
+
 .control-agent-progress small {
   color: var(--control-muted);
+}
+
+.control-attention {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  margin: 13px 0 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--control-attention) 55%, var(--control-border));
+  border-left: 3px solid var(--control-attention);
+  background: color-mix(in srgb, var(--control-attention) 8%, var(--control-surface));
+}
+
+.control-attention strong,
+.control-attention span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-attention strong {
+  color: var(--control-fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.control-attention span {
+  color: var(--control-muted);
+  font-size: 12px;
+}
+
+.control-attention button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+.control-detail-section {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--control-divider);
+}
+
+.control-detail-section .control-detail-grid {
+  padding: 0;
+  border-bottom: 0;
 }
 
 .control-agent-usage,
@@ -541,10 +736,13 @@ body.vscode-high-contrast .task-control-center {
 }
 
 .control-events {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  margin-top: 10px;
+  display: grid;
+  min-height: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(20px, auto);
+  gap: 4px 18px;
+  margin-top: 0;
+  overflow: auto;
 }
 
 .control-events div {
@@ -572,7 +770,7 @@ body.vscode-high-contrast .task-control-center {
 }
 
 @media (max-width: 1180px) {
-  .control-content {
+  .control-workspace {
     grid-template-columns: minmax(0, 1fr) 340px;
   }
 
@@ -583,7 +781,7 @@ body.vscode-high-contrast .task-control-center {
 }
 
 @media (max-width: 960px) {
-  .control-content {
+  .control-workspace {
     grid-template-columns: 1fr;
   }
 
@@ -607,8 +805,19 @@ body.vscode-high-contrast .task-control-center {
     justify-content: flex-start;
   }
 
-  .control-content {
-    padding: 12px;
+  .control-content-shell {
+    padding: 10px 12px 8px;
+  }
+
+  .control-mission-strip {
+    grid-template: 'kicker' auto 'title' auto 'objective' auto 'metrics' auto / minmax(0, 1fr);
+    gap: 2px;
+    margin: 10px 12px 0;
+  }
+
+  .control-mission-strip > .control-mission-metrics {
+    justify-content: flex-start;
+    margin-top: 6px;
   }
 
   .control-agent-row {
@@ -623,5 +832,91 @@ body.vscode-high-contrast .task-control-center {
 
   .control-detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .control-activity-bar {
+    height: 112px;
+    max-height: 112px;
+    flex-basis: 112px;
+  }
+
+  .control-events {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The Agent workspace can be narrow even when the overall Webview is wide
+   (Explorer + Inspector are both open). Respond to the actual list width, not
+   only the VS Code window width, so rows never require horizontal scrolling. */
+/* A normal VS Code webview can still leave only ~800–900px for the main
+   column once Explorer and the Inspector are visible. Switch before the
+   six-column row becomes a horizontal-scroll trap. */
+@container control-main (max-width: 980px) {
+  .control-agent-row {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.5fr) 18px;
+    grid-template-areas: 'identity progress chevron' 'meta meta meta';
+    gap: 8px 10px;
+    min-height: 80px;
+  }
+
+  .control-agent-identity {
+    grid-area: identity;
+  }
+
+  .control-agent-progress {
+    grid-area: progress;
+  }
+
+  .control-agent-chevron {
+    grid-area: chevron;
+  }
+
+  .control-agent-meta {
+    display: flex;
+    grid-area: meta;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .control-agent-elapsed,
+  .control-agent-usage,
+  .control-agent-connection {
+    min-width: 0;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 4px;
+  }
+
+  .control-agent-usage small {
+    overflow: hidden;
+    max-width: 150px;
+    text-overflow: ellipsis;
+  }
+
+  .control-agent-connection span {
+    overflow: hidden;
+    max-width: 150px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@container control-main (max-width: 559px) {
+  .control-agent-row {
+    grid-template-columns: minmax(0, 1fr) 18px;
+    grid-template-areas: 'identity chevron' 'progress progress' 'meta meta';
+    min-height: 96px;
+  }
+
+  .control-agent-meta {
+    flex-wrap: wrap;
+    row-gap: 3px;
+  }
+
+  .control-agent-usage small {
+    max-width: 120px;
   }
 }

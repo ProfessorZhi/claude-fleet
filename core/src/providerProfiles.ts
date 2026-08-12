@@ -260,6 +260,22 @@ export interface ResolvedLaunchSafeMetadata {
   providerProfileId: string;
   providerDisplayName: string;
   modelId?: string;
+  /** The identity requested by the caller before profile/model resolution. */
+  requestedProviderProfileId: string;
+  /** The profile actually resolved by the trusted Extension Host. */
+  resolvedProviderProfileId: string;
+  requestedModelId?: string;
+  resolvedModelId?: string;
+  /** Whether a SecretStorage credential was injected into this launch. */
+  credential: 'present' | 'absent';
+  /** Secret-free auth resolution evidence for diagnostics. */
+  refPresent?: boolean;
+  refResolution?: 'success' | 'not_required';
+  authConfigured?: boolean;
+  authInjected?: boolean;
+  authVariableNames?: string[];
+  /** Effective endpoint host only; never persist the full URL or credentials. */
+  baseUrlHost?: string;
   /** Secret-free Coordinator/Worker correlation metadata. */
   fleet?: FleetIdentity;
 }

@@ -6,6 +6,10 @@ import * as vscode from 'vscode';
 import type { StateAdapter } from '../../core/src/adapter.js';
 import type { InstanceLaunchConfig } from '../../core/src/providerProfiles.js';
 import { INHERIT_PROVIDER_PROFILE_ID } from '../../core/src/providerProfiles.js';
+import type {
+  RuntimeAutomationMode,
+  RuntimePermissionMode,
+} from '../../core/src/runtimeContracts.js';
 import { AgentStateStore } from '../../server/src/agentStateStore.js';
 import { agentStateToUserStatus } from '../../server/src/agentStatus.js';
 import { resolveClaudeCli } from '../../server/src/cliResolver.js';
@@ -17,7 +21,7 @@ import {
   startFileWatching,
 } from '../../server/src/fileWatcher.js';
 import { resolveClaudeLaunchConfig } from '../../server/src/launchConfig.js';
-import { MissingSecretError } from '../../server/src/launchConfig.js';
+import { MissingSecretError, ModelRequiredError } from '../../server/src/launchConfig.js';
 import { loadLayout } from '../../server/src/layoutPersistence.js';
 import { assignPaletteIfNeeded } from '../../server/src/paletteAssigner.js';
 import { getClaudeConfigDir } from '../../server/src/providers/hook/claude/claudeConfigPath.js';
@@ -44,12 +48,17 @@ export interface LaunchNewTerminalOptions {
   launchConfig?: InstanceLaunchConfig;
   /** When true, pass `--dangerously-skip-permissions`. */
   bypassPermissions?: boolean;
+  /** Runtime startup policy; it does not bypass Claude's Workspace Trust gate. */
+  automationMode?: RuntimeAutomationMode;
+  permissionMode?: RuntimePermissionMode;
   /** When true, do not call `terminal.show()` (used by auto-spawn). */
   suppressShow?: boolean;
   /** Safe lifecycle provenance recorded with the managed instance. */
   launchSource?: string;
   /** Safe requester identity recorded with the managed instance. */
   requestedBy?: string;
+  /** External Fleet control-plane instance id, when launched by the coordinator. */
+  fleetInstanceId?: string;
   providerProfileStore: ProviderProfileStore;
   secretStorageProvider: SecretStorageProvider;
 }
@@ -71,6 +80,7 @@ async function resolveLaunchConfigFromStore(args: {
   providerProfileStore: ProviderProfileStore;
   secretStorageProvider: SecretStorageProvider;
   bypassPermissions?: boolean;
+  permissionMode?: RuntimePermissionMode;
 }): Promise<ReturnType<typeof resolveClaudeLaunchConfig>> {
   const profile = args.providerProfileStore.get(args.launchConfig.providerProfileId);
   if (!profile) {
@@ -104,7 +114,10 @@ async function resolveLaunchConfigFromStore(args: {
     args.launchConfig.cwd ?? '',
     '00000000-0000-0000-0000-000000000000',
     (_ref) => secret,
-    { bypassPermissions: args.bypassPermissions, fleet: args.launchConfig.fleet },
+    {
+      bypassPermissions: args.bypassPermissions || args.permissionMode === 'bypassPermissions',
+      fleet: args.launchConfig.fleet,
+    },
   );
 }
 
@@ -141,6 +154,7 @@ export async function launchNewTerminal(
     folderPath,
     launchConfig,
     bypassPermissions,
+    permissionMode,
     suppressShow,
     providerProfileStore,
     secretStorageProvider,
@@ -169,9 +183,10 @@ export async function launchNewTerminal(
       providerProfileStore,
       secretStorageProvider,
       bypassPermissions,
+      permissionMode,
     });
   } catch (e) {
-    if (e instanceof MissingSecretError) {
+    if (e instanceof MissingSecretError || e instanceof ModelRequiredError) {
       console.error(`[Claude Fleet] launch aborted: ${e.message}`);
       void vscode.window.showErrorMessage(e.message);
       // Roll back the terminal-index increment so the next launch uses
@@ -203,7 +218,7 @@ export async function launchNewTerminal(
   const sessionMode = launchConfig?.sessionMode ?? 'new';
   const sessionId = launchConfig?.sessionId ?? crypto.randomUUID();
   const launch = claudeProvider.buildLaunchCommand?.(sessionId, cwd, {
-    bypassPermissions,
+    bypassPermissions: bypassPermissions || permissionMode === 'bypassPermissions',
     modelId: resolved.safeMetadata.modelId,
     sessionMode,
   });
@@ -255,6 +270,7 @@ export async function launchNewTerminal(
     hostId: 'vscode-integrated-terminal',
     workspaceId: cwd,
     terminalId: `terminal-agent-${id}`,
+    fleetInstanceId: options.fleetInstanceId,
     launchSource: options.launchSource ?? (sessionMode === 'resume' ? 'resume' : 'fleet-ui'),
     requestedBy: options.requestedBy ?? 'user',
     displayName: launchConfig?.displayName,
@@ -281,6 +297,17 @@ export async function launchNewTerminal(
     providerProfileId: resolved.safeMetadata.providerProfileId,
     providerDisplayName: resolved.safeMetadata.providerDisplayName,
     modelId: resolved.safeMetadata.modelId,
+    requestedProviderProfileId: resolved.safeMetadata.requestedProviderProfileId,
+    resolvedProviderProfileId: resolved.safeMetadata.resolvedProviderProfileId,
+    requestedModelId: resolved.safeMetadata.requestedModelId,
+    resolvedModelId: resolved.safeMetadata.resolvedModelId,
+    credential: resolved.safeMetadata.credential,
+    refPresent: resolved.safeMetadata.refPresent,
+    refResolution: resolved.safeMetadata.refResolution,
+    authConfigured: resolved.safeMetadata.authConfigured,
+    authInjected: resolved.safeMetadata.authInjected,
+    authVariableNames: resolved.safeMetadata.authVariableNames,
+    baseUrlHost: resolved.safeMetadata.baseUrlHost,
     fleet: resolved.safeMetadata.fleet,
     // Spec 003 — launch timestamp (transient; drives the "transcript never
     // appeared" error heuristic in agentStatus.ts).
@@ -463,6 +490,7 @@ export function persistAgents(agents: AgentStateStore, adapter: StateAdapter): v
       hostId: agent.hostId,
       workspaceId: agent.workspaceId,
       terminalId: agent.terminalId,
+      fleetInstanceId: agent.fleetInstanceId,
       launchSource: agent.launchSource,
       requestedBy: agent.requestedBy,
       folderName: agent.folderName,
@@ -479,6 +507,17 @@ export function persistAgents(agents: AgentStateStore, adapter: StateAdapter): v
       providerProfileId: agent.providerProfileId,
       providerDisplayName: agent.providerDisplayName,
       modelId: agent.modelId,
+      requestedProviderProfileId: agent.requestedProviderProfileId,
+      resolvedProviderProfileId: agent.resolvedProviderProfileId,
+      requestedModelId: agent.requestedModelId,
+      resolvedModelId: agent.resolvedModelId,
+      credential: agent.credential,
+      refPresent: agent.refPresent,
+      refResolution: agent.refResolution,
+      authConfigured: agent.authConfigured,
+      authInjected: agent.authInjected,
+      authVariableNames: agent.authVariableNames,
+      baseUrlHost: agent.baseUrlHost,
       fleet: agent.fleet,
       // Spec 005 — managed flag + pre-switch provider (NOT secrets).
       managedByFleet: agent.managedByFleet,
@@ -580,6 +619,7 @@ export function restoreAgents(
       hostId: p.hostId,
       workspaceId: p.workspaceId,
       terminalId: p.terminalId,
+      fleetInstanceId: p.fleetInstanceId,
       launchSource: p.launchSource,
       requestedBy: p.requestedBy,
       jsonlFile: p.jsonlFile,
@@ -617,6 +657,17 @@ export function restoreAgents(
       providerProfileId: p.providerProfileId,
       providerDisplayName: p.providerDisplayName,
       modelId: p.modelId,
+      requestedProviderProfileId: p.requestedProviderProfileId,
+      resolvedProviderProfileId: p.resolvedProviderProfileId,
+      requestedModelId: p.requestedModelId,
+      resolvedModelId: p.resolvedModelId,
+      credential: p.credential,
+      refPresent: p.refPresent,
+      refResolution: p.refResolution,
+      authConfigured: p.authConfigured,
+      authInjected: p.authInjected,
+      authVariableNames: p.authVariableNames,
+      baseUrlHost: p.baseUrlHost,
       fleet: p.fleet,
       // Spec 005 — managed flag + pre-switch provider restored. Absent on
       // legacy / external agents.

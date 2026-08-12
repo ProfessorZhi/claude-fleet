@@ -25,6 +25,8 @@ export interface AgentState {
   workspaceId?: string;
   /** Fleet terminal identity; distinct from the human-readable terminal name. */
   terminalId?: string;
+  /** Stable Fleet control-plane instance id, distinct from the local numeric id. */
+  fleetInstanceId?: string;
   /** Safe lifecycle provenance such as fleet-ui, restart, or auto-spawn. */
   launchSource?: string;
   /** Safe requester identity; never a credential or transcript. */
@@ -119,6 +121,18 @@ export interface AgentState {
   providerDisplayName?: string;
   /** Model id passed as `claude --model <id>` at launch. Persisted. */
   modelId?: string;
+  /** Provider/model request and resolution evidence. Never a secret. */
+  requestedProviderProfileId?: string;
+  resolvedProviderProfileId?: string;
+  requestedModelId?: string;
+  resolvedModelId?: string;
+  credential?: 'present' | 'absent';
+  refPresent?: boolean;
+  refResolution?: 'success' | 'not_required';
+  authConfigured?: boolean;
+  authInjected?: boolean;
+  authVariableNames?: string[];
+  baseUrlHost?: string;
   /** Secret-free Coordinator/Worker correlation metadata. */
   fleet?: FleetIdentity;
 
@@ -158,6 +172,8 @@ export interface PersistedAgent {
   hostId?: string;
   workspaceId?: string;
   terminalId?: string;
+  /** Stable Fleet control-plane instance id, distinct from the local numeric id. */
+  fleetInstanceId?: string;
   launchSource?: string;
   requestedBy?: string;
   /** Workspace folder name (only set for multi-root workspaces) */
@@ -187,6 +203,17 @@ export interface PersistedAgent {
   providerDisplayName?: string;
   /** Model id passed as `claude --model <id>` at launch. */
   modelId?: string;
+  requestedProviderProfileId?: string;
+  resolvedProviderProfileId?: string;
+  requestedModelId?: string;
+  resolvedModelId?: string;
+  credential?: 'present' | 'absent';
+  refPresent?: boolean;
+  refResolution?: 'success' | 'not_required';
+  authConfigured?: boolean;
+  authInjected?: boolean;
+  authVariableNames?: string[];
+  baseUrlHost?: string;
   /** Secret-free Coordinator/Worker correlation metadata. */
   fleet?: FleetIdentity;
 

@@ -126,6 +126,27 @@ describe('Codex session scanner', () => {
     ).toEqual([]);
   });
 
+  it('keeps a session_meta-only session in starting until the first turn exists', () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'claude-fleet-codex-'));
+    const dir = path.join(home, '.codex', 'sessions', '2026', '08', '09');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      path.join(dir, 'rollout-first-input.jsonl'),
+      JSON.stringify({
+        type: 'session_meta',
+        payload: { session_id: 'first-input', cwd: 'F:/funny_project/Agent Fleet' },
+      }) + '\n',
+    );
+
+    const sessions = scanCodexSessions({
+      homeDir: home,
+      workspaceRoots: ['F:/funny_project/Agent Fleet'],
+      maxAgeMs: Number.POSITIVE_INFINITY,
+    });
+
+    expect(sessions[0]?.status).toBe('starting');
+  });
+
   it('does not resurrect a session whose projection was dismissed', () => {
     const home = mkdtempSync(path.join(os.tmpdir(), 'claude-fleet-codex-'));
     const dir = path.join(home, '.codex', 'sessions', '2026', '08', '09');

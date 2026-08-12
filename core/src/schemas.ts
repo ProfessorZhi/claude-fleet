@@ -30,6 +30,8 @@ export interface PersistedAgent {
   hostId?: string;
   workspaceId?: string;
   terminalId?: string;
+  /** Stable Fleet control-plane instance id, distinct from the local numeric id. */
+  fleetInstanceId?: string;
   launchSource?: string;
   requestedBy?: string;
   folderName?: string;
@@ -56,6 +58,17 @@ export interface PersistedAgent {
   providerDisplayName?: string;
   /** Model id passed as `claude --model <id>` at launch. */
   modelId?: string;
+  requestedProviderProfileId?: string;
+  resolvedProviderProfileId?: string;
+  requestedModelId?: string;
+  resolvedModelId?: string;
+  credential?: 'present' | 'absent';
+  refPresent?: boolean;
+  refResolution?: 'success' | 'not_required';
+  authConfigured?: boolean;
+  authInjected?: boolean;
+  authVariableNames?: string[];
+  baseUrlHost?: string;
 
   // -- Spec 005: Session Continuity / Managed flag --
   /** True when launched by Fleet (vs discovered externally). Persisted so
