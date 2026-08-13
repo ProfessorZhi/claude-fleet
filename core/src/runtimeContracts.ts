@@ -42,6 +42,10 @@ export interface RuntimeBootstrapSnapshot {
   state: RuntimeBootstrapState;
   reason?: RuntimeBootstrapReason;
   detail?: string;
+  /** Which runtime-owned evidence established readiness, when ready. */
+  readinessSource?: 'hook_session_start' | 'native_session' | 'transcript';
+  /** Confidence in the readiness evidence; never inferred from process liveness alone. */
+  confidence?: 'exact' | 'high' | 'medium' | 'low' | 'unknown';
   observedAt: number;
 }
 
@@ -314,10 +318,25 @@ export interface FleetRuntimeHost<Request extends RuntimeLaunchRequest = Runtime
   focus(instanceId: string): Promise<void>;
   /** Optional bounded task-delivery boundary; hosts without it fail closed. */
   sendTask?(instanceId: string, task: RuntimeTaskBrief): Promise<void>;
+  /** Secret-free evidence for diagnosing the host transport boundary. */
+  getDeliveryDiagnostics?(instanceId: string, workItemId?: string): RuntimeTaskDeliveryDiagnostics;
   /** Optional runtime-ready gate. Hosts without it retain the legacy direct-send path. */
   getBootstrapStatus?(instanceId: string): RuntimeBootstrapSnapshot | undefined;
   /** Emits readiness transitions so queued WorkItems can be flushed exactly once. */
   subscribeBootstrap?(listener: RuntimeBootstrapListener): () => void;
+}
+
+export interface RuntimeTaskDeliveryDiagnostics {
+  instanceId: string;
+  workItemId?: string;
+  sendTaskCallCount: number;
+  generationAtScheduling?: number;
+  generationAfterStartupGrace?: number;
+  renderedBriefByteLength?: number;
+  resolvedLocalAgentId?: string;
+  terminalRef: 'present' | 'absent' | 'unknown';
+  terminalExitStatus: 'running' | 'exited' | 'unknown';
+  addNewLine: 'yes' | 'no' | 'unknown';
 }
 
 export interface RuntimeAdapter {

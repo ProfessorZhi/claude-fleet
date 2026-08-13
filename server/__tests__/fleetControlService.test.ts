@@ -342,6 +342,162 @@ describe('FleetControlService', () => {
     expect(service.ledger.getSession('session-1')?.status).toBe('starting');
   });
 
+  it('HOST_PROJECTION_DURING_LAUNCH_IS_NOT_OVERWRITTEN', async () => {
+    let service!: FleetControlService;
+    service = makeService({
+      onLaunch: async (launchRequest) => {
+        service.observeRuntimeInstance({
+          ...launchRequest.instance,
+          sessionId: 'native-session',
+          status: 'idle',
+          bootstrap: { state: 'ready', observedAt: 11 },
+        });
+        return {
+          instanceId: launchRequest.instance.instanceId,
+          sessionId: 'native-session',
+          startedAt: 12,
+        };
+      },
+    });
+
+    const response = await service.submit(
+      request({
+        requestId: 'request-runtime-projection',
+        instanceId: 'codex-runtime-projection',
+        mode: 'approve',
+        launch: launch({ policy: { mode: 'approve' } }),
+      }),
+    );
+
+    expect(response.instance).toMatchObject({
+      status: 'idle',
+      bootstrap: { state: 'ready' },
+      sessionId: 'native-session',
+    });
+    await expect(service.getInstance('codex-runtime-projection')).resolves.toMatchObject({
+      status: 'idle',
+      bootstrap: { state: 'ready' },
+    });
+  });
+
+  it('preserves needs_user_interaction projected by the host during launch', async () => {
+    let service!: FleetControlService;
+    service = makeService({
+      onLaunch: async (launchRequest) => {
+        service.observeRuntimeInstance({
+          ...launchRequest.instance,
+          status: 'waiting',
+          bootstrap: {
+            state: 'needs_user_interaction',
+            reason: 'startup_interaction',
+            observedAt: 11,
+          },
+        });
+        return {
+          instanceId: launchRequest.instance.instanceId,
+          startedAt: 12,
+          sessionId: 'waiting-session',
+        };
+      },
+    });
+
+    const response = await service.submit(
+      request({
+        requestId: 'request-startup-interaction',
+        instanceId: 'codex-startup-interaction',
+        mode: 'approve',
+        launch: launch({ policy: { mode: 'approve' } }),
+      }),
+    );
+
+    expect(response.instance).toMatchObject({
+      status: 'waiting',
+      bootstrap: { state: 'needs_user_interaction' },
+    });
+  });
+
+  it('STOP_DURING_LAUNCH_CANNOT_BE_OVERWRITTEN', async () => {
+    let releaseLaunch!: () => void;
+    let markLaunchEntered!: () => void;
+    const launchEntered = new Promise<void>((resolve) => {
+      markLaunchEntered = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseLaunch = resolve;
+    });
+    let service!: FleetControlService;
+    service = makeService({
+      onLaunch: async (launchRequest) => {
+        service.observeRuntimeInstance({
+          ...launchRequest.instance,
+          bootstrap: { state: 'starting', observedAt: 11 },
+        });
+        markLaunchEntered();
+        await release;
+        return {
+          instanceId: launchRequest.instance.instanceId,
+          startedAt: 12,
+          sessionId: 'late-session',
+        };
+      },
+    });
+
+    const launchPromise = service.submit(
+      request({
+        requestId: 'request-stop-during-launch',
+        instanceId: 'codex-stop-during-launch',
+        mode: 'approve',
+        launch: launch({ policy: { mode: 'approve' } }),
+      }),
+    );
+    await launchEntered;
+
+    const stop = await service.submit({
+      requestId: 'request-stop-before-launch-resolves',
+      action: 'stop_instance',
+      mode: 'approve',
+      requestedBy: 'codex-primary',
+      instanceId: 'codex-stop-during-launch',
+      createdAt: 3,
+    });
+    expect(stop.decision).toBe('accepted');
+    expect(stop.instance).toMatchObject({ status: 'stopped', bootstrap: { state: 'stopped' } });
+
+    releaseLaunch();
+    const launchResponse = await launchPromise;
+    expect(launchResponse.instance).toMatchObject({
+      status: 'stopped',
+      bootstrap: { state: 'stopped' },
+    });
+    await expect(service.getInstance('codex-stop-during-launch')).resolves.toMatchObject({
+      status: 'stopped',
+      bootstrap: { state: 'stopped' },
+    });
+  });
+
+  it('markInstanceStopped converges bootstrap and status', async () => {
+    const service = makeService({
+      instances: [
+        {
+          instanceId: 'codex-removed',
+          runtime: 'codex-cli',
+          role: 'worker',
+          managedByFleet: true,
+          status: 'idle',
+          bootstrap: { state: 'ready', observedAt: 1 },
+          createdAt: 1,
+        },
+      ],
+    });
+
+    service.markInstanceStopped('codex-removed', 20);
+
+    await expect(service.getInstance('codex-removed')).resolves.toMatchObject({
+      status: 'stopped',
+      bootstrap: { state: 'stopped', observedAt: 20 },
+    });
+  });
+
   it('is idempotent by requestId', async () => {
     const calls: string[] = [];
     const service = makeService({ calls });

@@ -270,6 +270,7 @@ describe('Production Closure runtime process smoke', () => {
       stop: (id) => bridge.stop(id),
       focus: async (id) => bridge.focus(id),
       sendText: (id, text) => bridge.sendText(id, text),
+      startupGraceMs: 0,
     });
 
     const launched = await host.launch({

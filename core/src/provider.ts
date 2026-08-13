@@ -25,11 +25,19 @@ export type AgentEvent =
   | { kind: 'toolEnd'; toolId: string }
   | {
       kind: 'turnEnd';
+      /** Provider event identity when the hook transport supplies one. */
+      eventId?: string;
       /** True when the turn ended because the agent went idle waiting on the
        *  user (Claude's Notification(idle_prompt)) rather than simply finishing
        *  its response (Stop). Drives the "Waiting for input" vs "Done" label.
        *  Absent/false = the agent finished its turn (Done). */
       awaitingInput?: boolean;
+    }
+  | {
+      /** A user prompt was accepted by the provider hook transport. The prompt
+       * body is intentionally not part of the normalized contract. */
+      kind: 'promptSubmitted';
+      eventId?: string;
     }
   | {
       kind: 'subagentStart';

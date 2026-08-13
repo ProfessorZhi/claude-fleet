@@ -85,6 +85,7 @@ export class FleetControlService implements FleetControlApi {
   private readonly pendingDeliveries = new Map<string, RuntimeTaskDeliveryRequest>();
   private readonly deliveryStates = new Map<string, RuntimeTaskDeliveryResult>();
   private readonly flushingInstances = new Set<string>();
+  private readonly deliveryDiagnostics = new Map<string, Record<string, unknown>>();
 
   constructor(options: FleetControlServiceOptions = {}) {
     this.ledger = options.ledger ?? new FleetLedgerStore();
@@ -126,6 +127,17 @@ export class FleetControlService implements FleetControlApi {
         (instanceId === undefined || delivery.instanceId === instanceId),
     );
     const latest = matches[matches.length - 1];
+    return latest ? clone(latest) : undefined;
+  }
+
+  getDeliveryDiagnostics(
+    workItemId: string,
+    instanceId?: string,
+  ): Record<string, unknown> | undefined {
+    const matches = [...this.deliveryDiagnostics.entries()]
+      .filter(([key]) => key.endsWith(`:${workItemId}`))
+      .filter(([, value]) => !instanceId || value.instanceId === instanceId);
+    const latest = matches[matches.length - 1]?.[1];
     return latest ? clone(latest) : undefined;
   }
 
@@ -350,7 +362,12 @@ export class FleetControlService implements FleetControlApi {
     if (!previous) return;
     this.instances.set(
       instanceId,
-      clone({ ...previous, status: 'stopped', lastActivityAt: observedAt }),
+      clone({
+        ...previous,
+        status: 'stopped',
+        bootstrap: { state: 'stopped', observedAt },
+        lastActivityAt: observedAt,
+      }),
     );
     for (const session of this.ledger.listSessions(instanceId)) {
       this.ledger.upsertSession({ ...session, status: 'stopped', endedAt: observedAt });
@@ -900,6 +917,8 @@ export class FleetControlService implements FleetControlApi {
       },
     } satisfies RuntimeTaskDeliveryRequest;
     const bootstrap = registration.host.getBootstrapStatus?.(instance.instanceId);
+    const hostBootstrap = bootstrap?.state ?? 'unknown';
+    const controlBootstrap = instance.bootstrap?.state ?? 'unknown';
     if (bootstrap && bootstrap.state !== 'ready') {
       const blocked = bootstrap.state === 'stopped' || bootstrap.state === 'failed';
       const gated: RuntimeTaskDeliveryResult = {
@@ -914,6 +933,16 @@ export class FleetControlService implements FleetControlApi {
         ...(blocked ? { reason: 'host_failed' as const } : {}),
       };
       this.deliveryStates.set(deliveryKey, gated);
+      this.deliveryDiagnostics.set(deliveryKey, {
+        instanceId: instance.instanceId,
+        workItemId: workItem.workItemId,
+        controlBootstrapAtDeliver: controlBootstrap,
+        hostBootstrapAtDeliver: hostBootstrap,
+        pendingCountBefore: this.pendingDeliveries.size,
+        pendingCountAfter: this.pendingDeliveries.size + (blocked ? 0 : 1),
+        flushCalled: 0,
+        lifecycle: gated.lifecycle,
+      });
       if (!blocked) this.pendingDeliveries.set(deliveryKey, task);
       return {
         requestId: request.requestId,
@@ -929,6 +958,16 @@ export class FleetControlService implements FleetControlApi {
     }
     const delivery = await deliverRuntimeTask(registration.host, task);
     this.deliveryStates.set(deliveryKey, delivery);
+    this.deliveryDiagnostics.set(deliveryKey, {
+      ...(this.deliveryDiagnostics.get(deliveryKey) ?? {}),
+      instanceId: instance.instanceId,
+      workItemId: workItem.workItemId,
+      controlBootstrapAtDeliver: controlBootstrap,
+      hostBootstrapAtDeliver: hostBootstrap,
+      lifecycle: delivery.lifecycle,
+      pendingCountAfter: this.pendingDeliveries.size,
+      host: registration.host.getDeliveryDiagnostics?.(instance.instanceId, workItem.workItemId),
+    });
     if (delivery.status !== 'delivered') {
       return {
         requestId: request.requestId,
@@ -954,10 +993,19 @@ export class FleetControlService implements FleetControlApi {
       const registration = [...this.registrations.values()].find(
         (candidate) => candidate.host.getBootstrapStatus?.(instanceId)?.state === 'ready',
       );
-      if (!registration) return;
       const pending = [...this.pendingDeliveries.entries()].filter(
         ([, delivery]) => delivery.instanceId === instanceId,
       );
+      for (const [key] of pending) {
+        const previous = this.deliveryDiagnostics.get(key) ?? { instanceId };
+        this.deliveryDiagnostics.set(key, {
+          ...previous,
+          flushCalled: Number(previous.flushCalled ?? 0) + 1,
+          registrationFound: Boolean(registration),
+          pendingCountBeforeFlush: pending.length,
+        });
+      }
+      if (!registration) return;
       for (const [key, request] of pending) {
         const current = this.deliveryStates.get(key);
         if (!current || current.lifecycle !== 'queued_for_runtime') {
@@ -965,9 +1013,21 @@ export class FleetControlService implements FleetControlApi {
           continue;
         }
         this.deliveryStates.set(key, { ...current, lifecycle: 'delivering' });
+        this.deliveryDiagnostics.set(key, {
+          ...(this.deliveryDiagnostics.get(key) ?? {}),
+          lifecycle: 'delivering',
+          deliveringObserved: true,
+        });
         const delivery = await deliverRuntimeTask(registration.host, request);
         this.deliveryStates.set(key, delivery);
         this.pendingDeliveries.delete(key);
+        this.deliveryDiagnostics.set(key, {
+          ...(this.deliveryDiagnostics.get(key) ?? {}),
+          lifecycle: delivery.lifecycle,
+          pendingCountAfterFlush: this.pendingDeliveries.size,
+          deliverRuntimeTaskCalled: true,
+          host: registration.host.getDeliveryDiagnostics?.(instanceId, request.task.workItemId),
+        });
       }
     } finally {
       this.flushingInstances.delete(instanceId);
@@ -1151,6 +1211,12 @@ export class FleetControlService implements FleetControlApi {
       requestedBy: request.requestedBy,
     };
 
+    // Publish the control-plane starting snapshot before entering the host so
+    // stop/focus can address a launch that is still bootstrapping. Host
+    // callbacks may replace this with a newer runtime projection while launch
+    // is in flight.
+    this.instances.set(instanceId, clone(instance));
+
     try {
       const result = await registration.host.launch(launchRequest);
       if (result.instanceId !== instanceId) {
@@ -1161,31 +1227,35 @@ export class FleetControlService implements FleetControlApi {
         };
       }
 
+      // Host/AgentState projections are newer than the launch request. Merge
+      // launch metadata into the latest snapshot instead of re-installing the
+      // original starting state (which used to regress ready/stopped agents).
+      const latest = this.instances.get(instanceId) ?? instance;
       const started = {
-        ...instance,
-        sessionId: result.sessionId ?? instance.sessionId,
-        terminalId: result.terminalId ?? instance.terminalId,
-        terminalName: result.terminalName ?? instance.terminalName,
-        hostId: result.hostId ?? instance.hostId,
-        workspaceId: result.workspaceId ?? instance.workspaceId,
-        launchSource: result.launchSource ?? instance.launchSource,
-        requestedBy: result.requestedBy ?? instance.requestedBy,
-        providerProfileId: result.resolvedProviderProfileId ?? instance.providerProfileId,
-        modelId: result.resolvedModelId ?? instance.modelId,
+        ...latest,
+        sessionId: result.sessionId ?? latest.sessionId,
+        terminalId: result.terminalId ?? latest.terminalId,
+        terminalName: result.terminalName ?? latest.terminalName,
+        hostId: result.hostId ?? latest.hostId,
+        workspaceId: result.workspaceId ?? latest.workspaceId,
+        launchSource: result.launchSource ?? latest.launchSource,
+        requestedBy: result.requestedBy ?? latest.requestedBy,
+        providerProfileId: result.resolvedProviderProfileId ?? latest.providerProfileId,
+        modelId: result.resolvedModelId ?? latest.modelId,
         requestedProviderProfileId:
-          result.requestedProviderProfileId ?? instance.requestedProviderProfileId,
+          result.requestedProviderProfileId ?? latest.requestedProviderProfileId,
         resolvedProviderProfileId:
-          result.resolvedProviderProfileId ?? instance.resolvedProviderProfileId,
-        requestedModelId: result.requestedModelId ?? instance.requestedModelId,
-        resolvedModelId: result.resolvedModelId ?? instance.resolvedModelId,
-        credential: result.credential ?? instance.credential,
-        refPresent: result.refPresent ?? instance.refPresent,
-        refResolution: result.refResolution ?? instance.refResolution,
-        authConfigured: result.authConfigured ?? instance.authConfigured,
-        authInjected: result.authInjected ?? instance.authInjected,
-        authVariableNames: result.authVariableNames ?? instance.authVariableNames,
-        baseUrlHost: result.baseUrlHost ?? instance.baseUrlHost,
-        lastActivityAt: result.startedAt,
+          result.resolvedProviderProfileId ?? latest.resolvedProviderProfileId,
+        requestedModelId: result.requestedModelId ?? latest.requestedModelId,
+        resolvedModelId: result.resolvedModelId ?? latest.resolvedModelId,
+        credential: result.credential ?? latest.credential,
+        refPresent: result.refPresent ?? latest.refPresent,
+        refResolution: result.refResolution ?? latest.refResolution,
+        authConfigured: result.authConfigured ?? latest.authConfigured,
+        authInjected: result.authInjected ?? latest.authInjected,
+        authVariableNames: result.authVariableNames ?? latest.authVariableNames,
+        baseUrlHost: result.baseUrlHost ?? latest.baseUrlHost,
+        lastActivityAt: Math.max(latest.lastActivityAt ?? createdAt, result.startedAt),
       } satisfies FleetInstance;
       this.instances.set(instanceId, started);
       this.ledger.recordLaunch({
@@ -1225,10 +1295,13 @@ export class FleetControlService implements FleetControlApi {
           terminalName: started.terminalName,
           providerProfileId: started.providerProfileId,
           modelId: started.modelId,
-          status: 'starting',
+          status: sessionStatusForFleetStatus(started.status),
           launchSource: started.launchSource,
           requestedBy: started.requestedBy,
           startedAt: result.startedAt,
+          ...(started.status === 'stopped' || started.status === 'error'
+            ? { endedAt: result.startedAt }
+            : {}),
         });
       }
       return {
@@ -1355,7 +1428,13 @@ export class FleetControlService implements FleetControlApi {
     if (response.decision === 'accepted' && request.instanceId) {
       const previous = this.instances.get(request.instanceId);
       if (previous) {
-        const stopped = { ...previous, status: 'stopped' as const, lastActivityAt: this.now() };
+        const stoppedAt = this.now();
+        const stopped = {
+          ...previous,
+          status: 'stopped' as const,
+          bootstrap: { state: 'stopped' as const, observedAt: stoppedAt },
+          lastActivityAt: stoppedAt,
+        };
         this.instances.set(request.instanceId, stopped);
         if (stopped.sessionId) {
           const session = this.ledger.getSession(stopped.sessionId);
@@ -1447,8 +1526,15 @@ export class FleetControlService implements FleetControlApi {
       const starting: FleetInstance = {
         ...previous,
         status: 'starting',
+        bootstrap: {
+          state: 'starting',
+          reason: 'startup_interaction',
+          detail: 'Waiting for runtime startup evidence.',
+          observedAt: this.now(),
+        },
         lastActivityAt: this.now(),
       };
+      this.instances.set(previous.instanceId, clone(starting));
       const result = await registration.host.launch({
         instance: starting,
         cwd,
@@ -1470,16 +1556,20 @@ export class FleetControlService implements FleetControlApi {
         };
       }
 
+      const latest = this.instances.get(previous.instanceId) ?? starting;
       const resumed: FleetInstance = {
-        ...starting,
-        sessionId: result.sessionId ?? previous.sessionId,
-        terminalId: result.terminalId ?? previous.terminalId,
-        terminalName: result.terminalName ?? previous.terminalName,
-        hostId: result.hostId ?? previous.hostId,
-        workspaceId: result.workspaceId ?? previous.workspaceId,
-        launchSource: result.launchSource ?? 'fleet-control-api',
+        ...latest,
+        sessionId: result.sessionId ?? latest.sessionId ?? previous.sessionId,
+        terminalId: result.terminalId ?? latest.terminalId ?? previous.terminalId,
+        terminalName: result.terminalName ?? latest.terminalName ?? previous.terminalName,
+        hostId: result.hostId ?? latest.hostId ?? previous.hostId,
+        workspaceId: result.workspaceId ?? latest.workspaceId ?? previous.workspaceId,
+        launchSource: result.launchSource ?? latest.launchSource ?? 'fleet-control-api',
         requestedBy: result.requestedBy ?? request.requestedBy,
-        lastActivityAt: result.startedAt,
+        lastActivityAt: Math.max(
+          latest.lastActivityAt ?? starting.lastActivityAt ?? 0,
+          result.startedAt,
+        ),
       };
       this.instances.set(previous.instanceId, resumed);
       this.ledger.recordLaunch({
@@ -1507,8 +1597,10 @@ export class FleetControlService implements FleetControlApi {
         if (session) {
           this.ledger.upsertSession({
             ...session,
-            status: 'starting',
-            endedAt: undefined,
+            status: sessionStatusForFleetStatus(resumed.status),
+            ...(resumed.status === 'stopped'
+              ? { endedAt: session.endedAt ?? result.startedAt }
+              : { endedAt: undefined }),
             startedAt: result.startedAt,
             terminalId: resumed.terminalId,
             terminalName: resumed.terminalName,

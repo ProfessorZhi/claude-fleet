@@ -14,6 +14,7 @@ import { AgentStateStore } from '../../server/src/agentStateStore.js';
 import { agentStateToUserStatus } from '../../server/src/agentStatus.js';
 import { resolveClaudeCli } from '../../server/src/cliResolver.js';
 import { DEFAULT_MAX_CONTEXT_TOKENS, JSONL_POLL_INTERVAL_MS } from '../../server/src/constants.js';
+import { isPersistedExternalSessionFresh } from '../../server/src/externalSessionPolicy.js';
 import {
   ensureProjectScan,
   readNewLines,
@@ -205,6 +206,7 @@ export async function launchNewTerminal(
     // Fleet derive the same JSONL location.
     env: { ...resolved.env, CLAUDE_CONFIG_DIR: getClaudeConfigDir() },
   });
+  const runtimeConfigDir = getClaudeConfigDir();
   // When suppressShow is set (auto-spawn + autoShowPanel), keep the panel view
   // on Pixel Agents instead of switching to Terminal. Claude Code still runs
   // via sendText below; user can click the character to focus the terminal via
@@ -291,6 +293,9 @@ export async function launchNewTerminal(
     seenUnknownRecordTypes: new Set(),
     folderName,
     hookDelivered: false,
+    sessionStartReceived: false,
+    nativeSessionReady: false,
+    runtimeConfigDir,
     contextTokens: 0,
     maxContextTokens: DEFAULT_MAX_CONTEXT_TOKENS,
     // Spec 002 — Provider / Model metadata (non-secret).
@@ -595,10 +600,16 @@ export function restoreAgents(
     const isExternal = p.isExternal ?? false;
 
     if (isExternal) {
-      // External agents — restore if JSONL file still exists on disk
-      try {
-        if (!fs.existsSync(p.jsonlFile)) continue;
-      } catch {
+      // External agents are projections of sessions owned by another terminal
+      // or VS Code window. Do not resurrect a dead session merely because its
+      // transcript survived a reboot; this must match the global discovery
+      // freshness policy below. A live external session will touch its JSONL
+      // as it produces activity and will be rediscovered if it becomes active.
+      if (!isPersistedExternalSessionFresh(p.jsonlFile)) {
+        console.log(
+          `[Claude Fleet] Terminal: skipping stale external agent ${p.id} ` +
+            `(transcript is no longer active)`,
+        );
         continue;
       }
     } else {

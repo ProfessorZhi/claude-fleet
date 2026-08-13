@@ -39,6 +39,8 @@ export interface AgentStatusInput {
   error?: boolean;
   /** Explicit stopped signal. */
   stopped?: boolean;
+  /** Explicit runtime-readiness evidence, independent of user-facing status. */
+  runtimeReady?: boolean;
 }
 
 /**
@@ -51,8 +53,9 @@ export interface AgentStatusInput {
  * 3. active tools prove the agent is doing something right now.
  * 4. any transcript history (even if quiet) means the agent started
  *    successfully → idle.
- * 5. hooks alive but no transcript yet → still starting.
- * 6. anything else (including all-empty input) → starting.
+ * 5. explicit runtime readiness with no active work → idle.
+ * 6. legacy hook-only input without explicit readiness projection → starting.
+ * 7. anything else (including all-empty input) → starting.
  */
 export function normalizeAgentStatus(input: AgentStatusInput): UserFacingStatus {
   if (input.stopped) return 'stopped';
@@ -60,6 +63,7 @@ export function normalizeAgentStatus(input: AgentStatusInput): UserFacingStatus 
   if (input.isWaiting || input.permissionSent || input.waitingForInput) return 'waiting';
   if (input.activeToolCount !== undefined && input.activeToolCount > 0) return 'working';
   if (input.linesProcessed !== undefined && input.linesProcessed > 0) return 'idle';
+  if (input.runtimeReady) return 'idle';
   if (input.hookDelivered && !input.hooksOnly) return 'starting';
   return 'starting';
 }
@@ -86,6 +90,10 @@ export function agentStateToUserStatus(agent: AgentState): UserFacingStatus {
     hooksOnly: agent.hooksOnly,
     linesProcessed: agent.linesProcessed,
     activeToolCount: countActiveTools(agent),
+    runtimeReady:
+      agent.sessionStartReceived === true ||
+      agent.nativeSessionReady === true ||
+      agent.linesProcessed > 0,
   });
 }
 

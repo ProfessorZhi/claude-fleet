@@ -75,4 +75,31 @@ describe('AgentRuntime -- D5 foreign-session gate', () => {
     fireSessionStartThenStop('d5-tracked-dir', dir);
     expect(store.size).toBe(1);
   });
+
+  it('KNOWN_SESSIONSTART_PROMOTES_RUNTIME_READY', () => {
+    store = new AgentStateStore();
+    runtime = new AgentRuntime(store, claudeProvider);
+    const agent = {
+      id: 1,
+      sessionId: 'known-ready-session',
+      projectDir: '/known-ready',
+      hookDelivered: false,
+      isExternal: false,
+    } as Parameters<AgentStateStore['set']>[1];
+    store.set(1, agent);
+    runtime.registerAgent('known-ready-session', 1);
+
+    const stateChanges: number[] = [];
+    runtime.setLifecycleCallbacks({
+      onAgentStateChanged: (agentId) => stateChanges.push(agentId),
+    });
+    runtime.handleHookEvent('claude', {
+      hook_event_name: 'SessionStart',
+      session_id: 'known-ready-session',
+      source: 'startup',
+    });
+
+    expect(store.get(1)?.hookDelivered).toBe(true);
+    expect(stateChanges).toEqual([1]);
+  });
 });

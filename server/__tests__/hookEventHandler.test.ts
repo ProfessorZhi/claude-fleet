@@ -157,6 +157,44 @@ describe('HookEventHandler', () => {
     expect(msg?.awaitingInput).toBe(true);
   });
 
+  it('routes UserPromptSubmit as a prompt ACK without exposing prompt content', () => {
+    const agent = createTestAgent({ id: 1, sessionId: 'sess-1' });
+    agents.set(1, agent);
+    handler.registerAgent('sess-1', 1);
+    const onPromptSubmitted = vi.fn();
+    handler.setLifecycleCallbacks({ onPromptSubmitted });
+
+    handler.handleEvent('claude', {
+      hook_event_name: 'UserPromptSubmit',
+      session_id: 'sess-1',
+      prompt: 'secret prompt',
+      event_id: 'prompt-1',
+    });
+
+    expect(onPromptSubmitted).toHaveBeenCalledWith(1, 'sess-1', 'prompt-1');
+    expect(mockWebview.messages).not.toContainEqual(
+      expect.objectContaining({ prompt: expect.anything() }),
+    );
+    expect(agent.isWaiting).toBe(false);
+  });
+
+  it('routes Stop separately from the waiting UI transition', () => {
+    const agent = createTestAgent({ id: 1, sessionId: 'sess-1' });
+    agents.set(1, agent);
+    handler.registerAgent('sess-1', 1);
+    const onTurnEnd = vi.fn();
+    handler.setLifecycleCallbacks({ onTurnEnd });
+
+    handler.handleEvent('claude', {
+      hook_event_name: 'Stop',
+      session_id: 'sess-1',
+      event_id: 'stop-1',
+    });
+
+    expect(onTurnEnd).toHaveBeenCalledWith(1, 'sess-1', false, 'stop-1');
+    expect(agent.isWaiting).toBe(true);
+  });
+
   // ── Stop ────────────────────────────────────────────────────
 
   it('Stop marks agent waiting without awaitingInput (Done)', () => {
@@ -319,6 +357,9 @@ describe('HookEventHandler', () => {
     agents.set(1, agent);
     handler.registerAgent('sess-1', 1);
 
+    const onSessionReady = vi.fn();
+    handler.setLifecycleCallbacks({ onSessionReady });
+
     handler.handleEvent('claude', {
       hook_event_name: 'SessionStart',
       session_id: 'sess-1',
@@ -326,6 +367,8 @@ describe('HookEventHandler', () => {
     });
 
     expect(agent.hookDelivered).toBe(true);
+    expect(agent.sessionStartReceived).toBe(true);
+    expect(onSessionReady).toHaveBeenCalledWith(1);
   });
 
   it('SessionStart auto-discovers agent by sessionId', () => {
@@ -343,6 +386,7 @@ describe('HookEventHandler', () => {
     });
 
     expect(agent.hookDelivered).toBe(true);
+    expect(agent.sessionStartReceived).toBe(true);
   });
 
   it('SessionStart(source=clear) reassigns agent with pendingClear', () => {

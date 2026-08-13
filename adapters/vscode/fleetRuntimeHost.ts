@@ -6,6 +6,7 @@ import type {
   RuntimeLaunchRequest,
   RuntimeLaunchResult,
   RuntimeTaskBrief,
+  RuntimeTaskDeliveryDiagnostics,
 } from '../../core/src/runtimeContracts.js';
 import { renderRuntimeTaskBrief } from '../../server/src/runtimeTaskDelivery.js';
 import type { LaunchNewTerminalOptions } from './agentManager.js';
@@ -21,6 +22,12 @@ export interface VscodeFleetRuntimeHostDependencies {
   focus(instanceId: string): Promise<void>;
   /** Injected terminal boundary; the host supplies only a validated brief. */
   sendText?(instanceId: string, text: string): void | Promise<void>;
+  getSendTextDiagnostics?(
+    instanceId: string,
+  ): Pick<
+    RuntimeTaskDeliveryDiagnostics,
+    'resolvedLocalAgentId' | 'terminalRef' | 'terminalExitStatus' | 'addNewLine'
+  >;
   /**
    * Claude Code's interactive prompt is not ready at the same moment that
    * createTerminal() returns. Keep this injectable so tests can model the
@@ -29,7 +36,11 @@ export interface VscodeFleetRuntimeHostDependencies {
   startupGraceMs?: number;
 }
 
-const DEFAULT_STARTUP_GRACE_MS = 750;
+// Claude's native session record can report an idle process before the
+// interactive prompt has finished attaching to the terminal stdin. Keep the
+// first Fleet WorkItem behind a bounded settle window so the initial prompt is
+// not lost during that hand-off.
+const DEFAULT_STARTUP_GRACE_MS = 5_000;
 
 function waitForStartupGrace(delayMs: number): Promise<void> {
   if (delayMs <= 0) return Promise.resolve();
@@ -54,6 +65,7 @@ export class VscodeFleetRuntimeHost implements FleetRuntimeHost<VscodeRuntimeLau
   private readonly bootstrapByInstance = new Map<string, RuntimeBootstrapSnapshot>();
   private readonly bootstrapListeners = new Set<RuntimeBootstrapListener>();
   private readonly startupGraceMs: number;
+  private readonly deliveryDiagnostics = new Map<string, RuntimeTaskDeliveryDiagnostics>();
 
   constructor(private readonly dependencies: VscodeFleetRuntimeHostDependencies) {
     this.startupGraceMs = Math.max(0, dependencies.startupGraceMs ?? DEFAULT_STARTUP_GRACE_MS);
@@ -68,15 +80,31 @@ export class VscodeFleetRuntimeHost implements FleetRuntimeHost<VscodeRuntimeLau
           }
 
           const generation = this.instanceGenerations.get(instanceId) ?? 0;
+          const diagnostics: RuntimeTaskDeliveryDiagnostics = {
+            instanceId,
+            workItemId: task.workItemId,
+            sendTaskCallCount: 1,
+            generationAtScheduling: generation,
+            terminalRef: 'unknown',
+            terminalExitStatus: 'unknown',
+            addNewLine: 'unknown',
+          };
+          this.deliveryDiagnostics.set(`${instanceId}:${task.workItemId}`, diagnostics);
           const delivery = (async () => {
             // A terminal can exist while Claude Code is still starting its
             // interactive prompt. Queue the bounded brief instead of racing
             // the shell and losing the first message.
             await waitForStartupGrace(this.startupGraceMs);
             if ((this.instanceGenerations.get(instanceId) ?? 0) !== generation) {
+              diagnostics.generationAfterStartupGrace =
+                this.instanceGenerations.get(instanceId) ?? 0;
               throw new Error('Runtime task delivery was cancelled by instance lifecycle.');
             }
-            await dependencies.sendText!(instanceId, renderRuntimeTaskBrief(task));
+            diagnostics.generationAfterStartupGrace = this.instanceGenerations.get(instanceId) ?? 0;
+            const rendered = renderRuntimeTaskBrief(task);
+            diagnostics.renderedBriefByteLength = Buffer.byteLength(rendered, 'utf8');
+            Object.assign(diagnostics, dependencies.getSendTextDiagnostics?.(instanceId));
+            await dependencies.sendText!(instanceId, rendered);
             this.deliveredTaskKeys.add(key);
           })();
 
@@ -88,6 +116,23 @@ export class VscodeFleetRuntimeHost implements FleetRuntimeHost<VscodeRuntimeLau
           await delivery;
         }
       : undefined;
+  }
+
+  getDeliveryDiagnostics(instanceId: string, workItemId?: string): RuntimeTaskDeliveryDiagnostics {
+    const matching = [...this.deliveryDiagnostics.values()].filter(
+      (item) => item.instanceId === instanceId && (!workItemId || item.workItemId === workItemId),
+    );
+    const latest = matching[matching.length - 1];
+    return latest
+      ? { ...latest }
+      : {
+          instanceId,
+          ...(workItemId ? { workItemId } : {}),
+          sendTaskCallCount: 0,
+          terminalRef: 'unknown',
+          terminalExitStatus: 'unknown',
+          addNewLine: 'unknown',
+        };
   }
 
   async launch(request: VscodeRuntimeLaunchRequest): Promise<RuntimeLaunchResult> {

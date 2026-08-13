@@ -55,6 +55,12 @@ export interface AgentState {
   seenUnknownRecordTypes: Set<string>;
   /** Whether a hook event has been delivered for this agent (suppresses heuristic timers) */
   hookDelivered: boolean;
+  /** True only when the runtime emitted a SessionStart for this exact session. */
+  sessionStartReceived?: boolean;
+  /** True when Claude's native session metadata proves this exact session is ready. */
+  nativeSessionReady?: boolean;
+  /** Effective CLAUDE_CONFIG_DIR injected into this managed terminal. */
+  runtimeConfigDir?: string;
   /** True when agent has no transcript file (provider doesn't use JSONL). All state from hooks. */
   hooksOnly?: boolean;
   /** Provider that created this agent (defaults to 'claude') */

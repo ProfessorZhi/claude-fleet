@@ -55,6 +55,17 @@ export interface RuntimeLifecycleCallbacks {
   onAgentRemoved?: (agentId: number, agent: AgentState) => void;
   /** Called when a teammate is removed. */
   onTeammateRemoved?: (teammateId: number, agent: AgentState, source: string) => void;
+  /** Called when a managed session receives readiness evidence from a hook. */
+  onAgentStateChanged?: (agentId: number, agent: AgentState) => void;
+  /** Claude hook prompt ACK. The prompt body is never passed to adapters. */
+  onPromptSubmitted?: (agentId: number, sessionId: string, eventId?: string) => void;
+  /** Provider turn end. This is separate from the UI waiting transition. */
+  onTurnEnd?: (
+    agentId: number,
+    sessionId: string,
+    awaitingInput: boolean,
+    eventId?: string,
+  ) => void;
 }
 
 export class AgentRuntime {
@@ -154,6 +165,16 @@ export class AgentRuntime {
 
     // Wire hook lifecycle callbacks to shared agent operations
     this.hookEventHandler.setLifecycleCallbacks({
+      onSessionReady: (agentId) => {
+        const agent = this.store.get(agentId);
+        if (agent) this.lifecycleCallbacks.onAgentStateChanged?.(agentId, agent);
+      },
+      onPromptSubmitted: (agentId, sessionId, eventId) => {
+        this.lifecycleCallbacks.onPromptSubmitted?.(agentId, sessionId, eventId);
+      },
+      onTurnEnd: (agentId, sessionId, awaitingInput, eventId) => {
+        this.lifecycleCallbacks.onTurnEnd?.(agentId, sessionId, awaitingInput, eventId);
+      },
       onExternalSessionDetected: (sessionId, transcriptPath, cwd) => {
         const projectDir = transcriptPath ? path.dirname(transcriptPath) : cwd;
         // Teammate session of a tracked lead? Attach it as a teammate character

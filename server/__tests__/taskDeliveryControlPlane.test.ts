@@ -322,6 +322,10 @@ describe('ControlPlane task delivery', () => {
       status: 'cancelled',
       lifecycle: 'cancelled',
     });
+    await expect(service.getInstance('delivery-worker-2')).resolves.toMatchObject({
+      status: 'stopped',
+      bootstrap: { state: 'stopped' },
+    });
     expect(host.sent).toEqual(['gated-work']);
   });
 });

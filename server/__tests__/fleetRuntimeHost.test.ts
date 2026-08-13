@@ -155,6 +155,38 @@ describe('VscodeFleetRuntimeHost', () => {
     expect(sendText.mock.calls[0]?.[1]).not.toContain('rawPrompt');
   });
 
+  it('records one transport call, stable generation, and terminal boundary evidence', async () => {
+    const sendText = vi.fn(async () => undefined);
+    const host = new VscodeFleetRuntimeHost({
+      launch: vi.fn(),
+      focus: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      sendText,
+      getSendTextDiagnostics: () => ({
+        resolvedLocalAgentId: 'agent-7',
+        terminalRef: 'present',
+        terminalExitStatus: 'running',
+        addNewLine: 'yes',
+      }),
+      startupGraceMs: 0,
+    });
+
+    await host.sendTask?.('claude-delivery-probe-1', task);
+
+    expect(host.getDeliveryDiagnostics('claude-delivery-probe-1', 'work-1')).toMatchObject({
+      instanceId: 'claude-delivery-probe-1',
+      workItemId: 'work-1',
+      sendTaskCallCount: 1,
+      generationAtScheduling: 0,
+      generationAfterStartupGrace: 0,
+      resolvedLocalAgentId: 'agent-7',
+      terminalRef: 'present',
+      terminalExitStatus: 'running',
+      addNewLine: 'yes',
+    });
+    expect(sendText).toHaveBeenCalledOnce();
+  });
+
   it('queues startup delivery and deduplicates concurrent retries for one WorkItem', async () => {
     const sendText = vi.fn(async () => undefined);
     const host = new VscodeFleetRuntimeHost({

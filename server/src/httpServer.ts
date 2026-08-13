@@ -201,6 +201,26 @@ function registerControlRoutes(app: FastifyInstance, options: HttpServerOptions)
     },
   );
 
+  app.get<{ Params: { workItemId: string }; Querystring: { instanceId?: string } }>(
+    '/api/control/delivery-diagnostics/:workItemId',
+    { preHandler: bearerAuth(options.token) },
+    async (request, reply) => {
+      try {
+        const diagnostics = options.controlApi!.getDeliveryDiagnostics?.(
+          request.params.workItemId,
+          request.query.instanceId,
+        );
+        if (!diagnostics) {
+          reply.code(404).send({ error: 'delivery_diagnostics_not_found' });
+          return;
+        }
+        reply.send(sanitizeJsonValue(diagnostics, [options.token]));
+      } catch {
+        reply.code(500).send({ error: 'delivery_diagnostics_unavailable' });
+      }
+    },
+  );
+
   app.get<{ Params: { instanceId: string } }>(
     '/api/control/instances/:instanceId',
     { preHandler: bearerAuth(options.token) },

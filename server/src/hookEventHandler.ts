@@ -31,6 +31,8 @@ export interface HookEvent {
  */
 /** Callback for session lifecycle events detected via hooks. */
 interface SessionLifecycleCallbacks {
+  /** Called when a managed session has produced SessionStart readiness evidence. */
+  onSessionReady?: (agentId: number) => void;
   /** Called when an external session is detected (unknown session_id in SessionStart).
    *  transcriptPath is undefined for providers without transcripts (OpenCode, Copilot). */
   onExternalSessionDetected?: (
@@ -48,6 +50,15 @@ interface SessionLifecycleCallbacks {
   onSessionResume?: (transcriptPath: string) => void;
   /** Called when a session ends (exit/logout). */
   onSessionEnd?: (agentId: number, reason: string) => void;
+  /** Called after a known session submits a prompt. Prompt content is never exposed. */
+  onPromptSubmitted?: (agentId: number, sessionId: string, eventId?: string) => void;
+  /** Called when a known session emits a provider turn-end event. */
+  onTurnEnd?: (
+    agentId: number,
+    sessionId: string,
+    awaitingInput: boolean,
+    eventId?: string,
+  ) => void;
   /** Called when an Agent Teams teammate is detected via SubagentStart hook.
    *  Triggers scanning of the session's subagents/ directory for the teammate's JSONL. */
   onTeammateDetected?: (parentAgentId: number, sessionId: string, agentType: string) => void;
@@ -182,6 +193,8 @@ export class HookEventHandler {
         const agent = this.agents.get(existingAgentId);
         if (agent) {
           agent.hookDelivered = true;
+          agent.sessionStartReceived = true;
+          this.lifecycleCallbacks.onSessionReady?.(existingAgentId);
         }
         if (debug)
           console.log(
@@ -194,6 +207,8 @@ export class HookEventHandler {
         if (agent.sessionId === event.session_id) {
           this.registerAgent(agent.sessionId, id);
           agent.hookDelivered = true;
+          agent.sessionStartReceived = true;
+          this.lifecycleCallbacks.onSessionReady?.(id);
           if (debug)
             console.log(
               `[Claude Fleet] Hook: Agent ${id} - SessionStart(source=${source}) auto-discovered`,
@@ -222,6 +237,9 @@ export class HookEventHandler {
               this.sessionRouter.unregister(agent.sessionId);
               this.registerAgent(event.session_id, id);
               this.lifecycleCallbacks.onSessionClear?.(id, event.session_id, transcriptPath);
+              agent.hookDelivered = true;
+              agent.sessionStartReceived = true;
+              this.lifecycleCallbacks.onSessionReady?.(id);
               return;
             }
           }
@@ -342,11 +360,19 @@ export class HookEventHandler {
         // Handles BOTH the PermissionRequest hook AND the Notification(permission_prompt)
         // hook -- normalizeHookEvent collapses them into one event kind.
         return this.handlePermissionRequest(agent, agentId);
+      case 'promptSubmitted':
+        return this.handlePromptSubmitted(agent, agentId, event.session_id, normEvent.eventId);
       case 'turnEnd':
         // Handles Stop AND Notification(idle_prompt) -- both normalize to turnEnd.
         // awaitingInput discriminates them: idle_prompt sets it (-> "Waiting for
         // input"), Stop leaves it absent (-> "Done").
-        return this.handleStop(agent, agentId, normEvent.awaitingInput === true);
+        return this.handleStop(
+          agent,
+          agentId,
+          normEvent.awaitingInput === true,
+          event.session_id,
+          normEvent.eventId,
+        );
       case 'subagentTurnEnd':
         // Handles TeammateIdle AND TaskCompleted -- both normalize here. The normalized
         // `reason` field discriminates; the team-provider's extractTeammateNameFromEvent(raw)
@@ -635,9 +661,31 @@ export class HookEventHandler {
     }
   }
 
+  /** A prompt hook is runtime activity, not proof that a WorkItem was delivered. */
+  private handlePromptSubmitted(
+    agent: AgentState,
+    agentId: number,
+    sessionId: string,
+    eventId?: string,
+  ): void {
+    cancelWaitingTimer(agentId, this.waitingTimers);
+    cancelPermissionTimer(agentId, this.permissionTimers);
+    agent.isWaiting = false;
+    agent.permissionSent = false;
+    this.agents.broadcast({ type: 'agentStatus', id: agentId, status: 'working' });
+    this.lifecycleCallbacks.onPromptSubmitted?.(agentId, sessionId, eventId);
+  }
+
   /** Handle Stop: Claude finished responding, mark agent as waiting. */
-  private handleStop(agent: AgentState, agentId: number, awaitingInput = false): void {
+  private handleStop(
+    agent: AgentState,
+    agentId: number,
+    awaitingInput = false,
+    sessionId?: string,
+    eventId?: string,
+  ): void {
     this.markAgentWaiting(agent, agentId, awaitingInput);
+    if (sessionId) this.lifecycleCallbacks.onTurnEnd?.(agentId, sessionId, awaitingInput, eventId);
   }
 
   /**

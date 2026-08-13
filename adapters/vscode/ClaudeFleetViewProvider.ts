@@ -68,6 +68,8 @@ import {
   isCodexDesktopSessionFile,
   scanCodexSessions,
 } from '../../server/src/providers/codex/codexSessionScanner.js';
+import { getClaudeConfigDir } from '../../server/src/providers/hook/claude/claudeConfigPath.js';
+import { findReadyClaudeNativeSession } from '../../server/src/providers/hook/claude/claudeNativeSession.js';
 import { claudeProvider, copyHookScript } from '../../server/src/providers/index.js';
 import { ClaudeFleetServer } from '../../server/src/server.js';
 import type { AgentState } from '../../server/src/types.js';
@@ -361,6 +363,46 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
 
     // Create shared runtime (owns timer Maps, scanners, hook handler, dismissal tracker)
     this.runtime = new AgentRuntime(this.store, claudeProvider);
+    this.runtime.setLifecycleCallbacks({
+      onAgentStateChanged: (id, agent) => {
+        // SessionStart is runtime evidence, not a UI-only event. Reuse the
+        // existing store broadcast path so the ControlService projection,
+        // bootstrap host, telemetry, and webview converge immediately.
+        this.store.broadcast({
+          type: 'agentStatus',
+          id,
+          status: agentStateToUserStatus(agent),
+        });
+      },
+      onPromptSubmitted: (id, sessionId) => {
+        const agent = this.store.get(id);
+        if (!agent || agent.runtime !== 'claude-code') return;
+        void this.resultCorrelator
+          .acceptPrompt(this.controlInstanceId(agent), sessionId)
+          .catch((error) => console.warn('[Claude Fleet] Prompt ACK unavailable:', error));
+      },
+      onTurnEnd: (id, sessionId, awaitingInput, eventId) => {
+        if (awaitingInput) return;
+        const agent = this.store.get(id);
+        if (!agent || agent.runtime !== 'claude-code') return;
+        const instanceId = this.controlInstanceId(agent);
+        void this.resultCorrelator
+          .consume({
+            eventId: eventId ?? `claude-stop-${instanceId}-${sessionId}`,
+            eventType: 'task_finished',
+            observedAt: Date.now(),
+            source: 'claude-hook',
+            instanceId,
+            agentId: id,
+            runtime: 'claude-code',
+            managedByFleet: agent.managedByFleet,
+            sessionId,
+          })
+          .catch((error) =>
+            console.warn('[Claude Fleet] Claude turn completion correlation unavailable:', error),
+          );
+      },
+    });
 
     // Codex authentication stays outside Fleet. The adapter only resolves the
     // local executable and the injected host creates an isolated VS Code
@@ -422,7 +464,9 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
       sendText: async (instanceId, text) => {
         const agent = this.store.get(this.resolveLocalAgentId(instanceId));
         if (!agent?.terminalRef) throw new Error('Managed Codex terminal is unavailable.');
-        agent.terminalRef.sendText(text);
+        // WorkItem delivery must submit the bounded brief, not leave it sitting
+        // in the integrated terminal input buffer awaiting a manual Enter.
+        agent.terminalRef.sendText(text, true);
       },
     });
     this.controlService.registerRuntime({
@@ -508,8 +552,29 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
         observedAt,
       };
     }
-    if (agent.hookDelivered || agent.linesProcessed > 0) {
-      return { state: 'ready', observedAt };
+    if (agent.nativeSessionReady) {
+      return {
+        state: 'ready',
+        readinessSource: 'native_session',
+        confidence: 'exact',
+        observedAt,
+      };
+    }
+    if (agent.sessionStartReceived) {
+      return {
+        state: 'ready',
+        readinessSource: 'hook_session_start',
+        confidence: 'exact',
+        observedAt,
+      };
+    }
+    if (agent.linesProcessed > 0) {
+      return {
+        state: 'ready',
+        readinessSource: 'transcript',
+        confidence: 'high',
+        observedAt,
+      };
     }
     if (agent.terminalRef) {
       return {
@@ -525,6 +590,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
   /** Keep the local ControlService candidate pool aligned with real AgentState. */
   private syncControlInstance(agent?: AgentState, statusOverride?: UserFacingStatus): void {
     if (!agent) return;
+    this.refreshNativeSessionReadiness(agent);
     const status = statusOverride ?? agentStateToUserStatus(agent);
     const bootstrap = this.bootstrapSnapshot(agent, status);
     const instance: FleetInstance = {
@@ -579,6 +645,26 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /**
+   * Read Claude's process-owned session record as a readiness evidence source.
+   * This is intentionally separate from hook delivery: some Claude versions
+   * do not emit SessionStart until the first user turn, while the interactive
+   * runtime is already ready for a Fleet task.
+   */
+  private refreshNativeSessionReadiness(agent: AgentState): void {
+    if (agent.runtime !== 'claude-code' || !agent.terminalRef || !agent.sessionId) return;
+    if (agent.terminalRef.exitStatus !== undefined) {
+      agent.nativeSessionReady = false;
+      return;
+    }
+    const evidence = findReadyClaudeNativeSession(
+      agent.runtimeConfigDir ?? getClaudeConfigDir(),
+      agent.sessionId,
+      agent.cwd ?? agent.projectDir,
+    );
+    agent.nativeSessionReady = evidence !== undefined;
+  }
+
   /** Return the stable external id, or the legacy local id for non-coordinator agents. */
   private controlInstanceId(agent: AgentState): string {
     const instanceId = agent.fleetInstanceId ?? `agent-${agent.id}`;
@@ -618,12 +704,15 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     void this.resultCorrelator.consume(event).catch((error) => {
       console.warn('[Claude Fleet] WorkItem result correlation unavailable:', error);
     });
-    // Claude's legacy broadcast protocol reports an idle status rather than a
-    // dedicated task_finished event. Only a working -> idle transition is
-    // promoted, so an already-idle refresh cannot complete the same WorkItem
-    // twice; the correlator still provides request idempotency as a second
-    // guard.
-    if (event.eventType === 'idle' && previous?.status === 'working' && event.instanceId) {
+    // Non-Claude legacy providers may still expose only an idle transition.
+    // Fleet-managed Claude completion is driven by the normalized Stop hook,
+    // which is session-correlated and requires a prompt ACK.
+    if (
+      event.eventType === 'idle' &&
+      previous?.status === 'working' &&
+      event.instanceId &&
+      seed.runtime !== 'claude-code'
+    ) {
       void this.resultCorrelator
         .consume({
           ...event,
@@ -757,7 +846,19 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
       sendText: async (instanceId, text) => {
         const agent = this.store.get(this.resolveLocalAgentId(instanceId));
         if (!agent?.terminalRef) throw new Error('Managed Claude terminal is unavailable.');
-        agent.terminalRef.sendText(text);
+        // WorkItem delivery must submit the bounded brief, not leave it sitting
+        // in the integrated terminal input buffer awaiting a manual Enter.
+        agent.terminalRef.sendText(text, true);
+      },
+      getSendTextDiagnostics: (instanceId) => {
+        const id = this.resolveLocalAgentId(instanceId);
+        const agent = this.store.get(id);
+        return {
+          resolvedLocalAgentId: `agent-${id}`,
+          terminalRef: agent?.terminalRef ? 'present' : 'absent',
+          terminalExitStatus: agent?.terminalRef?.exitStatus === undefined ? 'running' : 'exited',
+          addNewLine: 'yes',
+        };
       },
     });
     this.controlService.registerRuntime({
@@ -1243,6 +1344,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
         // transitions hooks never emit (starting → idle, → error).
         const now = Date.now();
         for (const [id, agent] of this.store) {
+          this.refreshNativeSessionReadiness(agent);
           let jsonlExists = false;
           try {
             jsonlExists = fs.existsSync(agent.jsonlFile);
@@ -1434,6 +1536,8 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
       sendTask: host.sendTask,
       getBootstrapStatus: (instanceId) => host.getBootstrapStatus(instanceId),
       subscribeBootstrap: (listener) => host.subscribeBootstrap(listener),
+      getDeliveryDiagnostics: (instanceId, workItemId) =>
+        host.getDeliveryDiagnostics(instanceId, workItemId),
     };
   }
 

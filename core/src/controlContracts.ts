@@ -231,6 +231,16 @@ export interface FleetControlApi {
   ): FleetMetricsSnapshot | Promise<FleetMetricsSnapshot>;
   getMission(missionId: string): Promise<Mission | undefined>;
   getWorkItem(workItemId: string): Promise<WorkItem | undefined>;
+  /** Read-only delivery lifecycle used to distinguish host-send from runtime ACK. */
+  getDeliveryStatus?(
+    workItemId: string,
+    instanceId?: string,
+  ): RuntimeTaskDeliveryResult | undefined;
+  /** Secret-free delivery/transport evidence for an individual WorkItem. */
+  getDeliveryDiagnostics?(
+    workItemId: string,
+    instanceId?: string,
+  ): Record<string, unknown> | undefined;
   /** Read-only quality evidence projection, optionally scoped to a WorkItem. */
   getQuality?(workItemId?: string): QualitySignal[] | Promise<QualitySignal[]>;
 }

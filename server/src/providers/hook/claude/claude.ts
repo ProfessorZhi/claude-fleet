@@ -142,6 +142,11 @@ function normalizeHookEvent(
   const sessionId = raw.session_id;
   if (typeof eventName !== 'string' || typeof sessionId !== 'string') return null;
 
+  // Claude hook payloads have not exposed one stable id across all versions.
+  // Preserve a provider id when present, without forwarding prompt text or any
+  // other raw payload fields across the normalization boundary.
+  const eventId = hookEventId(raw);
+
   switch (eventName) {
     case 'PreToolUse': {
       const toolName = typeof raw.tool_name === 'string' ? raw.tool_name : '';
@@ -166,11 +171,10 @@ function normalizeHookEvent(
       return { sessionId, event: { kind: 'toolEnd', toolId: 'current' } };
 
     case 'Stop':
-      return { sessionId, event: { kind: 'turnEnd' } };
+      return { sessionId, event: { kind: 'turnEnd', eventId } };
 
     case 'UserPromptSubmit':
-      // No normalized kind for user prompts yet; silently ignore.
-      return null;
+      return { sessionId, event: { kind: 'promptSubmitted', eventId } };
 
     case 'SubagentStart': {
       const agentType = typeof raw.agent_type === 'string' ? raw.agent_type : 'unknown';
@@ -205,7 +209,7 @@ function normalizeHookEvent(
       if (notificationType === 'idle_prompt') {
         // idle_prompt = Claude went idle waiting on the user, not just a finished
         // turn. awaitingInput drives the "Waiting for input" label (vs "Done" for Stop).
-        return { sessionId, event: { kind: 'turnEnd', awaitingInput: true } };
+        return { sessionId, event: { kind: 'turnEnd', awaitingInput: true, eventId } };
       }
       return null;
     }
@@ -249,6 +253,15 @@ function normalizeHookEvent(
     default:
       return null;
   }
+}
+
+function hookEventId(raw: Record<string, unknown>): string | undefined {
+  for (const key of ['event_id', 'eventId', 'uuid', 'id']) {
+    const value = raw[key];
+    if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 160);
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return undefined;
 }
 
 // ── Installer wrappers: adapt sync signatures to async interface ──

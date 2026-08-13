@@ -85,6 +85,10 @@ describe('normalizeAgentStatus — priority order', () => {
   it('hooks delivered but no transcript yet → starting (not working)', () => {
     expect(normalizeAgentStatus({ hookDelivered: true, linesProcessed: 0 })).toBe('starting');
   });
+
+  it('explicit runtime readiness with no active work → idle', () => {
+    expect(normalizeAgentStatus({ runtimeReady: true, linesProcessed: 0 })).toBe('idle');
+  });
 });
 
 describe('normalizeAgentStatus — legacy / defensive inputs', () => {
@@ -129,6 +133,16 @@ describe('agentStateToUserStatus — AgentState projection', () => {
 
   it('agent with transcript history and no activity → idle', () => {
     expect(agentStateToUserStatus(makeAgent({ linesProcessed: 100 }))).toBe('idle');
+  });
+
+  it('bootstrap-ready SessionStart evidence with no transcript → idle', () => {
+    expect(
+      agentStateToUserStatus(makeAgent({ hookDelivered: true, sessionStartReceived: true })),
+    ).toBe('idle');
+  });
+
+  it('matching native session readiness with no transcript → idle', () => {
+    expect(agentStateToUserStatus(makeAgent({ nativeSessionReady: true }))).toBe('idle');
   });
 
   it('countActiveTools counts only live tools', () => {
