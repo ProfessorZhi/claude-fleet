@@ -48,9 +48,13 @@ export interface ExpectedActual<T> {
 }
 
 export interface TokenUsage {
+  /** Provider-reported input component used by `totalTokens`. */
   inputTokens?: number;
+  /** Cached-input attribution retained for breakdowns; do not add it again. */
   cachedInputTokens?: number;
+  /** Provider-reported output component. */
   outputTokens?: number;
+  /** Request total: `inputTokens + outputTokens`, without double-counting cache. */
   totalTokens?: number;
 }
 
