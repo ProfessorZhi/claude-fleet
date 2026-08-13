@@ -76,10 +76,11 @@ export interface LaunchNewTerminalOptions {
  * fall back to its other auth sources; the UI surfaces the missing-secret
  * condition via AgentState fields elsewhere).
  */
-async function resolveLaunchConfigFromStore(args: {
+export async function resolveLaunchConfigFromStore(args: {
   launchConfig: InstanceLaunchConfig;
   providerProfileStore: ProviderProfileStore;
   secretStorageProvider: SecretStorageProvider;
+  sessionId?: string;
   bypassPermissions?: boolean;
   permissionMode?: RuntimePermissionMode;
 }): Promise<ReturnType<typeof resolveClaudeLaunchConfig>> {
@@ -113,7 +114,7 @@ async function resolveLaunchConfigFromStore(args: {
     profile,
     args.launchConfig.modelId,
     args.launchConfig.cwd ?? '',
-    '00000000-0000-0000-0000-000000000000',
+    args.sessionId ?? '00000000-0000-0000-0000-000000000000',
     (_ref) => secret,
     {
       bypassPermissions: args.bypassPermissions || args.permissionMode === 'bypassPermissions',

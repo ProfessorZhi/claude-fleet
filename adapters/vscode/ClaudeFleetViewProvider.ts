@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -6,6 +8,7 @@ import * as vscode from 'vscode';
 import type { StateAdapter } from '../../core/src/adapter.js';
 import type { FleetControlPolicy, FleetLaunchTemplate } from '../../core/src/controlContracts.js';
 import {
+  type FleetEvent,
   type FleetTelemetrySnapshot,
   FleetTelemetryStore,
   normalizeAgentBroadcast,
@@ -16,6 +19,7 @@ import type {
   FleetRuntimeHost,
   RuntimeBootstrapSnapshot,
   RuntimeLaunchRequest,
+  RuntimeLaunchResult,
 } from '../../core/src/runtimeContracts.js';
 import { buildAgentDiagnostics } from '../../server/src/agentDiagnostics.js';
 import { AgentRuntime } from '../../server/src/agentRuntime.js';
@@ -84,6 +88,7 @@ import {
   sendExistingAgents,
   sendLayout,
 } from './agentManager.js';
+import { ClaudeOwnedRuntime } from './claudeOwnedRuntime.js';
 import { ClaudeCodeRuntimeAdapter } from './claudeRuntimeAdapter.js';
 import { launchCodexTerminal } from './codexAgentManager.js';
 import {
@@ -106,6 +111,7 @@ import {
   type VscodeRuntimeLaunchRequest,
 } from './fleetRuntimeHost.js';
 import type { CodexLaunchAgentOptions } from './launchAgentFlow.js';
+import { OwnedClaudeRuntimeHost } from './ownedClaudeRuntimeHost.js';
 import { createProviderProfileStore, type ProviderProfileStore } from './providerProfileStore.js';
 import {
   createSecretStorageProvider,
@@ -121,6 +127,56 @@ function parseAgentInstanceId(instanceId: string): number {
   const match = /^agent-(\d+)$/.exec(instanceId);
   if (!match) throw new Error(`Invalid managed instance id: ${instanceId}`);
   return Number(match[1]);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function boundedOwnedText(value: unknown): string | undefined {
+  if (typeof value === 'string') return value.trim().slice(0, 500) || undefined;
+  if (!value || typeof value !== 'object') return undefined;
+  if (Array.isArray(value)) {
+    const text = value
+      .map((item) => boundedOwnedText(item))
+      .filter((item): item is string => Boolean(item))
+      .join('');
+    return text.slice(0, 500) || undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return boundedOwnedText(record.text ?? record.content ?? record.result ?? record.message);
+}
+
+function normalizeOwnedUsage(value: unknown): FleetEvent['usage'] | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const source = value as Record<string, unknown>;
+  const result: NonNullable<FleetEvent['usage']> = {};
+  const read = (keys: string[]): number | undefined => {
+    for (const key of keys) {
+      const candidate = source[key];
+      if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0) {
+        return candidate;
+      }
+    }
+    return undefined;
+  };
+  const inputTokens = read(['input_tokens', 'inputTokens']);
+  const cachedInputTokens = read([
+    'cache_read_input_tokens',
+    'cached_input_tokens',
+    'cachedInputTokens',
+  ]);
+  const outputTokens = read(['output_tokens', 'outputTokens']);
+  const totalTokens = read(['total_tokens', 'totalTokens']);
+  if (inputTokens !== undefined) result.inputTokens = inputTokens;
+  if (cachedInputTokens !== undefined) result.cachedInputTokens = cachedInputTokens;
+  if (outputTokens !== undefined) result.outputTokens = outputTokens;
+  if (totalTokens !== undefined) result.totalTokens = totalTokens;
+  if (result.totalTokens === undefined) {
+    const total = (inputTokens ?? 0) + (cachedInputTokens ?? 0) + (outputTokens ?? 0);
+    if (total > 0) result.totalTokens = total;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
@@ -143,6 +199,8 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
   runtime: AgentRuntime;
   /** Managed launch boundary; initialized when the webview/terminal context is ready. */
   runtimeHost: VscodeFleetRuntimeHost | undefined;
+  private ownedClaudeRuntimeHost: OwnedClaudeRuntimeHost | undefined;
+  private readonly ownedClaudeRuntime = new ClaudeOwnedRuntime();
   /** Local management API used by the primary Coordinator through the embedded server. */
   readonly controlService: FleetControlService;
   readonly resultCorrelator: WorkItemResultCorrelator;
@@ -159,6 +217,8 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
   // reverse lookup in memory for lifecycle calls and restore it from
   // AgentState.fleetInstanceId on the next extension activation.
   private readonly fleetInstanceIds = new Map<number, string>();
+  private readonly ownedUiAgentIds = new Map<string, number>();
+  private readonly ownedInstanceByUiAgentId = new Map<number, string>();
 
   // Codex CLI has no Claude-compatible hooks. Its JSONL session files are
   // discovered by a small runtime-specific scanner instead of being sent
@@ -477,6 +537,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     // Coordinator-driven Claude launches must not depend on the webview having
     // been resolved first.
     this.ensureClaudeRuntimeHost();
+    this.ensureOwnedClaudeRuntimeHost();
 
     this.initServer();
   }
@@ -864,8 +925,238 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     this.controlService.registerRuntime({
       adapter: this.claudeRuntimeAdapter,
       host: this.makeControlHost(this.runtimeHost),
+      transport: 'terminal',
     });
     return this.runtimeHost;
+  }
+
+  private ensureOwnedClaudeRuntimeHost(): OwnedClaudeRuntimeHost {
+    if (this.ownedClaudeRuntimeHost) return this.ownedClaudeRuntimeHost;
+    this.ownedClaudeRuntimeHost = new OwnedClaudeRuntimeHost(
+      this.ownedClaudeRuntime,
+      this.providerProfileStore,
+      this.secretStorageProvider,
+      {
+        onEvent: (instanceId, sessionId, event) => {
+          void this.handleOwnedRuntimeEvent(instanceId, sessionId, event);
+        },
+        onExit: (instanceId, sessionId, exitCode) => {
+          void this.handleOwnedRuntimeExit(instanceId, sessionId, exitCode);
+        },
+        onLaunch: (instanceId, result) => {
+          this.publishOwnedAgentCreated(instanceId, result);
+        },
+      },
+    );
+    this.controlService.registerRuntime({
+      adapter: this.claudeRuntimeAdapter,
+      host: this.ownedClaudeRuntimeHost,
+      transport: 'owned',
+    });
+    return this.ownedClaudeRuntimeHost;
+  }
+
+  private ownedUiAgentId(instanceId: string): number {
+    const existing = this.ownedUiAgentIds.get(instanceId);
+    if (existing !== undefined) return existing;
+    const id = this.store.nextAgentId.current;
+    this.store.nextAgentId.current += 1;
+    this.ownedUiAgentIds.set(instanceId, id);
+    this.ownedInstanceByUiAgentId.set(id, instanceId);
+    return id;
+  }
+
+  private publishOwnedAgentCreated(instanceId: string, result: RuntimeLaunchResult): void {
+    const id = this.ownedUiAgentId(instanceId);
+    // The control snapshot supplies the display name once launch metadata has
+    // been merged; never put a Promise in the webview protocol.
+    void this.controlService.getInstance(instanceId).then((instance) => {
+      this.sendOrBuffer({
+        type: 'agentCreated',
+        id,
+        displayName: instance?.displayName,
+        providerProfileId: result.resolvedProviderProfileId,
+        providerDisplayName: result.providerDisplayName,
+        modelId: result.resolvedModelId,
+        runtime: 'claude-code',
+        createdAt: result.startedAt,
+        managedByFleet: true,
+      });
+    });
+  }
+
+  private async handleOwnedRuntimeEvent(
+    instanceId: string,
+    sessionId: string,
+    raw: Record<string, unknown>,
+  ): Promise<void> {
+    const instance = await this.controlService.getInstance(instanceId);
+    const uiAgentId = this.ownedUiAgentId(instanceId);
+    const rawType = typeof raw.type === 'string' ? raw.type : 'unknown';
+    const rawSessionId = stringValue(raw.session_id) ?? stringValue(raw.sessionId) ?? sessionId;
+    const usage = normalizeOwnedUsage(raw.usage);
+    const resultSummary = rawType === 'result' ? boundedOwnedText(raw.result) : undefined;
+    const isError =
+      rawType === 'error' ||
+      (rawType === 'result' && (raw.is_error === true || raw.subtype === 'error'));
+    const text = boundedOwnedText(raw.message ?? raw.content ?? raw.result);
+
+    let eventType: FleetEvent['eventType'];
+    let status: string;
+    let bootstrap = instance?.bootstrap;
+    if (rawType === 'system') {
+      eventType = 'runtime_ready';
+      status = 'idle';
+      bootstrap = {
+        state: 'ready',
+        readinessSource: 'native_session',
+        confidence: 'exact',
+        observedAt: Date.now(),
+      };
+      this.ownedClaudeRuntimeHost?.setBootstrapStatus(instanceId, bootstrap);
+    } else if (rawType === 'user') {
+      eventType = 'prompt_accepted';
+      status = 'working';
+    } else if (rawType === 'assistant') {
+      eventType = 'assistant_message';
+      status = 'working';
+    } else if (isError) {
+      eventType = 'error';
+      status = 'error';
+      bootstrap = {
+        state: 'failed',
+        reason: 'unknown',
+        detail: 'Claude owned runtime reported an error.',
+        observedAt: Date.now(),
+      };
+      this.ownedClaudeRuntimeHost?.setBootstrapStatus(instanceId, bootstrap);
+    } else if (rawType === 'result') {
+      eventType = 'task_finished';
+      status = 'idle';
+    } else {
+      return;
+    }
+
+    const event: FleetEvent = {
+      eventId: `owned-${instanceId}-${rawType}-${randomUUID()}`,
+      eventType,
+      observedAt: Date.now(),
+      source: 'claude-jsonl',
+      instanceId,
+      agentId: uiAgentId,
+      runtime: 'claude-code',
+      managedByFleet: true,
+      repo: instance?.repo,
+      cwd: instance?.workspaceId ?? instance?.repo,
+      hostId: this.ownedClaudeRuntimeHost?.hostId,
+      workspaceId: instance?.workspaceId,
+      terminalId: instance?.terminalId ?? `terminal-${instanceId}`,
+      terminalName: instance?.terminalName,
+      displayName: instance?.displayName,
+      sessionId: rawSessionId,
+      providerProfileId: instance?.providerProfileId,
+      providerDisplayName: instance?.providerDisplayName,
+      modelId: instance?.modelId,
+      role: 'worker',
+      status,
+      bootstrap,
+      workItemId: instance?.workItemId,
+      ...(text ? { currentTask: text } : {}),
+      ...(resultSummary ? { resultSummary } : {}),
+      ...(usage ? { usage } : {}),
+      ...(typeof raw.total_cost_usd === 'number' && Number.isFinite(raw.total_cost_usd)
+        ? { costUsd: raw.total_cost_usd }
+        : {}),
+      ...(eventType === 'error'
+        ? {
+            error: {
+              message: text || 'Claude owned runtime error.',
+              timestamp: Date.now(),
+              source: 'claude-jsonl',
+            },
+          }
+        : {}),
+    };
+
+    if (instance) {
+      this.controlService.observeRuntimeInstance({
+        ...instance,
+        transport: 'owned',
+        sessionId: rawSessionId,
+        status: status as FleetInstance['status'],
+        bootstrap,
+        lastActivityAt: event.observedAt,
+      });
+    }
+    if (usage) {
+      this.controlService.recordLiveUsage(
+        instanceId,
+        'claude-code',
+        instance?.providerDisplayName,
+        instance?.modelId,
+        usage,
+        event.observedAt,
+      );
+      this.sendOrBuffer({
+        type: 'agentContextUsage',
+        id: uiAgentId,
+        contextTokens: undefined,
+        maxContextTokens: undefined,
+        usage,
+      });
+    }
+    this.telemetryStore.consume(event);
+    this.sendOrBuffer({ type: 'agentStatus', id: uiAgentId, status });
+    if (eventType === 'task_finished') {
+      this.sendOrBuffer({ type: 'agentCompletionUnread', id: uiAgentId });
+    }
+    void this.resultCorrelator
+      .consume(event)
+      .then((response) => {
+        if (response?.instance) this.controlService.observeRuntimeInstance(response.instance);
+        this.sendOrBuffer({
+          type: 'fleetTelemetry',
+          projection: this.telemetryStore.getProjection(),
+        });
+      })
+      .catch((error) =>
+        console.warn('[Claude Fleet] Owned result correlation unavailable:', error),
+      );
+    this.sendOrBuffer({ type: 'fleetTelemetry', projection: this.telemetryStore.getProjection() });
+  }
+
+  private async handleOwnedRuntimeExit(
+    instanceId: string,
+    sessionId: string,
+    exitCode: number | null,
+  ): Promise<void> {
+    const instance = await this.controlService.getInstance(instanceId);
+    if (!instance || instance.status === 'stopped') return;
+    const uiAgentId = this.ownedUiAgentId(instanceId);
+    const stopped = exitCode === 0;
+    const event: FleetEvent = {
+      eventId: `owned-${instanceId}-exit-${randomUUID()}`,
+      eventType: stopped ? 'agent_stopped' : 'error',
+      observedAt: Date.now(),
+      source: 'claude-jsonl',
+      instanceId,
+      agentId: uiAgentId,
+      runtime: 'claude-code',
+      managedByFleet: true,
+      sessionId,
+      status: stopped ? 'stopped' : 'error',
+      error: stopped
+        ? undefined
+        : {
+            message: 'Claude owned runtime exited before completion.',
+            timestamp: Date.now(),
+            source: 'process',
+          },
+    };
+    this.controlService.markInstanceStopped(instanceId, event.observedAt);
+    this.telemetryStore.consume(event);
+    this.sendOrBuffer({ type: 'agentStatus', id: uiAgentId, status: event.status });
+    this.sendOrBuffer({ type: 'fleetTelemetry', projection: this.telemetryStore.getProjection() });
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
@@ -929,6 +1220,11 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
         // profiles; the built-in Inherit profile is no longer auto-injected.
         await vscode.commands.executeCommand(COMMAND_NEW_AGENT);
       } else if (message.type === 'focusAgent') {
+        const ownedInstanceId = this.ownedInstanceByUiAgentId.get(message.id as number);
+        if (ownedInstanceId && this.ownedClaudeRuntimeHost) {
+          await this.ownedClaudeRuntimeHost.focus(ownedInstanceId);
+          return;
+        }
         const agent = this.store.get(message.id);
         if (agent) {
           if (!agent.isExternal && this.runtimeHost) {
@@ -947,6 +1243,11 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
         // Spec 004 — the webview ✕ button and the Stop command share ONE
         // cleanup path: stopAgent really closes the terminal/process and
         // clears runtime state (dismissal / unregister / watchers / store).
+        const ownedInstanceId = this.ownedInstanceByUiAgentId.get(message.id as number);
+        if (ownedInstanceId && this.ownedClaudeRuntimeHost) {
+          await this.ownedClaudeRuntimeHost.stop(ownedInstanceId);
+          return;
+        }
         const agent = this.store.get(message.id as number);
         if (agent && !agent.isExternal && this.runtimeHost) {
           await this.runtimeHost.stop(this.controlInstanceId(agent));
@@ -1831,6 +2132,7 @@ export class ClaudeFleetViewProvider implements vscode.WebviewViewProvider {
     this.claudeFleetServer = null;
     if (this.codexDiscoveryTimer) clearInterval(this.codexDiscoveryTimer);
     this.codexDiscoveryTimer = null;
+    void this.ownedClaudeRuntime.dispose();
     this.runtime.dispose();
     this.layoutWatcher?.dispose();
     this.layoutWatcher = null;

@@ -4,6 +4,9 @@ import type { AgentRole, FleetRuntime, RuntimeBootstrapSnapshot } from './runtim
 export type { AgentRole, FleetRuntime } from './runtimeContracts.js';
 
 export type FleetEventType =
+  | 'runtime_ready'
+  | 'prompt_accepted'
+  | 'assistant_message'
   | 'session_started'
   | 'session_resumed'
   | 'agent_started'
@@ -58,6 +61,16 @@ export interface FleetEvent {
   status?: string;
   currentTool?: string;
   currentTask?: string;
+  workItemId?: string;
+  completionUnread?: boolean;
+  resultSummary?: string;
+  usage?: {
+    inputTokens?: number;
+    cachedInputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+  };
+  costUsd?: number;
   contextUsage?: FleetContextUsage;
   error?: { message: string; timestamp: number; source: string };
 }
@@ -83,6 +96,11 @@ export interface FleetTelemetrySnapshot {
   status?: string;
   currentTool?: string;
   currentTask?: string;
+  workItemId?: string;
+  completionUnread?: boolean;
+  resultSummary?: string;
+  usage?: FleetEvent['usage'];
+  costUsd?: number;
   contextUsage?: FleetContextUsage;
   lastActivityAt?: number;
   error?: { message: string; timestamp: number; source: string };
@@ -102,6 +120,11 @@ export interface FleetTelemetryProjection {
 
 function statusFromEventType(eventType: FleetEventType): string | undefined {
   switch (eventType) {
+    case 'runtime_ready':
+      return 'idle';
+    case 'prompt_accepted':
+    case 'assistant_message':
+      return 'working';
     case 'session_started':
     case 'agent_started':
       return 'starting';
@@ -172,6 +195,11 @@ export class FleetTelemetryStore {
       status: eventStatus ?? previous?.status,
       currentTool: event.currentTool ?? previous?.currentTool,
       currentTask: event.currentTask ?? previous?.currentTask,
+      workItemId: event.workItemId ?? previous?.workItemId,
+      completionUnread: event.completionUnread ?? previous?.completionUnread,
+      resultSummary: event.resultSummary ?? previous?.resultSummary,
+      usage: event.usage ?? previous?.usage,
+      costUsd: event.costUsd ?? previous?.costUsd,
       contextUsage: event.contextUsage ?? previous?.contextUsage,
       lastActivityAt: event.observedAt,
       error: event.error ?? (event.eventType === 'error' ? previous?.error : undefined),

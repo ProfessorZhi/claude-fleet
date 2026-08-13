@@ -10,6 +10,9 @@ import type { FleetEvent } from './fleetTelemetry.js';
 
 export type FleetRuntime = 'claude-code' | 'codex-cli' | 'other';
 
+/** Process/input boundary used by a runtime registration. */
+export type RuntimeTransport = 'terminal' | 'owned';
+
 export type AgentRole =
   | 'coordinator'
   | 'worker'
@@ -184,6 +187,8 @@ export interface FleetInstance {
   /** User-facing label; separate from Team role metadata. */
   displayName?: string;
   runtime: FleetRuntime;
+  /** Optional for backwards compatibility; omitted means the legacy terminal transport. */
+  transport?: RuntimeTransport;
   role: AgentRole;
   managedByFleet: boolean;
   missionId?: string;
@@ -225,6 +230,7 @@ export interface FleetInstance {
 
 export interface RuntimeLaunchRequest {
   instance: FleetInstance;
+  transport?: RuntimeTransport;
   cwd: string;
   sessionMode: 'new' | 'resume';
   sessionId?: string;
@@ -240,6 +246,7 @@ export interface RuntimeLaunchRequest {
 
 export interface RuntimeLaunchResult {
   instanceId: string;
+  transport?: RuntimeTransport;
   sessionId?: string;
   terminalId?: string;
   terminalName?: string;
@@ -249,6 +256,7 @@ export interface RuntimeLaunchResult {
   requestedBy?: string;
   requestedProviderProfileId?: string;
   resolvedProviderProfileId?: string;
+  providerDisplayName?: string;
   requestedModelId?: string;
   resolvedModelId?: string;
   credential?: 'present' | 'absent';

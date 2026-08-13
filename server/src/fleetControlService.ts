@@ -29,6 +29,7 @@ import type {
   RuntimeLaunchRequest,
   RuntimeTaskDeliveryRequest,
   RuntimeTaskDeliveryResult,
+  RuntimeTransport,
   WorkItem,
   WorkItemResult,
   WorktreeConflictCheck,
@@ -47,6 +48,7 @@ import { deliverRuntimeTask } from './runtimeTaskDelivery.js';
 export interface FleetRuntimeRegistration {
   adapter: RuntimeAdapter;
   host: FleetRuntimeHost;
+  transport?: RuntimeTransport;
 }
 
 export interface FleetControlServiceOptions {
@@ -75,7 +77,7 @@ export class FleetControlService implements FleetControlApi {
   readonly worktrees: WorktreeManager;
 
   private readonly now: () => number;
-  private readonly registrations = new Map<FleetRuntime, FleetRuntimeRegistration>();
+  private readonly registrations = new Map<string, FleetRuntimeRegistration>();
   private readonly instances = new Map<string, FleetInstance>();
   private readonly missions = new Map<string, Mission>();
   private readonly workItems = new Map<string, WorkItem>();
@@ -110,7 +112,10 @@ export class FleetControlService implements FleetControlApi {
   }
 
   registerRuntime(registration: FleetRuntimeRegistration): void {
-    this.registrations.set(registration.adapter.runtime, registration);
+    this.registrations.set(registrationKey(registration.adapter.runtime, registration.transport), {
+      ...registration,
+      transport: registration.transport ?? 'terminal',
+    });
     registration.host.subscribeBootstrap?.((instanceId, snapshot) => {
       if (snapshot.state === 'ready') void this.flushPendingDeliveries(instanceId);
     });
@@ -876,7 +881,7 @@ export class FleetControlService implements FleetControlApi {
         reason: 'WorkItem must be assigned to the requested instance before delivery.',
       };
     }
-    const registration = this.registrations.get(instance.runtime);
+    const registration = this.getRegistration(instance.runtime, instance.transport);
     if (!registration) {
       return {
         requestId: request.requestId,
@@ -990,9 +995,10 @@ export class FleetControlService implements FleetControlApi {
     if (this.flushingInstances.has(instanceId)) return;
     this.flushingInstances.add(instanceId);
     try {
-      const registration = [...this.registrations.values()].find(
-        (candidate) => candidate.host.getBootstrapStatus?.(instanceId)?.state === 'ready',
-      );
+      const instance = this.instances.get(instanceId);
+      const registration = instance
+        ? this.getRegistration(instance.runtime, instance.transport)
+        : undefined;
       const pending = [...this.pendingDeliveries.entries()].filter(
         ([, delivery]) => delivery.instanceId === instanceId,
       );
@@ -1133,7 +1139,7 @@ export class FleetControlService implements FleetControlApi {
       };
     }
 
-    const registration = this.registrations.get(template.runtime);
+    const registration = this.getRegistration(template.runtime, template.transport);
     if (!registration) {
       return {
         requestId: request.requestId,
@@ -1172,6 +1178,7 @@ export class FleetControlService implements FleetControlApi {
     const instance: FleetInstance = {
       instanceId,
       runtime: template.runtime,
+      transport: template.transport ?? 'terminal',
       role: template.role,
       managedByFleet: true,
       displayName: template.displayName,
@@ -1199,6 +1206,7 @@ export class FleetControlService implements FleetControlApi {
     };
     const launchRequest: RuntimeLaunchRequest = {
       instance,
+      transport: instance.transport,
       cwd: template.cwd,
       sessionMode: template.sessionMode ?? 'new',
       sessionId: template.sessionId,
@@ -1234,6 +1242,7 @@ export class FleetControlService implements FleetControlApi {
       const started = {
         ...latest,
         sessionId: result.sessionId ?? latest.sessionId,
+        transport: result.transport ?? latest.transport,
         terminalId: result.terminalId ?? latest.terminalId,
         terminalName: result.terminalName ?? latest.terminalName,
         hostId: result.hostId ?? latest.hostId,
@@ -1502,7 +1511,7 @@ export class FleetControlService implements FleetControlApi {
         reason: 'Resume requires a stopped, idle, waiting, or error instance.',
       };
     }
-    const registration = this.registrations.get(previous.runtime);
+    const registration = this.getRegistration(previous.runtime, previous.transport);
     if (!registration) {
       return {
         requestId: request.requestId,
@@ -1537,6 +1546,7 @@ export class FleetControlService implements FleetControlApi {
       this.instances.set(previous.instanceId, clone(starting));
       const result = await registration.host.launch({
         instance: starting,
+        transport: starting.transport,
         cwd,
         sessionMode: 'resume',
         sessionId: previous.sessionId,
@@ -1654,7 +1664,7 @@ export class FleetControlService implements FleetControlApi {
         reason: 'Instance not found.',
       };
     }
-    const registration = this.registrations.get(instance.runtime);
+    const registration = this.getRegistration(instance.runtime, instance.transport);
     if (!registration) {
       return {
         requestId: request.requestId,
@@ -1736,6 +1746,13 @@ export class FleetControlService implements FleetControlApi {
       }
     }
     return null;
+  }
+
+  private getRegistration(
+    runtime: FleetRuntime,
+    transport?: RuntimeTransport,
+  ): FleetRuntimeRegistration | undefined {
+    return this.registrations.get(registrationKey(runtime, transport));
   }
 
   private finish(
@@ -2007,6 +2024,10 @@ function sessionStatusForFleetStatus(status: FleetInstance['status']): SessionSt
 function clone<T>(value: T): T {
   if (value === undefined) return value;
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function registrationKey(runtime: FleetRuntime, transport?: RuntimeTransport): string {
+  return `${runtime}:${transport ?? 'terminal'}`;
 }
 
 function sameMission(

@@ -122,6 +122,7 @@ export type {
   RuntimeTaskDeliveryLifecycle,
   RuntimeTaskDeliveryResult,
   RuntimeTaskDeliveryStatus,
+  RuntimeTransport,
   WorkItem,
 } from './runtimeContracts.js';
 export type {

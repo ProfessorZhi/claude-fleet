@@ -156,6 +156,26 @@ Telemetry
 Visualization
 ```
 
+### Experimental runtime transport spike
+
+The current production launch path still uses a native VS Code integrated
+terminal. An opt-in `ClaudeOwnedRuntime` spike exists separately to test a
+different transport boundary:
+
+```text
+Fleet-owned child process
+  ├── stdin/stdout/stderr  ← control and observation boundary
+  ├── VS Code Pseudoterminal ← visible terminal projection
+  └── Fleet telemetry / state
+```
+
+This spike does not replace the production launch path, does not parse Claude's
+TUI, and does not treat terminal display text as runtime truth. It must first
+prove real Claude prompt acceptance, JSONL/Hook evidence, focus, stop, and
+restart behavior before any production transport switch is considered. The
+requirements are recorded in
+[`specs/024-claude-owned-runtime-spike/requirements.md`](./specs/024-claude-owned-runtime-spike/requirements.md).
+
 ---
 
 ## 5. Mission 是顶层工作单元

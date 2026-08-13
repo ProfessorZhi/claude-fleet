@@ -16,7 +16,15 @@ export class WorkItemResultCorrelator {
     string,
     Promise<FleetControlResponse | undefined>
   >();
-  private readonly completedByInstanceSession = new Map<string, FleetControlResponse>();
+  /**
+   * Preserve idempotency for a late duplicate event after collect_result has
+   * released the instance, while retaining the WorkItem boundary so a later
+   * turn in the same native session cannot receive the old result.
+   */
+  private readonly completedByInstanceSession = new Map<
+    string,
+    { workItemId: string; response: FleetControlResponse }
+  >();
   /** A prompt ACK is valid only for one active WorkItem and exact native session. */
   private readonly promptAcks = new Set<string>();
 
@@ -39,6 +47,11 @@ export class WorkItemResultCorrelator {
   }
 
   async consume(event: FleetEvent): Promise<FleetControlResponse | undefined> {
+    if (event.eventType === 'prompt_accepted') {
+      if (!event.instanceId || !event.sessionId) return undefined;
+      await this.acceptPrompt(event.instanceId, event.sessionId);
+      return undefined;
+    }
     if (event.eventType !== 'task_finished' && event.eventType !== 'error') return undefined;
     const eventId = safeId(event.eventId);
     if (!eventId || !event.instanceId) return undefined;
@@ -46,14 +59,22 @@ export class WorkItemResultCorrelator {
     if (previous) return clone(previous);
 
     const sessionId = typeof event.sessionId === 'string' ? event.sessionId : undefined;
-    if (sessionId) {
-      const previousCompletion = this.completedByInstanceSession.get(
-        `${safeId(event.instanceId)}:${safeId(sessionId)}:${event.eventType}`,
-      );
-      if (previousCompletion) return clone(previousCompletion);
-    }
     const context = await this.activeContext(event.instanceId, sessionId);
-    if (!context) return undefined;
+    if (!context) {
+      if (sessionId) {
+        const previousCompletion = this.completedByInstanceSession.get(
+          `${safeId(event.instanceId)}:${safeId(sessionId)}:${event.eventType}`,
+        );
+        if (
+          previousCompletion &&
+          (!event.workItemId || event.workItemId === previousCompletion.workItemId)
+        ) {
+          return clone(previousCompletion.response);
+        }
+      }
+      return undefined;
+    }
+    if (event.workItemId && event.workItemId !== context.workItemId) return undefined;
     const requiresPromptAck = event.runtime === 'claude-code' || event.source === 'claude-hook';
     const activeSessionId = sessionId ?? context.sessionId;
     if (requiresPromptAck) {
@@ -85,7 +106,7 @@ export class WorkItemResultCorrelator {
         outcome: event.eventType === 'task_finished' ? 'completed' : 'failed',
         summary:
           event.eventType === 'task_finished'
-            ? 'Runtime reported task completion.'
+            ? event.resultSummary?.trim().slice(0, 500) || 'Runtime reported task completion.'
             : 'Runtime reported a task error.',
         capturedAt: safeTimestamp(event.observedAt, this.now),
         source: 'runtime',
@@ -101,7 +122,7 @@ export class WorkItemResultCorrelator {
       if (activeSessionId) {
         this.completedByInstanceSession.set(
           `${safeId(event.instanceId)}:${safeId(activeSessionId)}:${event.eventType}`,
-          clone(response),
+          { workItemId: context.workItemId, response: clone(response) },
         );
       }
       this.responses.set(eventId, clone(response));

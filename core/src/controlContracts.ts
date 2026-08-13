@@ -24,6 +24,7 @@ import type {
   RuntimeLaunchResult,
   RuntimePermissionMode,
   RuntimeTaskDeliveryResult,
+  RuntimeTransport,
   WorkItem,
   WorkItemResult,
 } from './runtimeContracts.js';
@@ -53,6 +54,8 @@ export interface FleetControlPolicy extends StrategyPolicy {}
 
 export interface FleetLaunchTemplate {
   runtime: FleetRuntime;
+  /** Defaults to the existing terminal transport. */
+  transport?: RuntimeTransport;
   role: AgentRole;
   displayName?: string;
   repo: string;
